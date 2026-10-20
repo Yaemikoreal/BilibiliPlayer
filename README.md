@@ -35,7 +35,7 @@ B站（Bilibili）MCP Server —— 让 AI 助手直接操作B站。
 | `bili_send_dynamic` | 发图文动态 | 发布文字/图文动态，支持定时发布、话题关联 |
 | `bili_upload_video` | 上传视频 | 单P视频上传，支持封面、标签、分区选择 |
 | `bili_upload_video_multi` | 多P上传 | 多分P视频合并投稿 |
-| `bili_send_opus` | 图文专栏 | 发布图文长内容（Opus） |
+| `bili_send_opus` | 图文长内容 | 以动态形式发布图文长内容（非独立专栏） |
 | `bili_video_zones` | 分区查询 | 获取常用分区ID，辅助视频上传 |
 
 ### 数据分析
@@ -45,7 +45,7 @@ B站（Bilibili）MCP Server —— 让 AI 助手直接操作B站。
 | `bili_hot_videos` | 热门视频 | 获取当前B站热门视频列表 |
 | `bili_hot_buzzwords` | 热搜关键词 | 获取B站热搜词/热门话题 |
 | `bili_weekly_hot` | 每周必看 | 获取每周必看推荐视频 |
-| `bili_rank` | 排行榜 | 全站及17个分区排行榜 |
+| `bili_rank` | 排行榜 | 全站及24个分类排行榜（含番剧/国创/纪录片/电影/综艺等） |
 | `bili_user_info` | 用户信息 | 获取UP主粉丝数、等级、总播放量等 |
 | `bili_user_videos` | 用户视频 | 获取UP主投稿列表，支持排序和搜索 |
 

@@ -10,15 +10,19 @@ B站数据采集 MCP 服务，支持 OpenClaw / Claude Code / Cursor / Cline
 import asyncio
 import json
 import base64
+import logging
+import aiohttp
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
-from bilibili_api import video, search, comment, Credential, dynamic, opus
+from bilibili_api import video, search, comment, Credential, dynamic
 from bilibili_api import hot, rank, user, session, favorite_list
 from bilibili_api.video_uploader import (
-    VideoUploader, VideoUploaderPage, VideoMeta, Lines,
+    VideoUploader, VideoUploaderPage, VideoMeta,
 )
 from bilibili_api.utils.picture import Picture
 from bilibili_api.login_v2 import QrCodeLogin, QrCodeLoginEvents
@@ -29,66 +33,172 @@ CRED_FILE = Path(__file__).parent / "bili_credential.json"
 
 mcp = FastMCP("bilibili-mcp")
 
+# ========== 日志（输出到 stderr，避免污染 stdio 协议通道） ==========
 
-def load_credential() -> Credential:
-    """从文件加载凭证"""
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stderr,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger("bilibili-mcp")
+
+
+# ========== 通用helper：统一返回格式 / 凭证读取 / 标题清洗 / 图片上传 ==========
+
+def _ok(data: dict) -> str:
+    """统一成功返回"""
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _err(error: str, **extra) -> str:
+    """统一错误返回：记录日志 + {"success": false, "error": ...}"""
+    logger.error("%s | %s", error, extra or "")
+    payload = {"success": False, "error": error}
+    payload.update(extra)
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _load_cred_data() -> dict:
+    """读取凭证文件原始数据（文件不存在、损坏或格式异常时返回空dict）"""
     if not CRED_FILE.exists():
+        return {}
+    try:
+        with open(CRED_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        logger.error("凭证文件读取失败: %s", e)
+        return {}
+    if not isinstance(data, dict):
+        logger.error("凭证文件格式错误: 期望对象，实际为 %s", type(data).__name__)
+        return {}
+    return data
+
+
+def _save_credential(cred: Credential) -> None:
+    """原子写入凭证，避免进程中断留下半截 JSON"""
+    tmp = CRED_FILE.with_name(CRED_FILE.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({
+            "sessdata": cred.sessdata,
+            "bili_jct": cred.bili_jct,
+            "buvid3": cred.buvid3,
+            "dedeuserid": cred.dedeuserid,
+        }, f, ensure_ascii=False)
+    os.replace(tmp, CRED_FILE)
+
+
+async def _cred_is_valid(cred: Credential) -> bool:
+    """请求用户信息校验凭证是否仍然有效"""
+    uid = str(cred.dedeuserid or "").strip()
+    if not uid.isdigit():
+        return False
+    try:
+        await user.User(uid=int(uid), credential=cred).get_user_info()
+        return True
+    except Exception as e:
+        logger.info("凭证有效性校验失败: %s", e)
+        return False
+
+
+def load_credential() -> Credential | None:
+    """从文件加载凭证"""
+    data = _load_cred_data()
+    if not data:
         return None
-    with open(CRED_FILE) as f:
-        data = json.load(f)
     return Credential(
-        sessdata=data.get("sessdata", ""),
-        bili_jct=data.get("bili_jct", ""),
+        sessdata=data.get("sessdata") or "",
+        bili_jct=data.get("bili_jct") or "",
         buvid3=data.get("buvid3") or "",
-        dedeuserid=data.get("dedeuserid", ""),
+        dedeuserid=str(data.get("dedeuserid") or ""),
     )
+
+
+def _clean_title(t: str) -> str:
+    """去掉搜索结果标题中的关键词高亮标签"""
+    return (t or "").replace('<em class="keyword">', "").replace("</em>", "")
+
+
+async def _add_images_to_dynamic(dyn, images: list[str]) -> str | None:
+    """向动态添加图片（本地路径或URL，最多9张）；成功返回 None，失败返回错误信息"""
+    for img_path in (images or [])[:9]:
+        img_path = (img_path or "").strip()
+        if not img_path:
+            continue
+        try:
+            if img_path.startswith(("http://", "https://")):
+                pic = await Picture.load_url(img_path)
+            else:
+                if not os.path.isfile(img_path):
+                    return f"图片文件不存在: {img_path}"
+                pic = Picture.from_file(img_path)
+            dyn.add_image(pic)
+        except Exception as e:
+            return f"图片处理失败: {img_path} - {e}"
+    return None
 
 
 # ========== 登录会话（进程级缓存） ==========
 
+QR_FILE = Path(__file__).parent / "qrcode_login.png"
+
 _login_session: QrCodeLogin | None = None
 
 
+def _cleanup_qr_file() -> None:
+    """删除临时二维码图片"""
+    if QR_FILE.exists():
+        QR_FILE.unlink()
+
+
 def get_cred() -> Credential:
-    """获取凭证，未登录时引导用户调用 bili_login"""
+    """获取凭证，未登录或凭证不完整时给出明确指引（唯一以异常上报的错误）"""
     cred = load_credential()
     if not cred:
         raise Exception("未登录B站！请先调用 bili_login 工具获取登录二维码，让用户扫码登录。")
+    if not (cred.sessdata and cred.bili_jct and cred.dedeuserid):
+        raise Exception("本地凭证不完整（缺少 sessdata/bili_jct/dedeuserid），请删除 bili_credential.json 后重新调用 bili_login 登录。")
     return cred
 
 
 # ========== Tool: 扫码登录（生成二维码） ==========
 
 @mcp.tool()
-async def bili_login() -> str:
+async def bili_login(force: bool = False) -> str:
     """
     生成B站登录二维码，返回二维码图片（base64）供用户扫码。
     用户扫码后，调用 bili_login_check 检查登录状态。
+
+    Args:
+        force: 为 True 时忽略本地已有凭证，强制重新扫码登录（凭证过期或换号时使用）
 
     Returns:
         包含二维码base64图片数据的JSON，前端可直接渲染为图片展示给用户
     """
     global _login_session
 
-    # 如果已有凭证，直接返回
-    cred = load_credential()
-    if cred:
-        return json.dumps({
-            "status": "already_logged_in",
-            "message": "已登录B站，无需重复登录",
-        }, ensure_ascii=False)
+    # 已有有效凭证时无需重复登录；凭证失效则自动重新扫码
+    if not force:
+        cred = load_credential()
+        if cred and await _cred_is_valid(cred):
+            return json.dumps({
+                "status": "already_logged_in",
+                "message": "已登录B站，无需重复登录；如需换号请传 force=true",
+            }, ensure_ascii=False)
 
     # 生成新的登录会话
-    _login_session = QrCodeLogin()
-    await _login_session.generate_qrcode()
+    try:
+        _login_session = QrCodeLogin()
+        await _login_session.generate_qrcode()
+    except Exception as e:
+        _login_session = None
+        return _err(f"生成登录二维码失败: {e}")
 
     # 获取二维码图片的 base64（无损PNG）
     pic = _login_session.get_qrcode_picture()
     img_base64 = base64.b64encode(pic.content).decode("utf-8")
 
     # 保存二维码图片到项目根目录
-    qr_file = Path(__file__).parent / "qrcode_login.png"
-    with open(qr_file, "wb") as f:
+    with open(QR_FILE, "wb") as f:
         f.write(pic.content)
 
     # 获取终端文本版二维码（纯文本客户端备用）
@@ -126,7 +236,7 @@ async def bili_login_check() -> str:
     if not _login_session:
         # 没有登录会话，检查是否已登录
         cred = load_credential()
-        if cred:
+        if cred and await _cred_is_valid(cred):
             return json.dumps({
                 "status": "already_logged_in",
                 "message": "已登录B站",
@@ -136,7 +246,10 @@ async def bili_login_check() -> str:
             "message": "没有进行中的登录，请先调用 bili_login 生成二维码",
         }, ensure_ascii=False)
 
-    state = await _login_session.check_state()
+    try:
+        state = await _login_session.check_state()
+    except Exception as e:
+        return _err(f"检查登录状态失败: {e}")
 
     if state == QrCodeLoginEvents.SCAN:
         return json.dumps({
@@ -154,10 +267,7 @@ async def bili_login_check() -> str:
 
     elif state == QrCodeLoginEvents.TIMEOUT:
         _login_session = None
-        # 清理二维码文件
-        qr_file = Path(__file__).parent / "qrcode_login.png"
-        if qr_file.exists():
-            qr_file.unlink()
+        _cleanup_qr_file()
         return json.dumps({
             "status": "timeout",
             "message": "二维码已过期，请重新调用 bili_login 生成新二维码",
@@ -165,19 +275,12 @@ async def bili_login_check() -> str:
 
     elif state == QrCodeLoginEvents.DONE:
         # 登录成功，保存凭证
-        cred = _login_session.get_credential()
-        with open(CRED_FILE, "w") as f:
-            json.dump({
-                "sessdata": cred.sessdata,
-                "bili_jct": cred.bili_jct,
-                "buvid3": cred.buvid3,
-                "dedeuserid": cred.dedeuserid,
-            }, f)
+        try:
+            _save_credential(_login_session.get_credential())
+        except Exception as e:
+            return _err(f"保存登录凭证失败: {e}")
         _login_session = None
-        # 清理二维码文件
-        qr_file = Path(__file__).parent / "qrcode_login.png"
-        if qr_file.exists():
-            qr_file.unlink()
+        _cleanup_qr_file()
         return json.dumps({
             "status": "done",
             "message": "登录成功！凭证已保存，现在可以使用所有B站功能了",
@@ -207,6 +310,11 @@ async def bili_check_credential() -> str:
         }, ensure_ascii=False)
 
     # 尝试用凭证请求一下，验证是否过期
+    if not str(cred.dedeuserid or "").strip().isdigit():
+        return json.dumps({
+            "logged_in": False,
+            "message": "凭证缺少 dedeuserid（不完整），请重新调用 bili_login 登录",
+        }, ensure_ascii=False)
     try:
         my_info = await user.User(
             uid=int(cred.dedeuserid), credential=cred
@@ -247,52 +355,49 @@ async def bili_search(keyword: str, num: int = 10, order: str = "totalrank") -> 
     }
     order_enum = order_map.get(order, search.OrderVideo.TOTALRANK)
 
-    result = await search.search_by_type(
-        keyword=keyword,
-        search_type=search.SearchObjectType.VIDEO,
-        page=1,
-        order_type=order_enum,
-    )
-
-    videos = []
-    for item in result.get("result", [])[:num]:
-        title = item.get("title", "").replace('<em class="keyword">', "").replace("</em>", "")
-        videos.append({
-            "bvid": item.get("bvid", ""),
-            "aid": item.get("aid", 0),
-            "title": title,
-            "author": item.get("author", ""),
-            "play": item.get("play", 0),
-            "review": item.get("review", 0),
-            "danmaku": item.get("video_review", 0),
-            "duration": item.get("duration", ""),
-            "description": item.get("description", "")[:200],
-        })
-
-    return json.dumps({"keyword": keyword, "count": len(videos), "videos": videos}, ensure_ascii=False)
+    num = max(1, min(num, 50))
+    try:
+        videos = []
+        page = 1
+        # 分页抓取直到凑满num条（单页结果不足时自动停止）
+        while len(videos) < num and page <= 5:
+            result = await search.search_by_type(
+                keyword=keyword,
+                search_type=search.SearchObjectType.VIDEO,
+                page=page,
+                order_type=order_enum,
+            )
+            items = result.get("result", []) or []
+            if not items:
+                break
+            for item in items:
+                videos.append({
+                    "bvid": item.get("bvid", ""),
+                    "aid": item.get("aid", 0),
+                    "title": _clean_title(item.get("title", "")),
+                    "author": item.get("author", ""),
+                    "play": item.get("play", 0),
+                    "review": item.get("review", 0),
+                    "danmaku": item.get("video_review", 0),
+                    "duration": item.get("duration", ""),
+                    "description": item.get("description", "")[:200],
+                })
+                if len(videos) >= num:
+                    break
+            page += 1
+            await asyncio.sleep(0.3)
+        return _ok({"keyword": keyword, "count": len(videos), "videos": videos})
+    except Exception as e:
+        return _err(f"搜索失败: {e}", keyword=keyword)
 
 
 # ========== Tool 2: 获取评论 ==========
 
-@mcp.tool()
-async def bili_comments(bvid: str, num: int = 30) -> str:
-    """
-    获取B站视频的热门评论
-
-    Args:
-        bvid: 视频BV号，如"BV1uNk1YxEJQ"
-        num: 获取评论数量，默认30
-    
-    Returns:
-        JSON格式的评论列表，包含用户名、评论内容、点赞数、回复数
-    """
-    cred = get_cred()
-    v = video.Video(bvid=bvid, credential=cred)
-    info = await v.get_info()
-    aid = info["aid"]
-
+async def _fetch_comments(aid: int, cred: Credential, num: int) -> dict:
+    """按点赞序抓取视频评论，返回 {"comments": [...], "error": str|None}（内部helper，供 bili_comments / bili_crawl 复用）"""
     comments = []
     page = 1
+    last_error = None
     while len(comments) < num:
         try:
             resp = await comment.get_comments(
@@ -332,12 +437,88 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
             page += 1
             await asyncio.sleep(0.5)
         except Exception as e:
+            last_error = f"评论抓取在第{page}页中断: {e}"
+            logger.warning("评论抓取中断(oid=%s, page=%s): %s", aid, page, e)
             break
+    return {"comments": comments, "error": last_error}
 
-    return json.dumps({"bvid": bvid, "count": len(comments[:num]), "comments": comments[:num]}, ensure_ascii=False)
+
+@mcp.tool()
+async def bili_comments(bvid: str, num: int = 30) -> str:
+    """
+    获取B站视频的热门评论
+
+    Args:
+        bvid: 视频BV号，如"BV1uNk1YxEJQ"
+        num: 获取评论数量，默认30
+    
+    Returns:
+        JSON格式的评论列表，包含用户名、评论内容、点赞数、回复数
+    """
+    num = max(1, min(num, 100))
+    cred = get_cred()
+    v = video.Video(bvid=bvid, credential=cred)
+    try:
+        info = await v.get_info()
+    except Exception as e:
+        return _err(f"获取视频信息失败: {e}", bvid=bvid)
+    aid = info["aid"]
+
+    data = await _fetch_comments(aid, cred, num)
+    payload = {"bvid": bvid, "count": len(data["comments"][:num]), "comments": data["comments"][:num]}
+    if data.get("error"):
+        payload["partial"] = True
+        payload["error"] = data["error"]
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ========== Tool 3: 获取字幕 ==========
+
+async def _fetch_subtitle(bvid: str, cred: Credential) -> dict:
+    """获取字幕数据（内部helper，供 bili_subtitle / bili_crawl 复用）"""
+    v = video.Video(bvid=bvid, credential=cred)
+    info = await v.get_info()
+    cid = info.get("cid", 0)
+    if not cid and info.get("pages"):
+        cid = info["pages"][0].get("cid", 0)
+
+    if not cid:
+        raise ValueError("无法获取cid，该视频可能不支持字幕提取")
+
+    subtitle_list = await v.get_subtitle(cid=cid)
+    subtitles = subtitle_list.get("subtitles", [])
+
+    if not subtitles:
+        return {"title": info.get("title", ""), "language": "", "segments": 0, "text": ""}
+
+    # 优先AI中文字幕
+    target = next(
+        (s for s in subtitles if s.get("lan") in ("ai-zh", "zh-CN", "zh")),
+        subtitles[0],
+    )
+
+    # 下载字幕（带超时、状态码检查与空URL防护）
+    sub_url = (target.get("subtitle_url") or "").strip()
+    if sub_url.startswith("//"):
+        sub_url = "https:" + sub_url
+    if not sub_url:
+        raise ValueError("字幕下载地址为空，无法获取字幕")
+
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(sub_url) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"字幕下载失败，HTTP状态码 {resp.status}")
+            sub_data = await resp.json(content_type=None)
+
+    texts = [item.get("content", "") for item in sub_data.get("body", [])]
+    return {
+        "title": info.get("title", ""),
+        "language": target.get("lan_doc", ""),
+        "segments": len(texts),
+        "text": "\n".join(texts),
+    }
+
 
 @mcp.tool()
 async def bili_subtitle(bvid: str) -> str:
@@ -346,56 +527,20 @@ async def bili_subtitle(bvid: str) -> str:
 
     Args:
         bvid: 视频BV号，如"BV1uNk1YxEJQ"
-    
+
     Returns:
         视频的完整字幕文本
     """
     cred = get_cred()
-    v = video.Video(bvid=bvid, credential=cred)
+    try:
+        data = await _fetch_subtitle(bvid, cred)
+    except Exception as e:
+        return _err(f"字幕获取失败: {e}", bvid=bvid)
 
-    info = await v.get_info()
-    cid = info.get("cid", 0)
-    if not cid and info.get("pages"):
-        cid = info["pages"][0].get("cid", 0)
+    if data["segments"] == 0:
+        return _ok({"bvid": bvid, "message": "该视频没有字幕"})
 
-    if not cid:
-        return json.dumps({"error": "无法获取cid"}, ensure_ascii=False)
-
-    subtitle_list = await v.get_subtitle(cid=cid)
-    subtitles = subtitle_list.get("subtitles", [])
-
-    if not subtitles:
-        return json.dumps({"message": "该视频没有字幕"}, ensure_ascii=False)
-
-    # 优先AI中文字幕
-    target = None
-    for s in subtitles:
-        if s.get("lan") in ["ai-zh", "zh-CN", "zh"]:
-            target = s
-            break
-    if not target:
-        target = subtitles[0]
-
-    # 下载字幕
-    import aiohttp
-    sub_url = target.get("subtitle_url", "")
-    if sub_url.startswith("//"):
-        sub_url = "https:" + sub_url
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(sub_url) as resp:
-            sub_data = await resp.json()
-
-    texts = [item.get("content", "") for item in sub_data.get("body", [])]
-    full_text = "\n".join(texts)
-
-    return json.dumps({
-        "bvid": bvid,
-        "title": info.get("title", ""),
-        "language": target.get("lan_doc", ""),
-        "segments": len(texts),
-        "text": full_text,
-    }, ensure_ascii=False)
+    return _ok({"bvid": bvid, **data})
 
 
 # ========== Tool 4: 获取弹幕 ==========
@@ -415,15 +560,28 @@ async def bili_danmaku(bvid: str, num: int = 100) -> str:
     cred = get_cred()
     v = video.Video(bvid=bvid, credential=cred)
 
-    danmakus = await v.get_danmakus(page_index=0)
-    result = []
-    for d in danmakus[:num]:
-        result.append({
-            "text": d.text,
-            "time": d.dm_time,
-        })
-
-    return json.dumps({"bvid": bvid, "count": len(result), "danmakus": result}, ensure_ascii=False)
+    try:
+        info = await v.get_info()
+        total_pages = len(info.get("pages") or []) or 1
+        num = max(1, min(num, 1000))
+        result = []
+        # 遍历各分P直到取满num条（单分P失败不阻断其他分P）
+        for page_index in range(min(total_pages, 10)):
+            try:
+                danmakus = await v.get_danmakus(page_index=page_index)
+            except Exception as e:
+                logger.warning("分P %s 弹幕获取失败: %s", page_index + 1, e)
+                continue
+            for d in danmakus:
+                result.append({"text": d.text, "time": d.dm_time, "page": page_index + 1})
+                if len(result) >= num:
+                    break
+            if len(result) >= num:
+                break
+            await asyncio.sleep(0.3)
+        return _ok({"bvid": bvid, "count": len(result), "danmakus": result})
+    except Exception as e:
+        return _err(f"弹幕获取失败: {e}", bvid=bvid)
 
 
 # ========== Tool 5: 视频详情 ==========
@@ -441,7 +599,10 @@ async def bili_video_info(bvid: str) -> str:
     """
     cred = get_cred()
     v = video.Video(bvid=bvid, credential=cred)
-    info = await v.get_info()
+    try:
+        info = await v.get_info()
+    except Exception as e:
+        return _err(f"获取视频信息失败: {e}", bvid=bvid)
     stat = info.get("stat", {})
 
     return json.dumps({
@@ -452,7 +613,7 @@ async def bili_video_info(bvid: str) -> str:
         "author": info.get("owner", {}).get("name"),
         "duration": info.get("duration"),
         "pages": len(info.get("pages", [])),
-        "tags": [t.get("tag_name") for t in info.get("tag", []) if t.get("tag_name")],
+        "tags": [t.get("tag_name") for t in (info.get("Tag") or info.get("Tags") or info.get("tag") or []) if t.get("tag_name")],
         "stat": {
             "view": stat.get("view", 0),
             "danmaku": stat.get("danmaku", 0),
@@ -481,12 +642,12 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
     Returns:
         发表结果
     """
-    cred = get_cred()
-    v = video.Video(bvid=bvid, credential=cred)
-    info = await v.get_info()
-    aid = info["aid"]
-
     try:
+        cred = get_cred()
+        v = video.Video(bvid=bvid, credential=cred)
+        info = await v.get_info()
+        aid = info["aid"]
+
         if rpid == 0:
             # 发表新评论
             result = await comment.send_comment(
@@ -511,7 +672,7 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
 
         return json.dumps({"success": True, "message": "评论发送成功"}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+        return _err(f"评论发送失败: {e}", bvid=bvid)
 
 
 # ========== Tool 7: 批量采集 ==========
@@ -533,12 +694,15 @@ async def bili_crawl(keyword: str, max_videos: int = 5, comments_per_video: int 
     cred = get_cred()
 
     # 搜索
-    search_result = await search.search_by_type(
-        keyword=keyword,
-        search_type=search.SearchObjectType.VIDEO,
-        page=1,
-        order_type=search.OrderVideo.TOTALRANK,
-    )
+    try:
+        search_result = await search.search_by_type(
+            keyword=keyword,
+            search_type=search.SearchObjectType.VIDEO,
+            page=1,
+            order_type=search.OrderVideo.TOTALRANK,
+        )
+    except Exception as e:
+        return _err(f"搜索失败: {e}", keyword=keyword)
 
     results = []
     for item in search_result.get("result", [])[:max_videos]:
@@ -546,32 +710,35 @@ async def bili_crawl(keyword: str, max_videos: int = 5, comments_per_video: int 
         if not bvid:
             continue
 
-        title = item.get("title", "").replace('<em class="keyword">', "").replace("</em>", "")
         video_data = {
             "bvid": bvid,
-            "title": title,
+            "title": _clean_title(item.get("title", "")),
             "author": item.get("author", ""),
             "play": item.get("play", 0),
             "review": item.get("review", 0),
         }
 
-        # 评论
-        comments_json = await bili_comments(bvid=bvid, num=comments_per_video)
-        comments_data = json.loads(comments_json)
+        # 评论（复用搜索结果的aid，省一次视频详情请求）
+        aid = item.get("aid", 0)
+        if not aid:
+            try:
+                aid = (await video.Video(bvid=bvid, credential=cred).get_info())["aid"]
+            except Exception:
+                aid = 0
+        comments_data = await _fetch_comments(aid, cred, comments_per_video) if aid else {"comments": [], "error": "无法获取aid"}
 
-        # 字幕
+        # 字幕（失败不阻断，记录日志）
         subtitle_text = ""
         if get_subtitles:
             try:
-                subtitle_json = await bili_subtitle(bvid=bvid)
-                subtitle_data = json.loads(subtitle_json)
-                subtitle_text = subtitle_data.get("text", "")
-            except:
-                pass
+                subtitle_text = (await _fetch_subtitle(bvid, cred))["text"]
+            except Exception as e:
+                logger.warning("字幕获取失败(bvid=%s): %s", bvid, e)
 
         results.append({
             "video": video_data,
             "comments": comments_data.get("comments", []),
+            "comments_error": comments_data.get("error"),
             "subtitle_text": subtitle_text,
         })
 
@@ -587,36 +754,36 @@ async def bili_crawl(keyword: str, max_videos: int = 5, comments_per_video: int 
 
 # ========== 辅助：封面处理 ==========
 
-import subprocess
-
-
-def _extract_cover_from_video(video_path: str) -> Picture:
-    """从视频第3秒截取一帧作为封面，返回 Picture 对象"""
-    tmp_cover = os.path.join(tempfile.gettempdir(), f"bili_cover_{os.getpid()}.png")
+async def _grab_frame(video_path: str, second: int, out_path: str) -> bool:
+    """用 ffmpeg 截取指定秒数的一帧；成功返回 True"""
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-ss", "3", "-i", video_path,
-             "-vframes", "1", "-q:v", "2", tmp_cover],
+        await asyncio.to_thread(
+            subprocess.run,
+            ["ffmpeg", "-y", "-ss", str(second), "-i", video_path,
+             "-vframes", "1", "-q:v", "2", out_path],
             capture_output=True, timeout=30,
         )
-        if os.path.isfile(tmp_cover) and os.path.getsize(tmp_cover) > 0:
-            return Picture.from_file(tmp_cover)
+    except FileNotFoundError:
+        raise RuntimeError("未找到 ffmpeg，请先安装并加入 PATH")
+    except subprocess.TimeoutExpired:
+        logger.warning("ffmpeg 截帧超时（第%s秒）: %s", second, video_path)
+        return False
+    except OSError as e:
+        logger.warning("ffmpeg 执行失败（第%s秒）: %s", second, e)
+        return False
+    return os.path.isfile(out_path) and os.path.getsize(out_path) > 0
+
+
+async def _extract_cover_from_video(video_path: str) -> Picture:
+    """截取视频第3秒的一帧作为封面，失败则回退到第0秒"""
+    tmp_cover = os.path.join(tempfile.gettempdir(), f"bili_cover_{os.getpid()}.png")
+    try:
+        for second in (3, 0):
+            if await _grab_frame(video_path, second, tmp_cover):
+                return Picture.from_file(tmp_cover)
     finally:
         if os.path.isfile(tmp_cover):
             os.remove(tmp_cover)
-    # fallback: 第0秒
-    tmp_cover2 = os.path.join(tempfile.gettempdir(), f"bili_cover2_{os.getpid()}.png")
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-ss", "0", "-i", video_path,
-             "-vframes", "1", "-q:v", "2", tmp_cover2],
-            capture_output=True, timeout=30,
-        )
-        if os.path.isfile(tmp_cover2) and os.path.getsize(tmp_cover2) > 0:
-            return Picture.from_file(tmp_cover2)
-    finally:
-        if os.path.isfile(tmp_cover2):
-            os.remove(tmp_cover2)
     raise RuntimeError(f"无法从视频截取封面: {video_path}")
 
 
@@ -650,20 +817,9 @@ async def bili_send_dynamic(
     dyn.add_plain_text(text.strip())
     # 上传图片
     if images:
-        for img_path in images[:9]:
-            try:
-                if not img_path or not img_path.strip():
-                    continue
-                img_path = img_path.strip()
-                if img_path.startswith(("http://", "https://")):
-                    pic = await Picture.async_from_url(img_path)
-                else:
-                    if not os.path.isfile(img_path):
-                        return json.dumps({"success": False, "error": f"图片文件不存在: {img_path}"}, ensure_ascii=False)
-                    pic = Picture.from_file(img_path)
-                dyn.add_image(pic)
-            except Exception as e:
-                return json.dumps({"success": False, "error": f"图片处理失败: {img_path} - {str(e)}"}, ensure_ascii=False)
+        img_error = await _add_images_to_dynamic(dyn, images)
+        if img_error:
+            return _err(img_error)
 
     if topic_id:
         dyn.set_topic(topic_id)
@@ -729,6 +885,7 @@ async def bili_upload_video(
         return json.dumps({"success": False, "error": "title 不能为空"}, ensure_ascii=False)
 
     cred = get_cred()
+    progress_info = {"phase": "初始化"}
 
     try:
         # 准备分P
@@ -750,12 +907,12 @@ async def bili_upload_video(
         if cover_path and cover_path.strip() and os.path.isfile(cover_path.strip()):
             cover_pic = Picture.from_file(cover_path.strip())
         else:
-            cover_pic = _extract_cover_from_video(video_path)
+            cover_pic = await _extract_cover_from_video(video_path)
 
         meta = VideoMeta(
             tid=tid,
             title=title.strip()[:80],
-            desc=desc or "",
+            desc=(desc or "")[:2000],
             cover=cover_pic,
             tags=tag_list,
             original=is_original,
@@ -771,8 +928,6 @@ async def bili_upload_video(
         )
 
         # 上传事件回调（记录进度）
-        progress_info = {"phase": "初始化"}
-
         @uploader.on("__ALL__")
         async def on_event(data: dict):
             progress_info["phase"] = str(data)
@@ -787,7 +942,7 @@ async def bili_upload_video(
         return json.dumps({
             "success": False,
             "error": str(e),
-            "last_phase": progress_info.get("phase", "unknown") if "progress_info" in dir() else "init",
+            "last_phase": progress_info.get("phase", "unknown"),
         }, ensure_ascii=False)
 
 
@@ -848,12 +1003,12 @@ async def bili_upload_video_multi(
         if cover_path and cover_path.strip() and os.path.isfile(cover_path.strip()):
             cover_pic = Picture.from_file(cover_path.strip())
         else:
-            cover_pic = _extract_cover_from_video(pages[0].path)
+            cover_pic = await _extract_cover_from_video(pages[0].path)
 
         meta = VideoMeta(
             tid=tid,
             title=(title or "").strip()[:80],
-            desc=desc or "",
+            desc=(desc or "")[:2000],
             cover=cover_pic,
             tags=tag_list,
             original=is_original,
@@ -879,16 +1034,17 @@ async def bili_send_opus(
     title: str,
     content: str,
     images: list[str] | None = None,
-    category_id: int = 0,
 ) -> str:
     """
-    发布B站图文（Opus，新版专栏）
+    发布B站图文（以动态形式发布长图文内容）
+
+    注意：当前通过动态接口发布，标题以【】包裹置于正文开头，
+    并非独立的专栏文章；如需真正的专栏请使用B站创作中心。
 
     Args:
-        title: 文章标题
-        content: 文章正文内容（纯文本，段落用换行分隔）
-        images: 文章中插入的图片路径或URL列表（可选）
-        category_id: 分类ID（可选，0表示不指定）
+        title: 图文标题（置于正文首行）
+        content: 正文内容（纯文本，段落用换行分隔）
+        images: 插入的图片路径或URL列表（可选，最多9张，图片失败不阻断发布）
 
     Returns:
         发布结果
@@ -896,25 +1052,12 @@ async def bili_send_opus(
     cred = get_cred()
 
     dyn = dynamic.BuildDynamic.empty()
-
-    # 专栏动态以纯文本+图片方式构建
-    # 标题作为第一行加粗
     full_text = f"【{title}】\n\n{content}"
     dyn.add_plain_text(full_text)
 
     if images:
-        for img_path in images:
-            try:
-                if not img_path or not img_path.strip():
-                    continue
-                img_path = img_path.strip()
-                if img_path.startswith(("http://", "https://")):
-                    pic = await Picture.async_from_url(img_path)
-                else:
-                    pic = Picture.from_file(img_path)
-                dyn.add_image(pic)
-            except Exception as e:
-                pass  # 图片失败不阻断发布
+        # 图片失败不阻断发布
+        await _add_images_to_dynamic(dyn, images)
 
     try:
         result = await dynamic.send_dynamic(info=dyn, credential=cred)
@@ -986,7 +1129,10 @@ async def bili_hot_videos(pn: int = 1, ps: int = 20) -> str:
     Returns:
         热门视频列表，包含标题、播放量、UP主等
     """
-    result = await hot.get_hot_videos(pn=pn, ps=min(ps, 50))
+    try:
+        result = await hot.get_hot_videos(pn=pn, ps=min(ps, 50))
+    except Exception as e:
+        return _err(f"获取热门视频失败: {e}")
     videos = []
     for item in result.get("list", []):
         stat = item.get("stat", {})
@@ -1019,8 +1165,11 @@ async def bili_hot_buzzwords(page_num: int = 1, page_size: int = 20) -> str:
     Returns:
         热搜词列表
     """
-    result = await hot.get_hot_buzzwords(page_num=page_num, page_size=page_size)
-    return json.dumps(result, ensure_ascii=False)
+    try:
+        result = await hot.get_hot_buzzwords(page_num=page_num, page_size=page_size)
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return _err(f"获取热搜词失败: {e}")
 
 
 # ========== Tool 15: 每周必看 ==========
@@ -1036,12 +1185,14 @@ async def bili_weekly_hot(week: int = 0) -> str:
     Returns:
         每周必看期数列表或指定期的视频列表
     """
-    if week <= 0:
-        result = await hot.get_weekly_hot_videos_list()
+    try:
+        if week <= 0:
+            result = await hot.get_weekly_hot_videos_list()
+        else:
+            result = await hot.get_weekly_hot_videos(week=week)
         return json.dumps(result, ensure_ascii=False)
-    else:
-        result = await hot.get_weekly_hot_videos(week=week)
-        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return _err(f"获取每周必看失败: {e}")
 
 
 # ========== Tool 16: 排行榜 ==========
@@ -1058,6 +1209,8 @@ async def bili_rank(category: str = "all", day: int = 3) -> str:
             knowledge=知识 technology=科技 sports=运动 car=汽车
             life=生活 food=美食 animal=动物 fashion=时尚
             ent=娱乐 cinephile=影视
+            bangumi=番剧 guochuang=国创 guochuang_anime=国产动画
+            documentary=纪录片 kichiku=鬼畜 movie=电影 tv=电视剧 variety=综艺
         day: 时间维度，3=三日 7=七日
 
     Returns:
@@ -1073,13 +1226,21 @@ async def bili_rank(category: str = "all", day: int = 3) -> str:
         "food": rank.RankType.Food, "animal": rank.RankType.Animal,
         "fashion": rank.RankType.Fashion, "ent": rank.RankType.Ent,
         "cinephile": rank.RankType.Cinephile,
+        "bangumi": rank.RankType.Bangumi, "guochuang": rank.RankType.Guochuang,
+        "guochuang_anime": rank.RankType.GuochuangAnime,
+        "documentary": rank.RankType.Documentary, "kichiku": rank.RankType.Kichiku,
+        "movie": rank.RankType.Movie, "tv": rank.RankType.TV,
+        "variety": rank.RankType.Variety,
     }
     day_map = {3: rank.RankDayType.THREE_DAY, 7: rank.RankDayType.WEEK}
 
     rank_type = type_map.get(category.lower(), rank.RankType.All)
     rank_day = day_map.get(day, rank.RankDayType.THREE_DAY)
 
-    result = await rank.get_rank(type_=rank_type, day=rank_day)
+    try:
+        result = await rank.get_rank(type_=rank_type, day=rank_day)
+    except Exception as e:
+        return _err(f"获取排行榜失败: {e}")
     videos = []
     for item in result.get("list", []):
         stat = item.get("stat", {})
@@ -1111,20 +1272,23 @@ async def bili_user_info(uid: int) -> str:
     """
     cred = get_cred()
     u = user.User(uid=uid, credential=cred)
-    info = await u.get_user_info()
+    try:
+        info = await u.get_user_info()
+    except Exception as e:
+        return _err(f"获取用户信息失败: {e}", uid=uid)
 
     # 尝试获取UP主数据
     up_stat = {}
     try:
         up_stat = await u.get_up_stat()
-    except:
-        pass
+    except Exception as e:
+        logger.warning("获取UP主统计失败(uid=%s): %s", uid, e)
 
     relation = {}
     try:
         relation = await u.get_relation_info()
-    except:
-        pass
+    except Exception as e:
+        logger.warning("获取UP主关系数据失败(uid=%s): %s", uid, e)
 
     return json.dumps({
         "uid": uid,
@@ -1169,7 +1333,10 @@ async def bili_user_videos(uid: int, pn: int = 1, ps: int = 30, order: str = "pu
     }
     order_enum = order_map.get(order, user.VideoOrder.PUBDATE)
 
-    result = await u.get_videos(pn=pn, ps=ps, order=order_enum, keyword=keyword)
+    try:
+        result = await u.get_videos(pn=pn, ps=ps, order=order_enum, keyword=keyword)
+    except Exception as e:
+        return _err(f"获取用户视频失败: {e}", uid=uid)
     videos = []
     for item in result.get("list", {}).get("vlist", []):
         videos.append({
@@ -1206,12 +1373,17 @@ async def bili_favorite_lists(uid: int = 0) -> str:
     cred = get_cred()
     if uid == 0:
         # 从凭证获取自己的UID
-        import json as _json
-        with open(CRED_FILE) as f:
-            data = _json.load(f)
-        uid = int(data.get("dedeuserid", 0))
+        try:
+            uid = int(_load_cred_data().get("dedeuserid") or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        if uid <= 0:
+            return _err("凭证中缺少 dedeuserid，无法获取你的收藏夹，请重新登录")
 
-    result = await favorite_list.get_video_favorite_list(uid=uid, credential=cred)
+    try:
+        result = await favorite_list.get_video_favorite_list(uid=uid, credential=cred)
+    except Exception as e:
+        return _err(f"获取收藏夹列表失败: {e}")
     fav_lists = []
     for item in (result.get("list", []) or []):
         fav_lists.append({
@@ -1239,12 +1411,15 @@ async def bili_favorite_content(media_id: int, page: int = 1, keyword: str = "")
         收藏夹内的视频列表
     """
     cred = get_cred()
-    result = await favorite_list.get_video_favorite_list_content(
-        media_id=media_id,
-        page=page,
-        keyword=keyword if keyword else None,
-        credential=cred,
-    )
+    try:
+        result = await favorite_list.get_video_favorite_list_content(
+            media_id=media_id,
+            page=page,
+            keyword=keyword if keyword else None,
+            credential=cred,
+        )
+    except Exception as e:
+        return _err(f"获取收藏夹内容失败: {e}", media_id=media_id)
     medias = []
     for item in (result.get("medias", []) or []):
         medias.append({
@@ -1313,9 +1488,9 @@ async def bili_unread_messages() -> str:
     cred = get_cred()
     try:
         result = await session.get_unread_messages(credential=cred)
-        return json.dumps(result, ensure_ascii=False)
+        return _ok(result)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return _err(f"获取未读消息失败: {e}")
 
 
 # ========== Tool 23: 最近收到的回复 ==========
@@ -1331,9 +1506,9 @@ async def bili_received_replies() -> str:
     cred = get_cred()
     try:
         result = await session.get_replies(credential=cred)
-        return json.dumps(result, ensure_ascii=False)
+        return _ok(result)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return _err(f"获取回复通知失败: {e}")
 
 
 # ========== Tool 24: 最近收到的@和点赞 ==========
@@ -1348,15 +1523,18 @@ async def bili_received_at_and_likes() -> str:
     """
     cred = get_cred()
     result = {}
+    errors = []
     try:
         result["at"] = await session.get_at(credential=cred)
     except Exception as e:
-        result["at_error"] = str(e)
+        errors.append(f"@通知获取失败: {e}")
     try:
         result["likes"] = await session.get_likes(credential=cred)
     except Exception as e:
-        result["likes_error"] = str(e)
-    return json.dumps(result, ensure_ascii=False)
+        errors.append(f"点赞通知获取失败: {e}")
+    if errors:
+        return _err("; ".join(errors), **result)
+    return _ok(result)
 
 
 # ========== 启动 ==========

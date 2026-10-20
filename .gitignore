@@ -1,5 +1,6 @@
 # 凭证文件（包含登录信息，切勿提交）
 bili_credential.json
+bili_credential.json.bak
 
 # 登录二维码（临时文件）
 qrcode_login.png
@@ -24,6 +25,7 @@ env/
 *.swp
 *.swo
 *~
+.commandcode/
 
 # OS
 .DS_Store
