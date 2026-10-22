@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "B站分身",
+    "description": "挂载本地 bilibili-mcp，让 Agent 能运营你的B站小号：看视频、读字幕与评论、发评论、点赞、发动态。"
+  }
+}

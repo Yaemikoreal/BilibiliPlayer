@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Bilibili Avatar (B站分身)",
+    "description": "Connects the local bilibili-mcp server so the agent can operate a Bilibili account: browse videos, read subtitles and comments, post comments, like, and send dynamics."
+  }
+}

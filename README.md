@@ -4,7 +4,9 @@ B站（Bilibili）MCP Server —— 在本地让 AI 助手直接操作B站。
 
 本项目为**纯本地运行的独立项目**：代码、依赖和登录凭证都保存在本机，不需要从远程仓库克隆，也不关联任何远程仓库。除B站 API 外，不依赖其他外部服务。
 
-**27 个工具**，覆盖登录认证、数据采集、内容发布、数据分析、互动运营。
+**28 个工具**，覆盖登录认证、数据采集、内容发布、数据分析、互动运营。
+
+> **DSH 插件**：本项目附带 [dsh-plugin/](./dsh-plugin/) —— DeepSeek Harness 插件「B站分身」，把上述能力挂载给 DSH 的 Agent，并支持按值班章程自动混迹（看视频/点赞/评论/发动态）。详见 [dsh-plugin/README.md](./dsh-plugin/README.md) 与 [CONTEXT.md](./CONTEXT.md)。
 
 ## 功能
 
@@ -264,7 +266,9 @@ npx @modelcontextprotocol/inspector ./.venv/bin/python mcp_server.py
 
 ```text
 BilibiliPlayer/
-├── mcp_server.py          # MCP Server 主文件（27 个工具）
+├── mcp_server.py          # MCP Server 主文件（28 个工具）
+├── dsh-plugin/            # DSH 插件「B站分身」（MCP 挂载 + 值班调度 + 设置页面板）
+├── CONTEXT.md             # 领域术语表（角色/机制/资产的唯一定义处）
 ├── bili_login.py          # 命令行扫码登录（备用）
 ├── requirements.txt       # Python 依赖
 ├── README.md              # 项目说明

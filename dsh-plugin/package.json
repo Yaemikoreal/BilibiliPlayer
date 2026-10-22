@@ -1,0 +1,37 @@
+{
+    "name":  "dsh-bili-fenshen",
+    "version":  "0.3.1",
+    "description":  "B站分身：让 Agent 稳定、高效地运营你的B站小号——混迹视频与评论区",
+    "license":  "MIT",
+    "private":  true,
+    "type":  "module",
+    "main":  "index.js",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./client.js",
+                    "./locale/*.json":  "./locale/*.json",
+                    "./icon":  "./icon.svg"
+                },
+    "files":  [
+                  "index.js",
+                  "client.js",
+                  "cordis.patch.yml",
+                  "prompts/duty.md",
+                  "locale/*.json",
+                  "icon.svg"
+              ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "immediately":  true,
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-runtime",
+                                              "@deepseek-ai/dsh-client-ui-settings",
+                                              "@deepseek-ai/dsh-client-ui-settings-plugins"
+                                          ]
+                           }
+            }
+}

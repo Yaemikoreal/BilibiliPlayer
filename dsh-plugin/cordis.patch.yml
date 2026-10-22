@@ -1,0 +1,25 @@
+# B站分身 —— DSH bundle patch
+# 两条挂载：
+# 1) bili-fenshen-mcp —— DSH 原生 MCP client 挂本项目 venv 里的 bilibili-mcp（28 工具，零重写）；
+#    白名单门禁由 mcp_server.py 的 BILI_MCP_TOOLS 实现（未设 = 全量，兼容既有用法）。
+# 2) bili-fenshen —— Host 插件本体（值班调度/手动触发/日志）。
+#
+# ⚠️ 换机器部署：把下面 command / args / cwd 三处绝对路径改成你的项目实际位置
+#    （index.js 侧的路径已自动从插件位置推导，无需改动）。
+- insert:
+    - id: bili-fenshen-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: bili-fenshen
+        transport: stdio
+        command: E:\myproject\BilibiliPlayer\.venv\Scripts\python.exe
+        args:
+          - E:\myproject\BilibiliPlayer\mcp_server.py
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
+        cwd: E:\myproject\BilibiliPlayer
+        failOnStartupError: true
+    - id: bili-fenshen
+      name: 'dsh-bili-fenshen'
+      config: {}
