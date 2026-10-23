@@ -26,13 +26,13 @@ globalThis.window = {
       }
       const plugin = def.factory(fakeRequire)
       // 模拟宿主调用 apply
+      // ⭐ 真实 slots 语义：inject 效果回调返回 register 的 disposer（普通回调）；生成器不是合法 disposer。
       const fakeSlots = {
         inject(name, reg) {
           injected.push(name)
           const r = reg()
           if (r && typeof r.next === 'function') {
-            // main 槽位是生成器：逐个 yield 出 register 结果
-            for (const item of r) registered.push(item)
+            injected.push('⚠️ GENERATOR（真实宿主不认！）')
           } else if (r) {
             registered.push(r)
           }

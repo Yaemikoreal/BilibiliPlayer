@@ -1178,13 +1178,11 @@ window.__ModuleLoader__.load({
           }, PanelIcon))
         } catch (e) { console.error('[bili-fenshen] 注册侧栏图标失败：', e) }
         try {
-          ctx.slots.inject('main', function* () {
-            yield ctx.slots.register({
-              name: 'main',
-              key: PANEL_ID,
-              children: {},                  // 页面内部不声明子槽位（tab 自绘）
-            }, ConsolePage)
-          })
+          // ⭐ 写法对齐 dsh-context（从安装包源码核实）：inject 效果回调直接返回 register 的 disposer（普通回调，非生成器）
+          ctx.slots.inject('main', () => ctx.slots.register({
+            name: 'main',
+            key: PANEL_ID,                 // 页面内部不声明子槽位（tab 自绘）
+          }, ConsolePage))
         } catch (e) { console.error('[bili-fenshen] 注册 main 面板失败：', e) }
         try {
           ctx.slots.inject('settings.section', () => ctx.slots.register({
