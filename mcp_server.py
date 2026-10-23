@@ -689,7 +689,15 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
                 credential=cred,
             )
 
-        return json.dumps({"success": True, "message": "评论发送成功"}, ensure_ascii=False)
+        rpid_out = None
+        if isinstance(result, dict):
+            rpid_out = result.get("rpid") or (result.get("data") or {}).get("rpid")
+        return json.dumps({
+            "success": True,
+            "message": "评论发送成功",
+            "bvid": bvid,
+            "rpid": rpid_out,
+        }, ensure_ascii=False)
     except Exception as e:
         return _err(f"评论发送失败: {e}", bvid=bvid)
 

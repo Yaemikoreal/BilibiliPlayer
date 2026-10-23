@@ -76,6 +76,20 @@
   `out/` 空着 ⇒ 主人完全看不到这轮发生了什么，也不知道白烧了钱 ✗。
   顺序上：**先落这两样，再去做别的** ✓。
 
+## 记账契约（控制台靠它对账）
+
+- ⭐⭐ 每执行一个动作，**立即**向 `<家目录>/ledger.jsonl` **追加一行** JSON（一行一个，绝不覆盖、绝不重排）：
+  - 看完一条：`{"t":"<ISO>","round":"<本轮开始时刻ISO>","type":"view","bvid":"BV…","title":"…","author":"…","views":123456,"duration":892,"source":"hot|search|follow","grade":"worth|ok|meh"}`
+  - 点赞：`{"t":…,"round":…,"type":"like","bvid":"BV…"}`
+  - 评论：`{"t":…,"round":…,"type":"comment","bvid":"BV…","text":"评论正文","rpid":123456}`
+  - 发动态：`{"t":…,"round":…,"type":"dynamic","bvid":"BV…","text":"动态正文","id":"动态id"}`
+  - 跳过：`{"t":…,"round":…,"type":"skip","bvid":"BV…","title":"…","author":"…","reason":"为什么跳过"}`
+  - 回复别人：`{"t":…,"round":…,"type":"reply-out","bvid":"BV…","parent":<对方rpid>,"text":"回复正文","rpid":<自己rpid>}`
+- `rpid` 取自 `bili_reply` 返回；**返回里没有就写 `null`，绝不自己编数字**。
+- 同一个动作只记一次。记账写不进去，要在报告里**明说**（控制台会缺这条）。
+- 顺序：**先记账，再写报告**。报告是给人看的摘要，账本是控制台的唯一事实来源。
+- 账本路径是绝对路径 `<家目录>/ledger.jsonl`，别写错地方。
+
 ## 判重表（`<家目录>/seen.md`）
 
 - 一行一条：`日期 · BV号 · 动作（看过/赞过/评论过rpid/分享过/跳过·理由）· 标题`。
