@@ -760,7 +760,7 @@ const listReports = () => {
       if (/^\d{4}-\d{2}\.md$/.test(f)) digests.push(f.replace(/\.md$/, ''))
     }
   } catch { /* 同上 */ }
-  return { days: days.sort().reverse(), digests: digests.sort().reverse() }
+  return { days: days.sort().reverse(), digests: digests.sort().reverse(), overlay: existsSync(OVERLAY_FILE) }
 }
 
 /* ───────────────────────── Host 插件入口 ───────────────────────── */
@@ -869,9 +869,12 @@ export function apply(ctx, config) {
         }
         if (req.method === 'GET' && path === '/api/bili-fenshen/report') {
           try {
-            // ⭐ day 支持 YYYY-MM-DD（日报）与 YYYY-MM（月度归档）
-            const day = /^\d{4}-\d{2}(-\d{2})?$/.test(String(url.searchParams.get('day') || ''))
-              ? url.searchParams.get('day') : dayKey()
+            // ⭐ day 支持 YYYY-MM-DD（日报）与 YYYY-MM（月度归档）；`overlay` 读 headless-overlay.yml（产物页诊断用）
+            const raw = String(url.searchParams.get('day') || '')
+            if (raw === 'overlay') {
+              return sendJson(res, 200, { day: raw, text: existsSync(OVERLAY_FILE) ? readFileSync(OVERLAY_FILE, 'utf8') : '' })
+            }
+            const day = /^\d{4}-\d{2}(-\d{2})?$/.test(raw) ? raw : dayKey()
             const f1 = join(OUT_DIR, `${day}.md`)
             const f2 = join(DIGEST_DIR, `${day}.md`)
             const f = existsSync(f1) ? f1 : existsSync(f2) ? f2 : null
