@@ -7,9 +7,11 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（28 个工具）挂�
 | 文件 | 职责 |
 |---|---|
 | `cordis.patch.yml` | bundle 挂载声明：原生 MCP connection（stdio → 项目 venv 的 `mcp_server.py`）+ Host 插件行 |
-| `index.js` | Host 半部：值班调度（手动 + 谷时窗口）、dsh CLI 探测、headless 值班轮（overlay 动态生成）、配额账本、发后复核调度、`/api/bili-fenshen/*` 路由、JS 侧扫码登录 |
-| `client.js` | Client 半部：设置页「B站分身」面板（账号状态 / 扫码登录 / 现在跑一轮 / 日报 / 日志） |
-| `prompts/duty.md` | 值班章程：内容判据、评论/点赞/动态纪律、提示注入防御红线、`### BV号` 报告契约 |
+| `index.js` | Host 半部：值班调度（手动 + 谷时窗口）、dsh CLI 探测、headless 值班轮（overlay 动态生成）、轮次生命周期（`round-end`/报告兜底回填/中止/心跳自愈）、回复通知轮询、配额账本、`/api/bili-fenshen/*` 路由、JS 侧扫码登录 |
+| `lib/*.js` | 纯逻辑模块（`node --test` 覆盖）：账本 JSONL、报告兜底解析、活动聚合、配置覆盖层、回复通知映射、账号拉取、路由工厂 |
+| `client.js` | Client 半部：左侧栏「B站分身」控制台（看板：账号/值班/配额/活动生命周期流；操作台：配置/日志/判重表/产物）+ 设置页瘦身入口 |
+| `prompts/duty.md` | 值班章程：内容判据、评论/点赞/动态纪律、提示注入防御红线、`### BV号` 报告契约、账本记账契约 |
+| `test/*.test.js` | `npm test`（`node --test`）纯函数单测 |
 | `templates/` | DSH 官方模板拷贝（decoration / mcp），仅作开发参考 |
 
 ## Agent 工具
@@ -26,6 +28,22 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（28 个工具）挂�
 3. Agent 按章程：拉内容源（热门/搜索/订阅 UP 主）→ 判重 → 读字幕原文 → 决定动作（受配额约束）→ 写报告与判重表
 4. 结束 90 秒后宿主复核调度（对抗压审：接口回执成功 ≠ 公开可见）
 
+## 控制台
+
+装好后左侧栏出现「B站分身」图标（插件 / 自动化任务 旁边）：
+
+- **看板**：账号简况、自动值班开关、今日配额、**每条视频的活动生命周期**（刷到→看→赞→评→被回复→我回）。
+- **操作台**：配置（值班节奏/配额/内容源/人设）、日志、判重表、产物。
+
+设置 → B站分身 现在只保留一行入口说明；扫码登录在控制台右上角「重新扫码」。
+
+## 账本
+
+控制台的事实来源是 `<家目录>/ledger.jsonl`（一行一个事件，append-only）。
+值班轮按章程「记账契约」写入动作；宿主每 5 分钟拉一次回复通知补 `reply-in`；
+每轮结束后解析当日报告**兜底回填**缺失事件（`source: "report"`，界面标注「据报告回填」）；
+报告 `out/<日期>.md` 仍保留，用于人读与兜底回填。
+
 ## 安装（本机自用）
 
 前提：本仓库已 clone 到本地、`.venv` 已建好（`pip install -r requirements.txt`）、DSH 桌面版。
@@ -38,11 +56,11 @@ dsh plugin --profile desktop add link:<项目路径>/dsh-plugin
 #   3. 重启 DSH
 ```
 
-装完在 **设置 → B站分身**：点「生成登录二维码」→ 手机B站扫码 → 手机上点确认（选「记住我/长期」）→ 面板显示登录成功 → 点「现在跑一轮」。
+装完打开左侧栏「B站分身」控制台 → 点「重新扫码」→ 手机B站扫码 → 手机上点确认（选「记住我/长期」）→ 账号条显示登录有效 → 点「跑一轮」。
 
 ## 配置
 
-全部配置走 Loader patch 的 `config`（`id: bili-fenshen` 行），关键字段：
+默认值走 Loader patch 的 `config`（`id: bili-fenshen` 行）；控制台「操作台 → 配置」保存到 `<家目录>/config.json` 覆盖层（逐字段覆盖 patch，不改用户的 patch 文件），保存即热生效。关键字段：
 
 `autoDuty`（自动值班总开关，默认关）、`noon`/`night`（谷时窗口）、`perDay` / `commentsPerDay` / `commentsPerRound` / `likesPerDay` / `dynamicsPerDay` / `repliesPerRound`（配额）、`keywords`（搜索关键词）、`followUids`（订阅 UP 主）、`personaPrompt`（人设，留空=中性）、`reportLevel`（full/brief/off）、`dutyTools`（值班轮白名单）、`dshBin`（CLI 路径，留空自动探测）、`headlessProfile`（默认 `headless`）。
 

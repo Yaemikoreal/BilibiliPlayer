@@ -114,8 +114,8 @@ export function createApiHandler(deps) {
         return sendJson(res, 200, { ok: true, rows, raw })
       }
       if (method === 'GET' && path === `${PREFIX}/reports`) {
-        const r = deps.listReports ? deps.listReports() : { days: [], digests: [] }
-        return sendJson(res, 200, { ok: true, days: r.days || [], digests: r.digests || [] })
+        const r = deps.listReports ? deps.listReports() : { days: [], digests: [], overlay: false }
+        return sendJson(res, 200, { ok: true, days: r.days || [], digests: r.digests || [], overlay: !!r.overlay })
       }
       return sendJson(res, 404, { ok: false, error: `unknown ${method} ${path}` })
     } catch (e) {
