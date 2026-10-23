@@ -13,7 +13,7 @@
 - 视觉基准：[`docs/demo/bili-fenshen-console.html`](../../demo/bili-fenshen-console.html) + 截图 [`docs/demo/shots/`](../../demo/shots/)
 - 术语：[`CONTEXT.md`](../../../CONTEXT.md)
 
-> **已验证**：Task 1–6 里的 `ledger.js` / `report.js` / `activity.js` / `config.js` / `api.js` 及其测试**已实跑通过**（`node --test`，共 22 个用例全绿）。实现时请照抄代码；若你改动逻辑，先让测试重新变绿。Task 7 之后是接线与 UI，无法离线单测，必须按各任务的「验证」步骤在真实 DSH 里走一遍。
+> **已验证**：Task 1–6 里的 `ledger.js` / `report.js` / `activity.js` / `config.js` / `replies.js` / `account.js` / `api.js` 及其测试**已实跑通过**（`node --test`，共 31 个用例全绿）。实现时请照抄代码；若你改动逻辑，先让测试重新变绿。Task 7 之后是接线与 UI，无法离线单测，必须按各任务的「验证」步骤在真实 DSH 里走一遍。
 
 ---
 
@@ -176,27 +176,26 @@ Expected: FAIL，`Cannot find module '../lib/ledger.js'`。
  * 账本：append-only JSONL。一行一个事件，见设计文档 §4。
  * 所有 IO 都在 try/catch 里——账本写失败绝不能拖垮值班轮。
  */
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, renameSync, statSync } from 'node:fs'
 
 const DEFAULT_ROTATE_BYTES = 5 * 1024 * 1024
 
 export function appendEvents(file, events, opts = {}) {
   if (!Array.isArray(events) || events.length === 0) return 0
   const rotateBytes = opts.rotateBytes ?? DEFAULT_ROTATE_BYTES
+  // ⭐ 先轮转、再追加：否则刚写入的事件会被一起卷进 .old，主文件变空
+  try {
+    if (existsSync(file) && statSync(file).size > rotateBytes) {
+      renameSync(file, file + '.old')
+    }
+  } catch {
+    /* 轮转失败不影响主流程 */
+  }
   const line = events.map((e) => JSON.stringify(e)).join('\n') + '\n'
   try {
     appendFileSync(file, line, 'utf8')
   } catch {
     return 0
-  }
-  try {
-    if (existsSync(file) && statSync(file).size > rotateBytes) {
-      const tail = readFileSync(file, 'utf8').slice(-Math.floor(rotateBytes / 2))
-      writeFileSync(file + '.old', tail, 'utf8')
-      writeFileSync(file, '', 'utf8')
-    }
-  } catch {
-    /* 轮转失败不影响主流程 */
   }
   return events.length
 }
