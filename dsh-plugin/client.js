@@ -88,14 +88,19 @@ window.__ModuleLoader__.load({
         --ease:cubic-bezier(.4,0,.2,1); --dur:.2s;
         color:var(--label-primary);
         background:var(--bg-base);
+        /* ⭐ 面板根容器自己承担滚动（写法对齐 dsh-context 的 .lc-root）：height:100% + overflow-y:auto */
+        height:100%;
         min-height:100%;
+        overflow-y:auto;
+        overflow-x:hidden;
         font-size:14px; line-height:22px;
       }
       .bf-console, .bf-console *{box-sizing:border-box}
       .bf-console button{font:inherit;color:inherit}
 
       /* ───────── page ───────── */
-      .bf-page{max-width:920px;padding:26px 32px 72px}
+      /* ⭐ 全屏适配：流式宽度 + 居中，宽屏最多用到 1400px（demo 的 920px 定稿在真机全屏下显得过窄且不居中） */
+      .bf-page{width:100%;max-width:1400px;margin:0 auto;padding:26px 32px 72px}
       .bf-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
       .bf-page-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.01em}
       .bf-page-sub{margin:2px 0 0;font-size:13px;line-height:20px;color:var(--label-tertiary)}
@@ -424,6 +429,15 @@ window.__ModuleLoader__.load({
         color:var(--label-secondary);white-space:pre-wrap;max-height:340px;overflow:auto;
       }
       .bf-split{display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start}
+
+      /* ───────── 窄容器降级（宿主面板拖窄时） ───────── */
+      @media (max-width:680px){
+        .bf-page{padding:20px 16px 56px}
+        .bf-quota{grid-template-columns:repeat(2,1fr)}
+        .bf-split{grid-template-columns:1fr}
+        .bf-row{flex-wrap:wrap}
+        .bf-row-label{flex:0 0 auto;min-width:96px}
+      }
 
       /* ───────── login modal ───────── */
       .bf-modal-mask{
