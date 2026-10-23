@@ -1,246 +1,212 @@
 # B站分身 · 控制台页面 设计文档
 
+- 版本：v2（定稿，含静态预览校准）
 - 日期：2026-10-23
-- 插件：`dsh-bili-fenshen`（`dsh-plugin/`），版本 0.3.1 → 0.4.0
-- 状态：待账号主人 review
-- 相关：`CONTEXT.md`（术语）、`dsh-plugin/prompts/duty.md`（值班章程）、`mcp_server.py`（数据层）
+- 插件：`dsh-bili-fenshen` 0.3.1 → 0.4.0
+- 预览：`docs/demo/bili-fenshen-console.html`（截图 `docs/demo/shots/`）
+- 配套：`docs/superpowers/plans/2026-10-23-bili-fenshen-console.md`（实施方案）
+- 术语以 `CONTEXT.md` 为准
 
-## 1. 背景与目标
+---
 
-插件当前只有一个 UI：**设置 → B站分身**的一节面板（`settings.section`，order 35）。它把「状态 / 扫码登录 / 跑一轮 / 日报 / 日志」堆在一个滚动流里，用 `<pre>` 显示 markdown 原文，且样式引用的 `--dsh-*` CSS 变量在宿主中并不存在（真实 token 为 `--dsw-alias-*`），实际呈现为裸样式。
+## 1. 目标
 
-目标：在 DSH 左侧栏新增一个**独立的全宽控制台页面「B站分身」**，替代设置页成为日常入口。它既要能「看」（账号、值班、活动），也要能「操作」（配额、内容源、维护）。
+在 DSH 左侧栏新增一个**全宽的控制台页面「B站分身」**，取代当前「设置 → B站分身」的一节面板，成为账号主人的日常入口。
 
-核心新增能力是 **B站活动生命周期**：把「刷了什么视频 → 是否点赞 → 是否评论 → 评论了什么 → 有人回复吗 → 回了什么 → 我又回了什么」呈现为一条连贯的活动线，而不是散落在日报、判重表、日志三处的碎片。
+它同时承担两件事，用两个子页分开：
 
-**设计预览**（静态 HTML，仅用于确认观感，不是实现产物）：`docs/demo/bili-fenshen-console.html`，截图见 `docs/demo/shots/`。预览里的颜色、字体栈、圆角、边框细度全部取自宿主真实定义（`packages/client/ui-theme/src/styles/design-platform.css` 与 `base.css`：`body{…}` 为浅色、`body[data-ds-dark-theme]{…}` 为深色），不是估算值。打开方式：浏览器直接打开该文件，或用 `#console` / `#dark` / `#console,seen` 直达某个状态。
-
-## 2. 落点：槽位与容器
-
-DSH 的左侧栏是 `sidebar.panellist`（list，注册项 `id/order/label`），每个条目 id 对应 `main`（keyed by sidebar entry id）中同 key 的面板。现状占用：
-
-| 侧栏 id | 页面 | order |
+| 子页 | 职责 | 关键词 |
 |---|---|---|
-| `plugins` | 插件 | 0 |
-| `schedules` | 自动化任务 | 10 |
-| `dsh-context` | 上下文 | 20 |
+| **看板** | 只看：账号、值班、今日配额、**B站活动生命周期** | 一眼看懂现在是什么状态 |
+| **操作台** | 操作：配置、日志、判重表、产物 | 改参数、排故障、查账 |
 
-本插件新增：
+核心新增能力是**活动生命周期**：把「刷了什么视频 → 是否点赞 → 是否评论 → 评论了什么 → 有人回复吗 → 回了什么 → 我又回了什么」呈现为**一条连贯的活动线**，而不是散落在日报、判重表、日志三处的碎片。
 
-- `sidebar.panellist` 注册 `id: 'bili-fenshen'`、`order: 15`（位于「自动化任务」之后、「上下文」之前）、`label: 'B站分身'`。图标组件按 ownerProps `{ size, active }` 内联绘制（复用 `icon.svg` 的双电视造型，`currentColor` 为主、active 时用 B站粉/蓝点缀）。
-- `main` 注册 `key: 'bili-fenshen'`，渲染控制台页面（`replaceRisk: shadows-shipped-ui`，仅在同 key 冲突时才会遮蔽宿主 UI；本 key 未被占用）。
+### 非目标（本版不做）
 
-`main` 面板不绑定 Session，是纯宿主页面，适合控制台。页面自行渲染标题行、子页切换与内容（宿主没有提供页面内的 tab 槽位）。
+- 视频封面图（后续再议）
+- 7 天以前的历史归档浏览（去「产物」或日志看）
+- 7 日趋势折线；压审复核可视化（复核逻辑仍是桩，等 V1.5 接入后挂到活动卡上）
+- 多账号切换；私信、上传视频等写操作
+- 界面多语言（中英）——见 §11 例外说明
 
-**入口策略**（已确认）：侧栏独立图标；同时把**设置 → B站分身**缩成一行说明 + 「打开控制台」按钮（调用 `ctx.layout.selectPanel('bili-fenshen')`），不保留两套完整 UI。
+---
+
+## 2. 现状与落点
+
+### 2.1 现状问题
+
+| 问题 | 证据 |
+|---|---|
+| 只有 `settings.section` 一页，内容堆在一个滚动流里 | `dsh-plugin/client.js` |
+| 样式引用的 `--dsh-*` **不是宿主 token**，实际渲染为裸样式 + 兜底灰边 | 宿主真实 token 为 `--dsw-alias-*` / `--dsw-specific-*` |
+| 日报以 `<pre>` 原样输出，没有结构 | 同上 |
+| `bili_reply` 不返回 rpid，导致报告出现「未取到 rpid」 | `mcp_server.py:651`，报告 `out/2026-10-22.md:106` |
+| 日志把子进程 stdout（含模型推理原文）全量展示 | `duty.log` 69 KB 里大半是推理文本 |
+| 同一 prefix 路由被注册两次 | `duty.log`：`duplicate prefix route "/api/bili-fenshen"` |
+
+### 2.2 落点：槽位（已核实宿主源码写法）
+
+左侧栏是 `sidebar.panellist`（list），每个条目 id 对应 `main`（keyed by sidebar entry id）里同 key 的面板。现有占用：
+
+| 侧栏 id | 页面 | order | registrant |
+|---|---|---|---|
+| `plugins` | 插件 | 0 | Kb（宿主 shell） |
+| `schedules` | 自动化任务 | 10 | Kb |
+| `dsh-context` | 上下文 | 20 | dsh-context |
+
+本插件注册两项（写法与宿主自带插件一致，已从安装包源码核实）：
+
+```js
+// client.js
+const PANEL_ID = 'bili-fenshen'
+
+ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+  name: 'sidebar.panellist',
+  id: PANEL_ID,
+  order: 15,                       // 插件(0) < 自动化任务(10) < 本页(15) < 上下文(20)
+  label: () => 'B站分身',           // thunk：每次投影重新读取，便于以后接 locale
+}, PanelIcon))
+
+ctx.slots.inject('main', function* () {
+  yield ctx.slots.register({
+    name: 'main',
+    key: PANEL_ID,
+    children: {},                  // 页面内部不声明子槽位（tab 自绘）
+  }, ConsolePage)
+})
+```
+
+- `main` 面板**不绑定 Session**，页面不得依赖 session props。
+- 图标组件收到 ownerProps `{ size, active }`，需按 `size` 绘制。
+- 注册一律包在 `ctx.slots.inject(...)` 里，返回的 disposer 由框架处理。
+
+### 2.3 入口策略（已定）
+
+侧栏独立图标为唯一入口。**设置 → B站分身**缩成一行「说明 + 打开控制台」按钮（`ctx.layout.selectPanel('bili-fenshen')`），删除重复的日报/日志展示，避免两套 UI 各自漂移。
+
+---
 
 ## 3. 信息架构
 
-页面顶部一行子页切换：**看板** | **操作台**。
+```
+侧栏图标「B站分身」
+└── 控制台页（全宽，自带标题行）
+    ├── 子页：看板
+    │   ├── 账号条          头像 / 昵称 / LV / UID / 硬币 / 粉丝 / 登录态
+    │   ├── 值班条          自动值班开关 · 下一窗 · 本轮状态 · 跑一轮 / 中止
+    │   ├── 今日配额        挑中 / 评论 / 点赞 / 动态（已用 ÷ 上限 + 细进度条）
+    │   ├── 活动流          ← 主舞台：按轮次分组的生命周期卡片
+    │   ├── ▸ 跳过 N 条     默认折叠，展开为紧凑卡片
+    │   └── ▸ 更早          最近 7 天按天折叠
+    └── 子页：操作台
+        ├── 配置   值班节奏 / 配额 / 内容源 / 人设 / 运行环境
+        ├── 日志   宿主事件（默认显示）+ 子进程原文（折叠）
+        ├── 判重表 seen.md → 表格（可搜索）
+        └── 产物   日报 / 月度归档 / overlay（只读原文）
+```
 
-| 关注点 | 看板（看） | 操作台（操作） |
-|---|---|---|
-| 账号 | 头像、昵称、Lv、UID、硬币、粉丝；登录态徽标 | 重新扫码登录、过期提示 |
-| 值班 | 自动值班开关、当前状态、下一窗口倒计时、本轮耗时 | 谷时窗口时段细项 |
-| 活动 | **生命周期活动流**（主舞台） | — |
-| 配额 | 今日消耗进度（已用/上限） | 配额上限编辑 |
-| 内容源 | — | 关键词、订阅 UP 主、人设 |
-| 维护 | `▷ 跑一轮`、`■ 中止本轮` | 运行日志、判重表、产物、恢复默认 |
+**边界原则**：所有会改变插件状态的控件在操作台。唯一例外是「自动值班开关」「跑一轮」「中止」——高频且有状态语义，放在看板值班条。
 
-边界原则：**只读的展示全部留在看板，任何会改变插件状态的控件都在操作台**；唯一的例外是「自动值班开关」和「跑一轮/中止」，它们高频且有状态语义，放在看板顶部。
+---
 
-## 4. 数据模型：活动 ledger
+## 4. 数据模型
 
-现有产物不足以支撑生命周期：`out/YYYY-MM-DD.md` 是人读报告、`seen.md` 是判重账本，二者都以「行」为单位，无法把「一条视频的整段经历」聚起来。因此新增机器账本。
+### 4.1 为什么必须有账本
 
-### 4.1 账本位置与格式
+现有两套产物都不足以支撑生命周期：
 
-`~/.dsh/bili-fenshen/ledger.jsonl`，append-only，一行一个 JSON 事件。日期从事件自带的时间戳推导，不依赖文件。
+- `out/<YYYY-MM-DD>.md`：给人读的报告，按「段落」组织，格式由模型自由发挥；
+- `seen.md`：判重账本，一行一条，只有动作标签。
+
+二者都以「行/段」为单位，无法把「一条视频的整段经历」聚成一个对象。因此新增机器账本。
+
+### 4.2 账本文件
+
+`<家目录>/ledger.jsonl`，append-only，一行一个 JSON 事件。家目录默认 `~/.dsh/bili-fenshen`，可用 `BILI_FENSHEN_HOME` 覆盖（便于测试）。
 
 公共字段：
 
 ```ts
-{
-  t: string,       // ISO 时间戳，事件发生时刻
-  round: string | null, // 轮次 id：该轮开始时刻的 ISO 字符串。reply-in 归到：匹配到的 comment 所在轮次 → 否则该 bvid 最近一轮 → 否则 null
-  type: 'view' | 'like' | 'comment' | 'dynamic' | 'skip' | 'reply-out' | 'reply-in' | 'round-end',
-  bvid?: string,
+type LedgerEvent = {
+  t: string            // ISO 时间戳（事件发生时刻）
+  round: string | null // 轮次 id = 该轮开始时刻的 ISO 串；reply-in 按 §4.4 归属，找不到则 null
+  type: 'view' | 'like' | 'comment' | 'dynamic' | 'skip' | 'reply-out' | 'reply-in' | 'round-end'
+  bvid?: string
+  source?: 'agent' | 'report'   // 事件来源；缺省视为 agent
 }
 ```
 
-各类型追加字段：
+各类型字段：
+
+| type | 字段 | 写入方 |
+|---|---|---|
+| `view` | `title, author, views, duration, source('hot'\|'search'\|'follow'), grade('worth'\|'ok'\|'meh')` | Agent |
+| `like` | `bvid` | Agent |
+| `comment` | `text, rpid: number \| null` | Agent |
+| `dynamic` | `text, id` | Agent |
+| `skip` | `title, author, reason` | Agent |
+| `reply-out` | `parent: number, text, rpid: number \| null` | Agent |
+| `reply-in` | `parent: number \| null, rpid, from, text, notifId` | 宿主 |
+| `round-end` | `code, durationMs` | 宿主 |
+
+示例：
 
 ```jsonl
 {"t":"2026-10-22T08:26:11Z","round":"2026-10-22T08:26:00Z","type":"view","bvid":"BV1xrnz6gEVD","title":"折1万次，会坏吗？iPhone Duo 深度评测","author":"影视飓风","views":3136000,"duration":1492,"source":"hot","grade":"worth"}
 {"t":"2026-10-22T08:26:30Z","round":"2026-10-22T08:26:00Z","type":"like","bvid":"BV1xrnz6gEVD"}
 {"t":"2026-10-22T08:27:02Z","round":"2026-10-22T08:26:00Z","type":"comment","bvid":"BV1xrnz6gEVD","text":"用原子力显微镜查指纹为什么难擦…","rpid":123456}
-{"t":"2026-10-22T08:27:40Z","round":"2026-10-22T08:26:00Z","type":"dynamic","bvid":"BV1xrnz6gEVD","text":"今天看到的最硬核的一期","id":"1261944129867218948"}
-{"t":"2026-10-22T08:28:10Z","round":"2026-10-22T08:26:00Z","type":"skip","bvid":"BV1GTnK6sE4Y","title":"为什么福利这么好，法国依然动荡不断？","author":"…","reason":"评论区立场争吵"}
 {"t":"2026-10-22T10:41:00Z","round":"2026-10-22T08:26:00Z","type":"reply-in","bvid":"BV1xrnz6gEVD","parent":123456,"rpid":999001,"from":"张三","text":"那个显微镜多少钱","notifId":1185685105221638}
-{"t":"2026-10-22T10:42:00Z","round":"2026-10-22T08:26:00Z","type":"reply-out","bvid":"BV1xrnz6gEVD","parent":999001,"text":"三万左右吧，主要是他们租的","rpid":999002}
 {"t":"2026-10-22T08:31:10Z","round":"2026-10-22T08:26:00Z","type":"round-end","code":0,"durationMs":192000}
 ```
 
-- `grade`：`worth | ok | meh`（对应章程的 `值得看 / 可以看 / 不值当`）。
-- `source`：`hot | search | follow`（热门 / 关键词搜索 / 订阅 UP）。
-- `rpid` 缺失时写 `null`，前端显示「未取到 rpid」，**不编造**。
-
-### 4.2 三个写入方
-
-| 写入方 | 事件 | 时机 |
-|---|---|---|
-| Agent（值班轮内） | `view` `skip` `like` `comment` `dynamic` `reply-out` | 每执行一个动作立即 append |
-| 宿主 | `reply-in` | 回复轮询器（见 4.4） |
-| 宿主 | `round-end`（以及轮次开始时的 `round` 标记由首条事件携带） | 子进程退出时 |
+**纪律**：`rpid` 取不到就写 `null`，界面上显示「未取到 rpid」，**绝不编造数字**。
 
 ### 4.3 兜底解析（防 Agent 漏记账）
 
-每轮 `round-end` 之后，宿主解析本轮新增的报告片段（`out/<day>.md` 中 `## <HH:MM>` 开始的那一段），补齐 ledger 缺失的条目：
+每轮结束后（`round-end` 写入后），宿主解析本轮新增的报告片段，补齐缺失事件：
 
-- `### BV…` 段落 → 补 `view`（标题/UP/播放量/档位），以及段落里出现的「点赞」「评论（正文）」「动态」→ 补对应事件。
-- 「跳过记录」列表 → 补 `skip`（reason 取括号内文字）。
-- 补齐的事件带 `"source":"report"`，前端在事件旁标注「据报告回填」，不与 Agent 直写事件重复（按 `(bvid, type, 文本或 rpid)` 去重）。
+- `### BV…` 段 → 补 `view`（标题/UP/播放量/档位）；
+- 段内「点赞」「评论（正文）」「动态」 → 补 `like` / `comment` / `dynamic`（`rpid: null`）；
+- 「跳过记录」列表 → 补 `skip`（`reason` 取括号内文字）；
+- 事件带 `source: 'report'`，界面标注「据报告回填」，并按 `(bvid, type, text)` 去重。
 
-这样即使某轮 Agent 忘记记账，控制台仍有内容；但精确的 `rpid` 只有 Agent 直写才有。
+### 4.4 回复轮询器
 
-### 4.4 回复轮询器（reply-in）
+`x/msgfeed/reply` 的通知项（已用真实凭证探针确认字段）：
 
-`x/msgfeed/reply` 的通知项已由探针确认包含：`item.uri`（视频链接→BV）、`item.title`、`item.source_content`（我的原评论）、`item.target_reply_content`（对方回复正文）、`item.source_id` / `target_id` / `root_id`、`user.nickname` / `avatar`、`reply_time`、通知 `id`。
+| 字段 | 含义 |
+|---|---|
+| `item.uri` / `native_uri` | 视频链接 → BV 号 |
+| `item.title` | 视频标题 |
+| `item.source_content` | 我的原评论正文 |
+| `item.target_reply_content` | 对方的回复正文 |
+| `item.source_id` / `target_id` / `root_id` | 评论 id 链 |
+| `user.nickname` / `avatar` | 谁回复的 |
+| `reply_time` | 回复时间 |
+| 通知 `id` | 幂等键 |
 
-宿主每 **5 分钟** 轮询一次，条件：凭证有效，且 ledger 近 7 天内存在 `comment` 事件。每次：
+宿主每 **5 分钟**轮询一次，条件：凭证有效 **且** 账本近 7 天内存在 `comment` 事件。每次：
 
-1. 取回复通知列表；
-2. 对每条未见过（`notifId` 不在 `state.json` 的 `seenNotifs`，上限 500）且能解析出 BV 的通知，append `reply-in`；
-3. 匹配归属轮次：优先按 `parent == 某条 comment.rpid`，否则按 `bvid + source_content == comment.text` 精确匹配，再否则归到该 bvid 最近一轮；
-4. 更新 `state.json#lastReplyPollAt`。
-
-幂等键：通知 `id`。失败静默重试（下个周期），不打扰账号主人。
+1. 拉通知；
+2. 跳过已处理 `notifId`（存 `state.json#seenNotifs`，上限 500）；
+3. 解析 BV；解析失败的通知丢弃并记日志（不猜）；
+4. 归属轮次：`parent === 某条 comment.rpid` → 该条所在轮次；否则 `bvid + source_content === comment.text` → 该条轮次；否则该 bvid 最近一轮；否则 `null`；
+5. append `reply-in`。
 
 ### 4.5 保留与清理
 
-- 账本按 5MB 轮转（保留 `ledger.jsonl.old`），与 `duty.log` 同策略。
-- 控制台只展示**最近 7 天**（含今天）。更早的数据不进 UI，需要时看 `out/` 下的日报原文（产物 tab）或 `duty.log`。
-- 损坏行（JSON 解析失败）跳过并在日志记一笔，不阻塞整个文件。
+- 账本 5 MB 轮转为 `ledger.jsonl.old`（与 `duty.log` 同策略）。
+- 控制台只读**最近 7 天**（含今天）。更早的看报告原文或日志。
+- 损坏行跳过 + 记日志，不阻塞整个文件。
 
-## 5. 看板页面
+---
 
-### 5.1 布局
+## 5. 生命周期呈现规范（核心）
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ 不吃鱼的豆腐  Lv6 · 硬币 1447.5 · 粉丝 12 · UID 312299788         │  ← 账号条（头像 + 简况）
-│                                          ● 登录有效               │
-├──────────────────────────────────────────────────────────────────┤
-│ 值班  自动 [开关]   下一窗 12:00（2h54m）   本轮 进行中 1m12s      │  ← 值班条
-│                                  [▷ 跑一轮]  [■ 中止]             │
-├──────────────────────────────────────────────────────────────────┤
-│ 今日  挑中 3/5  评论 2/5  点赞 6/10  动态 0/1                     │  ← 配额进度（细进度条）
-├──────────────────────────────────────────────────────────────────┤
-│ 16:26 这一轮 · 热门 30 + 搜索「AI 实测」「大模型」                 │
-│                                                                   │
-│  ┌ BV1xrnz6gEVD  [值得看]  ●赞 ●评 ●2 回复 ────────────────┐     │
-│  │ 折1万次，会坏吗？iPhone Duo 深度评测                      │     │
-│  │ 影视飓风 · 313.6万播放 · 24:52 · 热门                     │     │
-│  │  刷到 ── 看 ── 赞 ── 评 ── 被回复 ── 我回                  │     │
-│  │  16:26  16:26 16:26 16:27   16:41    16:42               │     │
-│  │  评论：「用原子力显微镜查指纹为什么难擦，这期是真舍得…」    │     │
-│  │   └ 张三 16:41「这条我正好也在看，那个显微镜多少钱」        │     │
-│  │   └ 我   16:42「三万左右吧，主要是他们租的」               │     │
-│  └───────────────────────────────────────────────────────────┘     │
-│                                                                   │
-│  ┌ BV1VHJ964EM7  [值得看]  ●赞                            ┐       │
-│  ┌ BV1AHnB6NEhM  [可以看]  ●赞                            ┐       │
-│  │ ▸ 跳过 3 条：无字幕 1 · 争议话题 1 · 同题重复 1              │   │
-│  ▸ 更早：10-22 · 5 条活动    10-21 · 无记录                     │
-└──────────────────────────────────────────────────────────────────┘
-```
+### 5.1 活动的定义
 
-### 5.2 活动卡（生命周期的呈现）
-
-一个「活动」= 一个 `bvid` 聚合出的事件串。卡片由三部分组成：
-
-1. **头部**：`BV 号`（可点，跳 B站视频页）+ 档位徽标 + 状态点（赞/评/N 回复）+ 标题 + `UP · 播放量 · 时长 · 来源`。
-2. **阶段条**：`刷到 → 看 → 赞 → 评 → 被回复 → 我回`。已达成的节点实心 + 时刻，未达成空心；**被「跳过」的活动只有「刷到」一个节点**，用灰色斜纹区分。
-3. **主体**：
-   - 评论正文（引号包裹，最多 3 行，超出折叠）。
-   - 回复线程：缩进 `└ 昵称 时刻「正文」`，我方的回复用 `我` 标注并高亮；楼中楼再缩进一级。
-   - 动态（若有）：单独一行 `动态「…」`，右侧给动态 id 的复制按钮。
-
-**展开策略**（可读性的关键）：
-- 有对话（`reply-in` 或 `reply-out`）的活动 → **默认展开**。
-- 只有赞/评、无对话 → 默认折叠成一行（标题 + 状态点）。
-- 纯浏览（只有 `view`，无动作）→ 默认折叠。
-- **跳过**的活动 → 收进「▸ 跳过 N 条」折叠组，默认折叠；展开后每条一个紧凑卡片（标题 + 作者 + 跳过理由），可点开看详情但不再展开正文。
-
-### 5.3 分组与时间
-
-- 主分组：**轮次**（`round`），标题 `16:26 这一轮 · 热门 30 + 搜索「…」`，来源从该轮 `view` 事件的 `source` 与服务端配置推导。
-- 轮次倒序；轮内活动按「有对话 → 有动作 → 纯浏览」排序，其次按时间。
-- 页面底部「更早」：按天折叠（最近 7 天内），点开加载该天活动。
-
-### 5.4 空态与异常态
-
-| 场景 | 呈现 |
-|---|---|
-| 从未跑过 | 居中提示 + 「▷ 跑一轮」+ 「去扫码登录」两个按钮 |
-| 未登录 | 顶部横幅：`未登录，动作会全部失败` + 「扫码登录」（抽屉） |
-| dsh CLI 未找到 | 顶部横幅：`找不到 dsh CLI，值班无法启动` + 操作台里的 `dshBin` 填写入口 |
-| 上一轮退出码 ≠ 0 | 顶部横幅（可展开看该轮日志尾部） |
-| ledger 里该轮无事件但有报告 | 显示「本轮由报告回填，缺少精确 rpid」提示 |
-
-## 6. 操作台页面
-
-四个 tab（页面自绘）：**配置** | **日志** | **判重表** | **产物**。
-
-### 6.1 配置
-
-分四组，控件只有：开关、数字输入（带 ± 步进）、标签输入（chips，回车追加）、多行文本、下拉/纯文本。
-
-- **值班**：自动值班开关、谷时窗口（中午 12:00–14:00 / 晚间 18:00–次日 09:00 两个独立开关，时段 V1 固定显示、不可改）。
-- **配额**：`perDay`、`commentsPerDay`、`commentsPerRound`、`likesPerDay`、`dynamicsPerDay`、`repliesPerRound`。
-- **内容源**：`keywords`（chips）、`followUids`（chips，数字校验）。
-- **人设**：`personaPrompt` 多行文本（提示：留空=中性；也可填写文件路径）。
-- **环境**（只读展示 + 可改 `dshBin`/`headlessProfile`）：dsh CLI 路径与探测结果、headless profile、家目录、账本路径。
-- 底部：`恢复默认`（清空覆盖层）、`保存并生效`。
-
-保存语义：写入 `~/.dsh/bili-fenshen/config.json`（运行时覆盖层，原子写），**不写用户的 `cordis.patch.yml`**。生效配置 = `patch config`（默认值）`←` `config.json`（覆盖）。保存后立即刷新调度器与下一次值班用的快照，无需重启。
-
-### 6.2 日志
-
-- 上半：**宿主事件**（结构化）。从 `duty.log` 中筛出 `^\[<ISO>\] ` 开头的行，按时间列出（开跑/结束/退出码/复核/异常），异常行标红。
-- 下半：**子进程原文**默认折叠（当前日志里大半是模型的推理文本，不适合常驻视线）。展开后为等宽滚动区，自动滚到底，悬停暂停跟随。
-- 右上：`复制路径`、`打开文件`。
-
-### 6.3 判重表
-
-`seen.md` 解析成表格：日期 / BV / 动作 / 标题。动作列用 chip 呈现（看过/赞过/评论过 rpid/分享过/跳过·理由）。顶部搜索框按 BV 或标题过滤。解析失败时降级为原文只读。
-
-### 6.4 产物
-
-- 日期列表（`out/*.md`，最近 30 天），点击在右侧/下方渲染 markdown 原文（等宽、只读）。
-- `digest/*.md` 月度归档单独一组。
-- `headless-overlay.yml` 只读预览（诊断用）。
-
-## 7. Host API 契约
-
-全部挂在已有的 `/api/bili-fenshen` prefix 路由下（`webServer` 原始 Node handler，风格与现状一致）。仅本机 127.0.0.1 可访问。
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/overview` | 聚合：`{account, duty, quota, round, health, lastReplyPollAt}` |
-| GET | `/activity?from=&to=&day=` | `{days:[{date, rounds:[{id, startedAt, source, items:[activity]}]}]}` |
-| GET | `/account` | `{loggedIn, uname, face, mid, level, coins, fans, following, vip}`（宿主直连 nav + relation/stat，缓存 60s） |
-| POST | `/duty` | `{autoDuty:boolean}` → 写覆盖层并立即生效 |
-| POST | `/run` | 现有，改为一轮开始时写入轮次标记 |
-| POST | `/stop` | 终止当前子进程（`SIGTERM`→2s 后 `kill`） |
-| GET | `/config` / POST | 读取生效配置（含来源标注）/ 写入覆盖层（字段白名单 + 类型校验） |
-| GET | `/log?tail=200` | `{events:[string], raw:string, path:string}` |
-| GET | `/seen` | `{rows:[{date,bvid,action,title}], raw:string}` |
-| GET | `/reports` | `{days:[string], digests:[string]}` |
-| GET | `/report?day=` | 现有 |
-| GET | `/cred`、`POST /login/start`、`GET /login/poll`、`GET /login/qr.png` | 现有 |
-
-活动对象：
+一个**活动** = 一个 `bvid` 聚合出的事件串。由账本折叠而来，不在前端临时拼。
 
 ```ts
 type Activity = {
@@ -252,88 +218,322 @@ type Activity = {
   source?: 'hot' | 'search' | 'follow'
   grade?: 'worth' | 'ok' | 'meh'
   skipped?: { reason: string }
-  events: Event[]        // 该 bvid 的所有事件，按时间正序
+  events: LedgerEvent[]                       // 时间正序
   stage: { viewed: boolean; liked: boolean; commented: boolean; replies: number; repliedBack: boolean; dynamic: boolean }
-  flags: { fromReport: boolean }   // 是否含兜底回填事件
+  flags: { fromReport: boolean; pendingReply: number }   // pendingReply = 收到但未回的回复数
 }
 ```
 
-轮询节奏（页面打开期间）：`/overview` 3s；`/activity` 运行中 3s、空闲 15s；`/account` 60s。页面隐藏（`visibilitychange`）时暂停，回到前台立即刷新一次。
+### 5.2 阶段条
 
-## 8. Client 实现约束
+六个节点，左到右：`刷到 → 看 → 赞 → 评 → 被回复 → 我回`。
 
-1. **单文件**：客户端产物是 `client.js` 一个文件（`window.__ModuleLoader__.load({ id, factory(require) })`），无法相对 import 其他文件。看板、操作台、基础控件全部写在这一个文件里，内部按注释分节。
-2. **不得 require 宿主 Client 包**（primitives 等）：控件自己实现，样式与行为向宿主看齐（`role="switch"` + `aria-checked`、Escape 关闭抽屉、`disabled` 语义）。
-3. **主题 token**：只用 `--dsw-alias-bg-base / bg-layer-1 / bg-layer-2 / border-l1 / border-l2 / label-primary / label-secondary / brand-primary / state-success-primary / state-warn-primary / state-error-primary / state-idle-primary` 与 `--dsw-specific-sidebar-fill`。B站粉 `#fb7299` 仅用于图标/档位徽标这类「品牌点缀」，不作为可读文本色。**删除全部 `--dsh-*` 引用**。
-4. **i18n**：本插件是单一中文产品（报告与B站内容本身即中文），V1 界面文案集中在文件顶部的 `T` 常量表，不接入 locale service；`locale/*.json` 继续只承载包的 meta。这是对「UI 文案走 locale」规则的有意例外，理由与范围写在此处，后续要做 i18n 时只需替换 `T` 的取值来源。
-5. 组件内联样式随卸载移除；注册一律走 `ctx.slots.inject(...)` + 返回 disposer。
-6. 注入的服务：`inject: ['slots', 'layout']`（`layout.selectPanel('bili-fenshen')` 供设置页的「打开控制台」按钮使用）。`main` 面板不绑定 Session，组件不得依赖 session 相关 props。
-7. 数据获取走同源相对路径（`fetch('/api/bili-fenshen/…')`），与 `main`/`settings.section` 挂在哪个面板无关。
+- 已达成：实心点（业务蓝 `--dsw-alias-state-business-primary`）+ 时刻；
+- 未达成：空心点（`--dsw-alias-state-idle-primary` 描边）+ `—`；
+- 跳过：六节点不成型，卡片只用灰色「跳过」标签（见 5.4）。
 
-## 9. MCP 与章程改动
+### 5.3 卡片三段式
 
-### 9.1 `mcp_server.py`：`bili_reply` 回传 rpid
+1. **头部**：`BV 号`（等宽小字，可点开视频页）+ 档位徽标 + 状态 chips（赞 / 评论 / N 回复 / N 未回）+ 标题 + `UP · 播放 · 时长 · 来源`。
+2. **阶段条**（5.2）。
+3. **主体**：
+   - 评论原文：左侧 2px 竖线引文块，前缀 `我 · HH:MM`；
+   - 回复线程：缩进在评论下，`└ 昵称 时刻「正文」`；我的回复用气泡底 + 蓝色名字；**收到但未回的**挂黄色「待跟进」chip（`--warn`）；
+   - 动态（若有）：独立一行 `动态「…」`；
+   - 底部：`打开视频` + `评论 rpid xxx` + `回复 rpid xxx`（缺则显示「未取到 rpid」）。
 
-```python
-result = await comment.send_comment(...)
-rpid = result.get("rpid") if isinstance(result, dict) else None
-return json.dumps({"success": True, "message": "评论发送成功", "rpid": rpid, "bvid": bvid}, ensure_ascii=False)
+### 5.4 折叠策略（可读性的关键）
+
+| 活动形态 | 默认 |
+|---|---|
+| 有对话（有 `reply-in` 或 `reply-out`） | **展开** |
+| 只有赞/评、无对话 | 折叠成一行（BV + 徽标 + chips + 标题） |
+| 纯浏览（只有 `view`） | 折叠 |
+| 跳过（`skip`） | 收进「▸ 跳过 N 条」组，**整组默认折叠**；展开后每条一个紧凑卡（BV + 标题 + 理由），不再展开正文 |
+
+### 5.5 分组与排序
+
+- 主分组：轮次，标题 `16:26 这一轮 · 热门 30 · 搜索「AI 实测」「大模型」· 订阅 0`；
+- 轮次倒序；
+- 轮内顺序：有对话 → 有动作 → 纯浏览，其次按时间；
+- 页面底部「更早」：最近 7 天按天折叠，点开加载该天。
+
+### 5.6 空态与异常横幅
+
+| 场景 | 呈现 |
+|---|---|
+| 从未跑过 | 居中提示 + 「跑一轮」+ 「扫码登录」 |
+| 未登录 | 横幅：`未登录，点赞/评论/动态都会失败` + 登录抽屉 |
+| 找不到 dsh CLI | 横幅 + 指向操作台 `dshBin` |
+| 上一轮退出码 ≠ 0 | 横幅（可展开该轮日志尾部） |
+| 该轮只有报告回填事件 | 卡内提示「据报告回填，缺少精确 rpid」 |
+
+---
+
+## 6. 看板布局规格
+
+```
+┌ 页面标题行 ─────────────────────────────────────────────┐
+│ B站分身                                    ●值班就绪 [刷新]│
+│ 让小号在B站保持存在感 · 先发后报，可随时接管                │
+├ 子页切换 ───────────────────────────────────────────────┤
+│ [看板] 操作台                                            │
+├ 账号条 ─────────────────────────────────────────────────┤
+│ (头像) 不吃鱼的豆腐 LV6 ●登录有效        [B站主页][重新扫码]│
+│        UID 312299788 · 硬币 1447.5 · 粉丝 12 · 大会员未开通│
+├ 值班条 ─────────────────────────────────────────────────┤
+│ [开关]自动值班 已开  下一窗 12:00（2h54m）本轮 运行中 1m12s│
+│                                            [中止][跑一轮] │
+├ 今日配额 ───────────────────────────────────────────────┤
+│  挑中 3/5    评论 2/5    点赞 6/10    动态 0/1            │
+│  ▁▁▁▁▁       ▁▁▁▁▁       ▁▁▁▁▁        ▁▁▁▁▁              │
+├ 活动流 ─────────────────────────────────────────────────┤
+│ 16:26 这一轮 · 来源：热门 30 · 搜索「AI 实测」「大模型」    │
+│ ┌ BV1xr… 值得看 赞 评论 3回复 1未回 ────────────────────┐│
+│ │ 折1万次，会坏吗？iPhone Duo 深度评测                    ││
+│ │ 影视飓风 · 313.6万播放 · 24:52 · 热门                   ││
+│ │ ●刷到 ●看 ●赞 ●评 ●被回复 ●我回                        ││
+│ │ 「我 · 16:27 用原子力显微镜查指纹为什么难擦…」          ││
+│ │  └ 张三 16:41「这条我正好也在看，那个显微镜多少钱」      ││
+│ │  └ 我   16:42「三万左右吧，主要是他们租的」             ││
+│ │  └ 阿茶 17:08「换屏8000是真的吗…」 [待跟进]             ││
+│ │ 动态「…」 打开视频 评论 rpid 123456 回复 rpid 999001   ││
+│ └───────────────────────────────────────────────────────┘│
+│ ▸ 跳过 3 条：同题重复 1 · 争议话题 1 · 信息密度低 1        │
+│ ▸ 更早：10-22 · 5 条活动    10-21 · 无记录                │
+└─────────────────────────────────────────────────────────┘
 ```
 
-失败分支同样带上 `bvid`。这是生命周期串联的**前置条件**（当前返回只有 `{"success": true}`，导致报告里出现「未取到 rpid」）。
+页面容器：`max-width: 920px`，`padding: 26px 32px 72px`。
 
-### 9.2 `prompts/duty.md`：新增「记账契约」
+---
 
-在「报告契约」之后插入一节，要求：
+## 7. 操作台布局规格
 
-- 每执行一个动作（看完/点赞/评论/发动态/跳过/回复别人），**立即**向 `<家目录>/ledger.jsonl` append **一行** JSON（字段见 4.1），用 `>` 重定向或追加写，**绝不覆盖**；
-- 评论的 `rpid` 取自 `bili_reply` 返回；返回里没有就写 `null`，不编造；
-- 同一动作只记一次；记账失败要在报告里明说；
-- 顺序：**先记账，再写报告**（报告已经是人读摘要，账本是控制台的事实来源）。
+四个 tab（页面自绘下划线式）：**配置 | 日志 | 判重表 | 产物**。
 
-## 10. 错误与降级
+### 7.1 配置
 
-| 情况 | 行为 |
+分组与控件：
+
+| 组 | 内容 | 控件 |
+|---|---|---|
+| 值班节奏 | 自动值班；中午窗口（12:00–14:00）；晚间窗口（18:00–次日 09:00） | 3 个开关 |
+| 配额 | `perDay` `commentsPerDay` `commentsPerRound` `likesPerDay` `dynamicsPerDay` `repliesPerRound` | 数字步进（−/+） |
+| 内容源 | `keywords`、`followUids` | chips（可删、可加） |
+| 人设 | `personaPrompt`（留空＝中性；也可填文件路径） | 多行文本 |
+| 运行环境 | dsh CLI 探测结果、`headlessProfile`、家目录、账本路径、`dshBin` | 只读展示 + 可编辑 `dshBin` |
+| 底部 | `恢复默认` / `保存并生效` | 按钮 |
+
+保存语义见 §12.3。
+
+### 7.2 日志
+
+- 上半：**宿主事件**（从 `duty.log` 筛 `^\[<ISO>\]` 行），异常红字。
+- 下半：**子进程原文**默认折叠（含模型推理文本，只作诊断）。
+- 工具：复制路径 / 打开文件夹。
+
+### 7.3 判重表
+
+`seen.md` → 表格：日期 / BV / 动作（chip）/ 标题；顶部搜索框过滤 BV 或标题；解析失败降级为原文只读。
+
+### 7.4 产物
+
+左侧文件列表（`out/*.md` 最近 30 天、`digest/*.md`、`headless-overlay.yml`），右侧原文只读（等宽）。
+
+---
+
+## 8. 接口契约
+
+全部挂在 `/api/bili-fenshen` prefix 路由下（`webServer` 原生 Node handler，仅本机 127.0.0.1）。
+
+| 方法 | 路径 | 请求 | 响应 |
+|---|---|---|---|
+| GET | `/overview` | — | `{ account, duty, quota, round, health, lastReplyPollAt }` |
+| GET | `/activity` | `?from=&to=`（YYYY-MM-DD，默认近 7 天） | `{ days: [{ date, rounds: [{ id, startedAt, sourceLabel, items: Activity[] }] }] }` |
+| GET | `/account` | — | `{ loggedIn, uname, face, mid, level, coins, fans, following, vip }`（宿主直连 nav + relation/stat，缓存 60s） |
+| POST | `/duty` | `{ autoDuty: boolean }` | `{ ok, config }` |
+| POST | `/run` | — | 现有 `{ started, why, error? }` |
+| POST | `/stop` | — | `{ ok, stopped: boolean }` |
+| GET | `/config` | — | `{ values, sources: { field: 'patch' \| 'override' }, defaults }` |
+| POST | `/config` | `{ fields }` | `{ ok, values }` / 400 `{ error, field }` |
+| GET | `/log` | `?tail=200` | `{ events: string[], raw: string, path }` |
+| GET | `/seen` | — | `{ rows: [{ date, bvid, action, title }], raw }` |
+| GET | `/reports` | — | `{ days: string[], digests: string[] }` |
+| GET | `/report` | `?day=` | 现有 `{ day, text }` |
+| GET/POST | `/cred`、`/login/*` | — | 现有 |
+
+`/overview` 形状：
+
+```json
+{
+  "account": { "loggedIn": true, "uname": "不吃鱼的豆腐", "mid": "312299788", "level": 6, "coins": 1447.5, "fans": 12, "face": "https://…" },
+  "duty": { "autoDuty": true, "windows": { "noon": true, "night": true }, "nextWindowAt": "2026-10-23T12:00:00+08:00" },
+  "quota": { "picked": 3, "comments": 2, "likes": 6, "dynamics": 0,
+             "limits": { "perDay": 5, "comments": 5, "likes": 10, "dynamics": 1, "repliesPerRound": 2 } },
+  "round": { "running": true, "startedAt": "...", "elapsedMs": 72000,
+             "lastRunAt": "...", "lastWhy": "web", "lastCode": 0, "lastDurationMs": 127000 },
+  "health": { "cli": "/…/bin.js", "cred": true, "routeOk": true },
+  "lastReplyPollAt": "..."
+}
+```
+
+**轮询节奏**（页面打开期间）：`/overview` 3s；`/activity` 运行中 3s、空闲 15s；`/account` 60s。页面隐藏时暂停，回到前台立即刷新一次。
+
+---
+
+## 9. 视觉规范
+
+### 9.1 Token（取自宿主 `design-platform.css` / `base.css`，浅 `body{}` / 深 `body[data-ds-dark-theme]{}`）
+
+| token | 浅 | 深 |
+|---|---|---|
+| `--dsw-alias-bg-base` | `#fff` | `#151517` |
+| `--dsw-alias-bg-layer-1/2/3` | `#fff` | `#232324` / `#2c2c2e` / `#353638` |
+| `--dsw-alias-bg-module-platform` | `#f9fafb` | `#353638` |
+| `--dsw-alias-bg-overlay` | `#e9ecf2` | `#61666b` |
+| `--dsw-alias-border-l1/l2/l4` | `#0000000a` / `#0000001a` / `#00000029` | `#ffffff0f` / `#ffffff1f` / `#fff3` |
+| `--dsw-alias-label-primary/secondary/tertiary/caption` | `#0f1115` / `#61666b` / `#81858c` / `#adb2b8` | `#f9fafb` / `#cfd3d6` / `#adb2b8` / `#81858c` |
+| `--dsw-alias-brand-primary` | `#0f1115`（主按钮近黑） | `#f9fafb` |
+| `--dsw-alias-button-primary-hover` | `#43454a` | `#ebeef2` |
+| `--dsw-alias-interactive-bg-hover` / `-hover-solid` / `-active` | `#2631480f` / `#f1f3f5` / `#2631481a` | `#ffffff14` / `#353638` / `#ffffff24` |
+| `--dsw-specific-sidebar-fill` | `#f9fafb` | `#1b1b1c` |
+| `--dsw-specific-sidebar-nav-item-active` | `#ebeef2` | `#43454a` |
+| `--dsw-specific-selector` | `#f5f6f7` | `#353638` |
+| `--dsw-alias-state-success-primary` / `-tertiary` | `#22c55e` / `#e6faed` | 同 / `#233c2c` |
+| `--dsw-alias-state-warn-primary` / `-tertiary` | `#f59e0b` / `#fef5e7` | 同 / `#27241f` |
+| `--dsw-alias-state-error-primary` | `#ec1313` | `#f25a5a` |
+| `--dsw-alias-state-idle-primary` | `#d4d4d4` | `#545557` |
+| `--dsw-alias-state-business-primary` | `#4176e6` | 同 |
+
+**禁止**：任何 `--dsh-*` 颜色引用（现存 `client.js` 全部是错的）；禁区文字色只在「跳过/不值当」。
+
+### 9.2 度量
+
+- 圆角：`--dsw-radius-xs 4 / sm 8 / md 12 / lg 16 / xl 20`；面板 28。
+- 边框：**.5px**（宿主统一细线），颜色用 `border-l1/l2/l4`。
+- 字体：`-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", …`；等宽 `"SF Mono", "JetBrains Mono", "Fira Code", Consolas, …`。
+- 字号：正文 14/22；次文 13/20；小字 12/18；标签 11/16；页标题 18/26。
+- 过渡：`.2s cubic-bezier(.4,0,.2,1)`。
+- 开关 34×20，主按钮高 30、圆角 8。
+
+### 9.3 B站品牌色
+
+`#fb7299`（粉）/ `#23ade5`（蓝）**只用于**：侧栏图标、「值得看」徽标、头像占位渐变。不作正文色、不作控件主色。
+
+---
+
+## 10. 前端组件结构（单文件约束）
+
+客户端产物是**一个** `client.js`（`window.__ModuleLoader__.load({ id, factory(require) })`），不支持相对 import。因此按注释分节，内部结构：
+
+```
+client.js
+├── §0 常量：PANEL_ID、T（中文文案表）、轮询间隔
+├── §1 CSS：宿主 token 的本地化别名 + 组件样式（字符串注入 <style>，随 apply 清理）
+├── §2 数据层：fetchJson、usePoll（3s/15s 可变间隔 + visibility 暂停）、api.{overview,activity,account,duty,run,stop,config,log,seen,reports,report,login}
+├── §3 基础组件：Button、Switch、NumStepper、Chips、Tabs(下划线)、Segmented、Card、Banner、Pill、Chip、Avatar
+├── §4 看板：AccountBar、DutyBar、QuotaTiles、RoundHeader、ActivityCard、StageRail、ReplyThread、SkipGroup、EarlierGroup
+├── §5 操作台：ConfigPane、LogPane、SeenPane、ArtifactsPane
+├── §6 页面：ConsolePage（标题行 + 子页切换 + 两个子页）
+└── §7 注册：apply(ctx) → panellist 图标 + main 页面 + settings.section 瘦身版
+```
+
+约定：
+
+- 不得 `require` 任何 `@deepseek-ai/dsh-client-*` 包（宿主 primitives 会变、无类型检查）。控件自己实现，行为对齐宿主：`role="switch"`+`aria-checked`、Escape 关闭抽屉、`disabled` 语义。
+- 组件内联样式随卸载移除；样式表用 `document.querySelector('style[data-plugin-css=...]')` 去重注入。
+- 文案集中在 `T` 常量表（见 §11 例外）。
+
+---
+
+## 11. i18n 例外（有意偏差）
+
+宿主规则是「UI 文案走 Client locale service」。本插件 V1 **不接 locale**：
+
+- 产品是单一中文场景（报告、B站内容、章程都是中文）；
+- `locale/*.json` 继续只承载包的 `meta`（标题/描述）；
+- 全部界面文案集中在 `client.js` 的 `T` 表，以后接 locale 只需替换取值来源。
+
+此例外记录在此，供后续维护者判断。
+
+---
+
+## 12. Host 实现约束
+
+### 12.1 文件结构（拆分理由）
+
+现有 `index.js` 715 行，纯逻辑与调度混在一起，无法单测。改为：
+
+| 文件 | 职责 |
 |---|---|
-| ledger 行损坏 | 跳过该行，记日志，继续解析 |
-| 报告解析失败 | 不补事件，活动卡显示「本轮无可解析报告」 |
-| 未登录 / 凭证过期 | 看板横幅 + 登录抽屉；轮询器跳过 `reply-in`；值班轮照常失败但不崩 |
-| 无 dsh CLI | 横幅 + 操作台可填 `dshBin` |
-| `running` 但子进程已消失 | 15s 后自愈：`running=false`，记日志 |
-| 保存配置时字段非法 | 返回 400 + 具体字段，前端保持原值 |
-| `webServer` 路由重复注册 | 移除重复激活（见 11），注册失败只记日志不抛 |
+| `index.js` | 插件入口：`apply()`、调度器、spawn、路由分发、轮次生命周期 |
+| `lib/ledger.js` | 账本 append / 读取 / 轮转 / 去重 |
+| `lib/report.js` | 报告 markdown → 兜底事件（纯函数） |
+| `lib/activity.js` | 事件 → 轮次/活动聚合 + 阶段计算（纯函数） |
+| `lib/config.js` | 默认值合并、`config.json` 覆盖层读写（纯 IO + 校验） |
+| `lib/replies.js` | msgfeed 通知 → `reply-in` 事件（纯映射）+ 拉取 |
+| `lib/account.js` | nav / relation-stat 拉取与字段归一 |
+| `test/*.test.js` | `node --test` 单测（纯函数为主） |
 
-## 11. 顺带修复
+`package.json` 的 `files` 增加 `lib/*.js`；`scripts.test = "node --test test/"`。
 
-1. **`--dsh-*` → `--dsw-alias-*`**：设置页与新增页面统一。
-2. **日志污染**：控制台区分宿主事件与子进程原文（见 6.2）。`duty.log` 仍全量落盘（诊断需要），只是默认不展示。
-3. **`duplicate prefix route "/api/bili-fenshen"`**：`duty.log` 多次出现，说明 Host 插件被激活了两次（或 apply 被重复调用）。排查 `~/.dsh/profiles/desktop/cordis.patch.yml` 是否重复 include；宿主侧加一次性守卫（同一进程内 prefix 路由只注册一次）。
-4. **家目录可覆盖**：`HOME` 改为 `process.env.BILI_FENSHEN_HOME || <默认>`，便于用临时目录做验证。
-5. **设置页瘦身**：原设置面板改为「说明 + 打开控制台 + 登录态一行」，删除重复的日报/日志展示。
+### 12.2 纪律（沿用现有注释里的血泪教训）
 
-## 12. 非目标（本版不做）
+- 定时器回调、所有文件写入 `try/catch` 兜死：插件再错也只能「这一轮没跑成」；
+- 找不到 dsh CLI 明确报缺失，绝不裸 spawn `dsh`；
+- 每条路由独立 try/catch；prefix 路由只注册一次（同进程守卫）；
+- 子进程引用必须保存（供 `POST /stop`），`exit` 后清空。
 
-- 视频封面图（已决定后置）。
-- 7 天以前的历史归档浏览（去日志/产物看）。
-- 7 日趋势折线、压审复核可视化（`verifyRecentSafe` 仍是桩，等 V1.5 真实复核接入后再挂到活动卡上）。
-- 多账号切换、私信、上传视频等写操作。
-- i18n。
+### 12.3 配置来源与写回
+
+- 默认值 = `cordis.patch.yml` 里的 config（`Config` schema）。
+- 覆盖层 = `<家目录>/config.json`，操作台写这里，**不碰用户的 patch**。
+- 生效值 = `patch ← config.json`（逐字段覆盖）；`/config` 返回每个字段的来源。
+- 保存时按字段白名单 + 类型校验；非法返回 400 且不落盘；原子写（tmp + rename）。
+- 保存后热更新：调度器与下一轮快照立即使用新值，无需重启。
+
+### 12.4 轮次生命周期
+
+1. `runDuty()`：生成 overlay → spawn → 记录 `running=true`、`startedAt`、`child`；
+2. 子进程退出：写 `round-end`（code、durationMs）→ 兜底解析报告 → `running=false`、清 `child` → 90s 后触发复核桩；
+3. 15s 心跳检查：若 `running` 但 `child` 已消失超过 15s → 自愈为 `false` 并记日志；
+4. `POST /stop`：`SIGTERM`，2s 后 `kill`，等 `exit` 走同一收尾路径。
+
+### 12.5 安全
+
+- 账本、日志、报告不含凭证；凭证只在 `bili_credential.json`。
+- `/account` 的 face URL 原样透传，前端 `<img>` 失败回退为首字头像。
+- 路由仅本机可用（沿用现状，不做鉴权）。
+
+---
 
 ## 13. 验证方案
 
-1. `node --check client.js`、`node --check index.js`（语法）；`python -m py_compile mcp_server.py`。
-2. 用 `BILI_FENSHEN_HOME` 指向临时目录，灌入 fixture ledger（含正常/缺 rpid/跳过/损坏行各一例）后启动，验证：`/overview`、`/activity`、`/seen`、`/config` 的 JSON 结构与降级行为。
-3. `POST /run` 后用实际轮次产物验证：ledger 有事件、`round-end` 写入、报告兜底解析不重复。
-4. 安装 bundle（`plugin_manager install_bundle`）后 `application: applied`；用 `cordis_inspect_query`（`Slots.listSubTree` root=`sidebar.panellist` 与 root=`main`）确认两个 `bili-fenshen` occupant 已注册且 active。
-5. 打开 `http://127.0.0.1:57257`：确认侧栏出现第三个图标、点击进入看板、两个子页可切、3s 轮询正常、停止按钮生效、退出页面后不再轮询。
-6. 账号条显示与探针结果一致（昵称/UID/Lv/硬币）；未登录时显示横幅而非报错。
-7. 清理：验证用的临时家目录与 fixture 删除，真实 `ledger.jsonl` 不被污染。
+| # | 验证项 | 方法 | 通过标准 |
+|---|---|---|---|
+| 1 | 语法 | `node --check index.js lib/*.js client.js`；`python -m py_compile mcp_server.py` | 无输出 |
+| 2 | 纯函数单测 | `node --test test/` | 全绿 |
+| 3 | 账本与聚合 | 用 fixture（正常/缺 rpid/跳过/损坏行）跑 `node -e` 或测试 | 损坏行被跳过、活动数正确 |
+| 4 | 接口 | `Invoke-WebRequest http://127.0.0.1:57257/api/bili-fenshen/overview` | 200 + 结构符合 §8 |
+| 5 | 槽位注册 | `cordis_inspect_query` client `Slots.listSubTree` root=`sidebar.panellist` / `main` | 出现 `bili-fenshen` occupant 且 `active:true` |
+| 6 | 页面 | 打开 GUI 点侧栏图标 | 看板与操作台可切换、3s 轮询、停止生效 |
+| 7 | 实跑 | `POST /run` 或让 Agent 跑一轮 | 账本新增事件、`round-end` 写入、报告兜底不重复 |
+| 8 | 降级 | 临时改坏 `bili_credential.json` 或 `config.json` | 横幅提示，不白屏 |
+| 9 | 清理 | 用 `BILI_FENSHEN_HOME` 指向临时目录做 3/7/8 | 真实家目录未被污染 |
 
-## 14. 实现顺序
+---
 
-1. **数据层**：`bili_reply` 回传 rpid；ledger 读/写/轮转；reply 轮询器；报告兜底解析；`BILI_FENSHEN_HOME` 可覆盖。
-2. **接口层**：`/overview` `/activity` `/account` `/duty` `/stop` `/config` `/log` `/seen` `/reports`。
-3. **UI 骨架**：注册 `sidebar.panellist` + `main`，页面外壳（标题行、子页切换、主题 token、轮询 hook）。
-4. **看板**：账号条、值班条、配额条、活动流（阶段条 + 回复线程 + 折叠策略）、空态/横幅。
-5. **操作台**：配置（覆盖层读写）、日志、判重表、产物。
-6. **设置页瘦身 + 顺带修复 + 版本 0.4.0 + 文档更新**（`dsh-plugin/README.md`、`CONTEXT.md` 补「账本」术语）。
+## 14. 决策记录
+
+| 日期 | 决策 | 结论 |
+|---|---|---|
+| 10-23 | 控制台定位 | 看板 + 操作台，两个子页 |
+| 10-23 | 入口 | 侧栏独立图标（order 15），设置页降级为跳转 |
+| 10-23 | 活动流范围 | 最近 7 天；更早去产物/日志 |
+| 10-23 | 跳过项 | 可铺成卡片，整组默认折叠 |
+| 10-23 | 封面图 | 本版不做 |
+| 10-23 | 配置写回 | 插件自有 `config.json` 覆盖层，不改用户 patch |
+| 10-23 | 实时性 | 3 秒轮询，够用（不上 SSE） |
+| 10-23 | 账本 vs 解析报告 | 以账本为准；报告仅作兜底回填 |
+| 10-23 | rpid | 修 `bili_reply` 回传；取不到写 null，不编造 |
