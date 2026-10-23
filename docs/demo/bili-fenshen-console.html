@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B站分身 · 控制台（设计预览）</title>
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Token 全部取自宿主真实定义（packages/client/ui-theme: design-platform.css）
+   light: body{...}   dark: body[data-ds-dark-theme]{...}
+   ───────────────────────────────────────────────────────────── */
+:root{
+  --bg-base:#fff; --bg-layer-1:#fff; --bg-layer-2:#fff; --bg-layer-3:#fff;
+  --bg-module-platform:#f9fafb; --bg-overlay:#e9ecf2; --bg-skeleton:#0000000a;
+  --border-l1:#0000000a; --border-l2:#0000001a; --border-l4:#00000029;
+  --label-primary:#0f1115; --label-secondary:#61666b; --label-tertiary:#81858c; --label-caption:#adb2b8;
+  --brand-primary:#0f1115; --brand-hover:#43454a;
+  --interactive-hover:#2631480f; --interactive-hover-solid:#f1f3f5; --interactive-active:#2631481a;
+  --sidebar-fill:#f9fafb; --nav-active:#ebeef2; --nav-hover:#f1f3f5;
+  --selector:#f5f6f7; --input:#fff; --tip:#f5f6f7;
+  --bubble:#edf3fe; --bubble-hi:#d3e2ff;
+  --success:#22c55e; --success-3:#e6faed; --warn:#f59e0b; --warn-3:#fef5e7;
+  --error:#ec1313; --idle:#d4d4d4;
+  --business:#4176e6; --business-1:#e4edfd; --business-0:#edf3fe;
+  --bili-pink:#fb7299; --bili-blue:#23ade5;
+  --r-xs:4px; --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:20px;
+  --font-text:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;
+  --font-code:"SF Mono","JetBrains Mono","Fira Code",Consolas,"Liberation Mono",Menlo,Courier,monospace;
+  --ease:cubic-bezier(.4,0,.2,1); --dur:.2s;
+}
+html[data-theme="dark"]{
+  --bg-base:#151517; --bg-layer-1:#232324; --bg-layer-2:#2c2c2e; --bg-layer-3:#353638;
+  --bg-module-platform:#353638; --bg-overlay:#61666b; --bg-skeleton:#ffffff14;
+  --border-l1:#ffffff0f; --border-l2:#ffffff1f; --border-l4:#ffffff33;
+  --label-primary:#f9fafb; --label-secondary:#cfd3d6; --label-tertiary:#adb2b8; --label-caption:#81858c;
+  --brand-primary:#f9fafb; --brand-hover:#ebeef2;
+  --interactive-hover:#ffffff14; --interactive-hover-solid:#353638; --interactive-active:#ffffff24;
+  --sidebar-fill:#1b1b1c; --nav-active:#43454a; --nav-hover:#2c2c2e;
+  --selector:#353638; --input:#2c2c2e; --tip:#353638;
+  --bubble:#2c2c2e; --bubble-hi:#43454a;
+  --success-3:#233c2c; --warn-3:#27241f; --error:#f25a5a; --idle:#545557;
+  --business-1:#26324a; --business-0:#1f2937;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg-base); color:var(--label-primary);
+  font-family:var(--font-text); font-size:14px; line-height:22px;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit}
+
+/* ───────── app shell ───────── */
+.app{display:flex;height:100%}
+
+.rail{
+  width:56px;flex:0 0 56px;background:var(--sidebar-fill);
+  border-right:.5px solid var(--border-l1);
+  display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 0;
+}
+.rail-brand{width:28px;height:28px;margin-bottom:10px;display:grid;place-items:center;color:var(--label-primary);opacity:.9}
+.rail-btn{
+  width:36px;height:36px;border:0;border-radius:var(--r-sm);background:transparent;cursor:pointer;
+  display:grid;place-items:center;color:var(--label-secondary);
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
+}
+.rail-btn:hover{background:var(--nav-hover);color:var(--label-primary)}
+.rail-btn.active{background:var(--nav-active);color:var(--label-primary)}
+.rail-spacer{flex:1}
+
+.main{flex:1;min-width:0;overflow:auto}
+.page{max-width:920px;padding:26px 32px 72px}
+
+/* ───────── page head ───────── */
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.page-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.01em}
+.page-sub{margin:2px 0 0;font-size:13px;line-height:20px;color:var(--label-tertiary)}
+.head-tools{display:flex;align-items:center;gap:8px;padding-top:2px}
+
+/* ───────── segmented (看板 / 操作台) ───────── */
+.segmented{
+  display:inline-flex;gap:2px;padding:2px;background:var(--selector);
+  border-radius:var(--r-sm);margin-bottom:18px;
+}
+.segmented button{
+  border:0;background:transparent;color:var(--label-secondary);cursor:pointer;
+  padding:4px 14px;border-radius:6px;font-size:13px;line-height:20px;
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
+}
+.segmented button:hover{color:var(--label-primary)}
+.segmented button[aria-selected="true"]{
+  background:var(--bg-base);color:var(--label-primary);
+  box-shadow:0 0 0 .5px var(--border-l2);font-weight:500;
+}
+
+/* ───────── generic card ───────── */
+.card{
+  border:.5px solid var(--border-l2);border-radius:var(--r-md);
+  background:var(--bg-layer-1);padding:14px 16px;
+}
+.card + .card{margin-top:10px}
+.card-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.card-title{font-size:13px;line-height:20px;font-weight:500;color:var(--label-primary)}
+.card-note{font-size:12px;line-height:18px;color:var(--label-tertiary)}
+
+/* ───────── account strip ───────── */
+.account{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.avatar{
+  width:38px;height:38px;border-radius:50%;flex:0 0 38px;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--bili-pink),var(--bili-blue));
+  color:#fff;font-size:15px;font-weight:600;line-height:1;
+  box-shadow:0 0 0 1px var(--border-l2) inset;
+}
+.account-name{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:500}
+.account-meta{font-size:12px;line-height:18px;color:var(--label-tertiary)}
+.lv{
+  font-size:10px;line-height:14px;padding:0 4px;border-radius:var(--r-xs);
+  background:var(--bg-module-platform);color:var(--label-secondary);
+  border:.5px solid var(--border-l2);font-family:var(--font-code);
+}
+.pill{
+  display:inline-flex;align-items:center;gap:5px;font-size:12px;line-height:18px;
+  padding:1px 8px;border-radius:999px;border:.5px solid var(--border-l2);
+  color:var(--label-secondary);background:var(--bg-module-platform);
+}
+.dot{width:6px;height:6px;border-radius:50%;flex:0 0 6px}
+.dot.ok{background:var(--success)}
+.dot.warn{background:var(--warn)}
+.dot.off{background:var(--idle)}
+
+/* ───────── buttons ───────── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:30px;padding:0 12px;border-radius:var(--r-sm);cursor:pointer;
+  border:.5px solid var(--border-l4);background:transparent;color:var(--label-primary);
+  font-size:13px;line-height:20px;
+  transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease),opacity var(--dur) var(--ease);
+}
+.btn:hover{background:var(--interactive-hover)}
+.btn:active{background:var(--interactive-active)}
+.btn.primary{background:var(--brand-primary);color:var(--bg-base);border-color:transparent;font-weight:500}
+.btn.primary:hover{background:var(--brand-hover)}
+.btn.ghost{border-color:transparent;color:var(--label-secondary)}
+.btn.ghost:hover{color:var(--label-primary)}
+.btn.small{height:26px;padding:0 10px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.danger{color:var(--error);border-color:var(--border-l2)}
+.btn.danger:hover{background:var(--interactive-hover)}
+
+/* ───────── switch ───────── */
+.switch{
+  position:relative;display:inline-flex;margin:0;width:34px;height:20px;border-radius:10px;border:0;padding:0;cursor:pointer;
+  background:var(--idle);transition:background var(--dur) var(--ease);flex:0 0 34px;
+}
+.switch::after{
+  content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.22);
+  transition:transform var(--dur) var(--ease);
+}
+.switch[aria-checked="true"]{background:var(--brand-primary)}
+.switch[aria-checked="true"]::after{transform:translateX(14px);background:var(--bg-base)}
+
+/* ───────── duty strip ───────── */
+.duty{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.duty-item{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--label-secondary)}
+.duty-item b{color:var(--label-primary);font-weight:500}
+.duty-actions{margin-left:auto;display:flex;gap:8px}
+
+/* ───────── quota tiles ───────── */
+.quota{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tile{
+  border:.5px solid var(--border-l1);border-radius:var(--r-sm);
+  background:var(--bg-module-platform);padding:10px 12px;
+}
+.tile-label{font-size:12px;line-height:18px;color:var(--label-tertiary)}
+.tile-value{font-size:15px;line-height:22px;font-weight:500;margin-top:2px;font-variant-numeric:tabular-nums}
+.tile-value span{font-size:12px;color:var(--label-tertiary);font-weight:400}
+.bar{height:2px;border-radius:2px;background:var(--border-l2);margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:2px;background:var(--business)}
+
+/* ───────── round header ───────── */
+.round-head{display:flex;align-items:baseline;gap:10px;margin:22px 0 10px;flex-wrap:wrap}
+.round-time{font-size:13px;font-weight:500;color:var(--label-primary);font-variant-numeric:tabular-nums}
+.round-src{font-size:12px;color:var(--label-tertiary)}
+
+/* ───────── activity card ───────── */
+details.act{border:.5px solid var(--border-l2);border-radius:var(--r-md);background:var(--bg-layer-1)}
+details.act + details.act{margin-top:8px}
+details.act > summary{
+  list-style:none;cursor:pointer;padding:12px 14px;border-radius:var(--r-md);
+  transition:background var(--dur) var(--ease);
+}
+details.act > summary::-webkit-details-marker{display:none}
+details.act > summary:hover{background:var(--interactive-hover)}
+details.act[open] > summary{border-bottom:.5px solid var(--border-l1);border-radius:var(--r-md) var(--r-md) 0 0}
+.sum-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bvid{font-family:var(--font-code);font-size:11px;line-height:16px;color:var(--label-tertiary);letter-spacing:.02em}
+.grade{
+  font-size:11px;line-height:16px;padding:0 6px;border-radius:var(--r-xs);font-weight:500;
+  border:.5px solid transparent;
+}
+.grade.worth{background:rgba(251,114,153,.12);color:#d1567d;border-color:rgba(251,114,153,.28)}
+.grade.ok{background:var(--bg-module-platform);color:var(--label-secondary);border-color:var(--border-l2)}
+.grade.meh{background:var(--bg-module-platform);color:var(--label-tertiary);border-color:var(--border-l1)}
+html[data-theme="dark"] .grade.worth{background:rgba(251,114,153,.16);color:#ff9db9}
+.chip{
+  font-size:11px;line-height:16px;padding:0 5px;border-radius:var(--r-xs);
+  color:var(--label-secondary);background:var(--bg-module-platform);border:.5px solid var(--border-l1);
+  display:inline-flex;align-items:center;gap:4px;
+}
+.chip.like{color:var(--label-secondary)}
+.chip.cmt{color:var(--business);background:var(--business-0);border-color:transparent}
+.chip.rep{color:var(--success);background:var(--success-3);border-color:transparent}
+.sum-title{font-size:13px;line-height:20px;color:var(--label-primary);font-weight:500}
+.sum-meta{font-size:12px;line-height:18px;color:var(--label-tertiary)}
+.chev{margin-left:auto;color:var(--label-caption);transition:transform var(--dur) var(--ease);flex:0 0 12px}
+details[open] > summary .chev{transform:rotate(90deg)}
+
+.act-body{padding:12px 14px 14px}
+
+/* ───────── stage rail ───────── */
+.stages{display:grid;grid-template-columns:repeat(6,1fr);margin:2px 0 14px}
+.stage{position:relative;padding-top:14px;min-width:0}
+.stage::before{
+  content:"";position:absolute;top:4px;left:0;right:0;height:1px;background:var(--border-l2);
+}
+.stage:first-child::before{left:5px}
+.stage:last-child::before{right:calc(100% - 5px)}
+.stage b{
+  position:absolute;top:0;left:0;width:9px;height:9px;border-radius:50%;
+  background:var(--bg-base);box-shadow:inset 0 0 0 1.5px var(--idle);
+}
+.stage.done b{background:var(--business);box-shadow:none}
+.stage.now b{background:var(--business);box-shadow:0 0 0 3px var(--business-1)}
+.stage span{display:block;font-size:11px;line-height:16px;color:var(--label-tertiary);white-space:nowrap}
+.stage.done span{color:var(--label-secondary)}
+.stage em{display:block;font-size:10px;line-height:15px;color:var(--label-caption);font-style:normal;font-variant-numeric:tabular-nums}
+
+/* ───────── comment + thread ───────── */
+.quote{
+  font-size:13px;line-height:21px;color:var(--label-primary);
+  padding:2px 0 2px 10px;border-left:2px solid var(--border-l2);margin:0 0 10px;
+}
+.quote .who{font-size:11px;color:var(--label-tertiary);margin-right:6px}
+.thread{margin:0 0 2px;padding-left:12px;border-left:1px solid var(--border-l2)}
+.msg{display:flex;gap:8px;padding:6px 0}
+.msg + .msg{border-top:.5px solid var(--border-l1)}
+.msg-name{font-size:12px;line-height:18px;color:var(--label-secondary);flex:0 0 auto;font-weight:500}
+.msg-time{font-size:11px;line-height:18px;color:var(--label-caption);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.msg-text{font-size:13px;line-height:20px;color:var(--label-primary);min-width:0}
+.msg.mine .msg-text{background:var(--bubble);border-radius:var(--r-sm);padding:2px 8px;margin:-2px 0}
+.msg.mine .msg-name{color:var(--business)}
+.act-foot{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--label-tertiary);flex-wrap:wrap}
+.link{color:var(--business);text-decoration:none;cursor:pointer}
+.link:hover{text-decoration:underline}
+.mono{font-family:var(--font-code);font-size:11px}
+
+/* ───────── skip group / day group ───────── */
+details.group{margin-top:10px}
+details.group > summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;
+  padding:8px 10px;border-radius:var(--r-sm);color:var(--label-secondary);font-size:12px;
+  transition:background var(--dur) var(--ease);
+}
+details.group > summary::-webkit-details-marker{display:none}
+details.group > summary:hover{background:var(--interactive-hover)}
+details.group[open] > summary{color:var(--label-primary)}
+.skip-list{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.skip-item{
+  display:flex;align-items:baseline;gap:8px;padding:9px 12px;
+  border:.5px solid var(--border-l1);border-radius:var(--r-sm);background:var(--bg-module-platform);
+}
+.skip-item .bvid{flex:0 0 auto}
+.skip-title{font-size:12px;line-height:18px;color:var(--label-secondary);min-width:0;flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.skip-reason{font-size:11px;line-height:16px;color:var(--label-tertiary);flex:0 0 auto}
+
+/* ───────── 操作台 ───────── */
+.ctabs{display:flex;gap:18px;border-bottom:.5px solid var(--border-l2);margin:2px 0 18px}
+.ctabs button{
+  border:0;background:transparent;cursor:pointer;padding:0 0 9px;position:relative;
+  font-size:13px;line-height:20px;color:var(--label-secondary);
+  transition:color var(--dur) var(--ease);
+}
+.ctabs button:hover{color:var(--label-primary)}
+.ctabs button[aria-selected="true"]{color:var(--label-primary);font-weight:500}
+.ctabs button[aria-selected="true"]::after{
+  content:"";position:absolute;left:0;right:0;bottom:-.5px;height:2px;border-radius:2px;background:var(--brand-primary);
+}
+.panel-tools{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+
+.form-group + .form-group{margin-top:18px;padding-top:18px;border-top:.5px solid var(--border-l1)}
+.group-title{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--label-primary)}
+.row{display:flex;align-items:center;gap:12px;padding:7px 0;min-height:34px}
+.row-label{flex:0 0 132px;font-size:13px;color:var(--label-secondary)}
+.row-help{font-size:11px;line-height:16px;color:var(--label-caption);margin-top:2px}
+.row-body{flex:1;min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.num{
+  display:inline-flex;align-items:center;border:.5px solid var(--border-l4);border-radius:var(--r-sm);
+  overflow:hidden;background:var(--input);height:30px;
+}
+.num button{
+  width:26px;height:100%;border:0;background:transparent;color:var(--label-secondary);cursor:pointer;font-size:14px;
+}
+.num button:hover{background:var(--interactive-hover);color:var(--label-primary)}
+.num input{
+  width:44px;height:100%;border:0;background:transparent;color:var(--label-primary);
+  text-align:center;font-size:13px;font-variant-numeric:tabular-nums;outline:none;
+}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.tag{
+  display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 6px 0 9px;border-radius:var(--r-sm);
+  background:var(--bg-module-platform);border:.5px solid var(--border-l2);
+  font-size:12px;color:var(--label-primary);
+}
+.tag button{border:0;background:transparent;color:var(--label-caption);cursor:pointer;padding:0 2px;border-radius:var(--r-xs)}
+.tag button:hover{color:var(--label-primary);background:var(--interactive-hover)}
+.tag-add{
+  height:26px;padding:0 9px;border:.5px dashed var(--border-l4);border-radius:var(--r-sm);
+  background:transparent;color:var(--label-tertiary);font-size:12px;cursor:pointer;
+}
+.tag-add:hover{color:var(--label-primary);border-color:var(--label-caption)}
+textarea{
+  width:100%;min-height:76px;resize:vertical;padding:8px 10px;border-radius:var(--r-sm);
+  border:.5px solid var(--border-l4);background:var(--input);color:var(--label-primary);
+  font-family:var(--font-text);font-size:13px;line-height:21px;outline:none;
+}
+textarea:focus{border-color:var(--label-caption)}
+.form-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:14px;border-top:.5px solid var(--border-l1)}
+
+/* ───────── log ───────── */
+.log-events{display:flex;flex-direction:column}
+.log-line{display:flex;gap:10px;padding:6px 0;font-size:12px;line-height:19px;border-bottom:.5px solid var(--border-l1)}
+.log-line:last-child{border-bottom:0}
+.log-t{font-family:var(--font-code);font-size:11px;color:var(--label-caption);flex:0 0 74px;font-variant-numeric:tabular-nums}
+.log-msg{color:var(--label-secondary);min-width:0}
+.log-line.err .log-msg{color:var(--error)}
+pre.raw{
+  margin:8px 0 0;padding:10px 12px;border-radius:var(--r-sm);background:var(--bg-module-platform);
+  border:.5px solid var(--border-l1);font-family:var(--font-code);font-size:11px;line-height:18px;
+  color:var(--label-secondary);max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+}
+
+/* ───────── table ───────── */
+table.grid{width:100%;border-collapse:collapse;font-size:12px;line-height:19px}
+table.grid th{
+  text-align:left;font-weight:500;color:var(--label-tertiary);padding:0 10px 8px 0;
+  border-bottom:.5px solid var(--border-l2);white-space:nowrap;font-size:11px;
+}
+table.grid td{padding:7px 10px 7px 0;border-bottom:.5px solid var(--border-l1);color:var(--label-secondary);vertical-align:top}
+table.grid td.bv{font-family:var(--font-code);font-size:11px;color:var(--label-primary);white-space:nowrap}
+table.grid tr:last-child td{border-bottom:0}
+.search{
+  height:30px;padding:0 10px;border-radius:var(--r-sm);border:.5px solid var(--border-l4);
+  background:var(--input);color:var(--label-primary);font-size:13px;outline:none;width:220px;
+}
+.search:focus{border-color:var(--label-caption)}
+
+/* ───────── artifacts ───────── */
+.artifact-list{display:flex;flex-direction:column;gap:2px}
+.artifact-item{
+  display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:var(--r-sm);
+  border:0;background:transparent;cursor:pointer;text-align:left;width:100%;
+  transition:background var(--dur) var(--ease);
+}
+.artifact-item:hover{background:var(--interactive-hover)}
+.artifact-item[aria-selected="true"]{background:var(--bg-module-platform)}
+.artifact-item .name{font-size:12px;color:var(--label-primary);font-family:var(--font-code)}
+.artifact-item .meta{font-size:11px;color:var(--label-caption);margin-left:auto}
+pre.doc{
+  margin:0;padding:14px 16px;border-radius:var(--r-sm);border:.5px solid var(--border-l1);
+  background:var(--bg-module-platform);font-family:var(--font-code);font-size:11px;line-height:19px;
+  color:var(--label-secondary);white-space:pre-wrap;max-height:340px;overflow:auto;
+}
+.split{display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start}
+
+/* ───────── floating demo controls ───────── */
+.demo-bar{
+  position:fixed;right:16px;bottom:16px;display:flex;align-items:center;gap:8px;
+  padding:6px;border-radius:999px;background:var(--bg-base);border:.5px solid var(--border-l2);
+  box-shadow:0 6px 24px rgba(0,0,0,.10);z-index:10;
+}
+.demo-bar button{
+  border:0;background:transparent;color:var(--label-secondary);cursor:pointer;
+  padding:3px 10px;border-radius:999px;font-size:12px;
+}
+.demo-bar button[aria-selected="true"]{background:var(--nav-active);color:var(--label-primary)}
+.demo-tag{font-size:11px;color:var(--label-caption);padding:0 6px 0 4px;white-space:nowrap}
+[hidden]{display:none !important}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 左侧栏（sidebar.panellist 的真实位置：插件 / 自动化任务 / 本插件） -->
+  <aside class="rail" aria-label="全局面板">
+    <div class="rail-brand" aria-hidden="true">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <path d="M4 7.5c0-1.4 1.1-2.5 2.5-2.5h11c1.4 0 2.5 1.1 2.5 2.5v7c0 1.4-1.1 2.5-2.5 2.5h-11A2.5 2.5 0 0 1 4 14.5z"/>
+        <path d="M9 20h6M12 17v3"/>
+      </svg>
+    </div>
+    <button class="rail-btn" title="插件" aria-label="插件">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/>
+        <rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/>
+      </svg>
+    </button>
+    <button class="rail-btn" title="自动化任务" aria-label="自动化任务">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3 1.8"/>
+      </svg>
+    </button>
+    <button class="rail-btn active" title="B站分身" aria-label="B站分身" aria-current="page">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+        <rect x="2.5" y="5.5" width="11" height="9" rx="2.4" fill="#fb7299"/>
+        <rect x="10.5" y="9.5" width="11" height="9" rx="2.4" fill="#23ade5" fill-opacity=".92"/>
+        <path d="M5 3.2l2 1.8M11 3.2l-2 1.8" stroke="#fb7299" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M13.6 7.2l2 1.8M19.6 7.2l-2 1.8" stroke="#23ade5" stroke-width="1.4" stroke-linecap="round"/>
+        <circle cx="6.2" cy="9.6" r=".95" fill="#fff"/><circle cx="9.8" cy="9.6" r=".95" fill="#fff"/>
+        <circle cx="14" cy="13.6" r=".9" fill="#fff"/><circle cx="17.6" cy="13.6" r=".9" fill="#fff"/>
+      </svg>
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn" title="设置" aria-label="设置">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+        <circle cx="12" cy="12" r="2.8"/>
+        <path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6L18 18M18 6l-1.4 1.4M7.4 16.6L6 18" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </aside>
+
+  <main class="main">
+    <div class="page">
+      <header class="page-head">
+        <div>
+          <h1 class="page-title">B站分身</h1>
+          <p class="page-sub">让小号在B站保持存在感 · 先发后报，可随时接管</p>
+        </div>
+        <div class="head-tools">
+          <span class="pill"><i class="dot ok"></i>值班就绪</span>
+          <button class="btn small ghost" title="刷新">刷新</button>
+        </div>
+      </header>
+
+      <div class="segmented" role="tablist" aria-label="子页">
+        <button role="tab" aria-selected="true" data-view="dashboard">看板</button>
+        <button role="tab" aria-selected="false" data-view="console">操作台</button>
+      </div>
+
+      <!-- ══════════════ 看板 ══════════════ -->
+      <section id="view-dashboard">
+        <!-- 账号 -->
+        <div class="card">
+          <div class="account">
+            <div class="avatar" aria-hidden="true">豆</div>
+            <div>
+              <div class="account-name">
+                不吃鱼的豆腐 <span class="lv">LV6</span>
+                <span class="pill"><i class="dot ok"></i>登录有效</span>
+              </div>
+              <div class="account-meta">UID 312299788 · 硬币 1447.5 · 粉丝 12 · 大会员未开通</div>
+            </div>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button class="btn small ghost">B站主页</button>
+              <button class="btn small">重新扫码</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 值班 -->
+        <div class="card">
+          <div class="duty">
+            <div class="duty-item">
+              <button class="switch" role="switch" aria-checked="true" aria-label="自动值班"></button>
+              <span>自动值班 <b>已开</b></span>
+            </div>
+            <div class="duty-item">下一窗 <b>12:00</b> <span style="color:var(--label-caption)">（2h 54m 后）</span></div>
+            <div class="duty-item">本轮 <b>运行中</b> <span style="color:var(--label-caption)">1m 12s</span></div>
+            <div class="duty-actions">
+              <button class="btn danger small">中止</button>
+              <button class="btn primary" disabled>跑一轮</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 今日配额 -->
+        <div class="card">
+          <div class="card-head"><span class="card-title">今日配额</span><span class="card-note">按动作类型分别计数，到量即停</span></div>
+          <div class="quota">
+            <div class="tile">
+              <div class="tile-label">挑中</div>
+              <div class="tile-value">3 <span>/ 5</span></div>
+              <div class="bar"><i style="width:60%"></i></div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">评论</div>
+              <div class="tile-value">2 <span>/ 5</span></div>
+              <div class="bar"><i style="width:40%"></i></div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">点赞</div>
+              <div class="tile-value">6 <span>/ 10</span></div>
+              <div class="bar"><i style="width:60%"></i></div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">动态</div>
+              <div class="tile-value">0 <span>/ 1</span></div>
+              <div class="bar"><i style="width:0%"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 活动流 -->
+        <div class="round-head">
+          <span class="round-time">16:26 这一轮</span>
+          <span class="round-src">来源：热门 30 · 搜索「AI 实测」「大模型」· 订阅 0</span>
+        </div>
+
+        <!-- 活动 1：完整生命周期（有对话，默认展开） -->
+        <details class="act" open>
+          <summary>
+            <div class="sum-row">
+              <span class="bvid">BV1xrnz6gEVD</span>
+              <span class="grade worth">值得看</span>
+              <span class="chip like">赞</span>
+              <span class="chip cmt">评论</span>
+              <span class="chip rep">3 回复</span>
+              <span class="chip" style="color:var(--warn);background:var(--warn-3);border-color:transparent">1 未回</span>
+              <span class="chev">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </span>
+            </div>
+            <div class="sum-title" style="margin-top:4px">折1万次，会坏吗？iPhone Duo 深度评测</div>
+            <div class="sum-meta">影视飓风 · 313.6 万播放 · 24:52 · 来源 热门</div>
+          </summary>
+
+          <div class="act-body">
+            <div class="stages">
+              <div class="stage done"><b></b><span>刷到</span><em>16:26</em></div>
+              <div class="stage done"><b></b><span>看</span><em>16:26</em></div>
+              <div class="stage done"><b></b><span>赞</span><em>16:26</em></div>
+              <div class="stage done"><b></b><span>评</span><em>16:27</em></div>
+              <div class="stage done"><b></b><span>被回复</span><em>16:41</em></div>
+              <div class="stage done"><b></b><span>我回</span><em>16:42</em></div>
+            </div>
+
+            <p class="quote"><span class="who">我 · 16:27</span>用原子力显微镜查指纹为什么难擦，这期是真舍得下本。纳米纹理能换但官方不让自己撕、换屏 8000，这条记下了。</p>
+
+            <div class="thread">
+              <div class="msg">
+                <span class="msg-name">张三</span><span class="msg-time">16:41</span>
+                <span class="msg-text">这条我正好也在看，那个显微镜多少钱</span>
+              </div>
+              <div class="msg mine">
+                <span class="msg-name">我</span><span class="msg-time">16:42</span>
+                <span class="msg-text">三万左右吧，主要是他们租的</span>
+              </div>
+              <div class="msg">
+                <span class="msg-name">阿茶</span><span class="msg-time">17:08</span>
+                <span class="msg-text">换屏 8000 是真的吗，我那台已经裂了…</span>
+                <span class="chip" style="color:var(--warn);background:var(--warn-3);border-color:transparent;flex:0 0 auto">待跟进</span>
+              </div>
+            </div>
+
+            <div class="act-foot">
+              <span>动态「折1万次还能开机，这期是真舍得下本」</span>
+              <a class="link" href="#" onclick="return false">打开视频</a>
+              <span class="mono">评论 rpid 123456</span>
+              <span class="mono">回复 rpid 999001</span>
+            </div>
+          </div>
+        </details>
+
+        <!-- 活动 2：有评论无对话（折叠） -->
+        <details class="act">
+          <summary>
+            <div class="sum-row">
+              <span class="bvid">BV1mAn168EtF</span>
+              <span class="grade worth">值得看</span>
+              <span class="chip like">赞</span>
+              <span class="chip cmt">评论</span>
+              <span class="chev">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </span>
+            </div>
+            <div class="sum-title" style="margin-top:4px">6亿 Token 只要30元？DeepSeek Harness 7项开发测试实测</div>
+            <div class="sum-meta">算法菌不熬夜 · 29 播放 · 13:44 · 来源 搜索「AI 实测」</div>
+          </summary>
+          <div class="act-body">
+            <div class="stages">
+              <div class="stage done"><b></b><span>刷到</span><em>16:27</em></div>
+              <div class="stage done"><b></b><span>看</span><em>16:28</em></div>
+              <div class="stage done"><b></b><span>赞</span><em>16:29</em></div>
+              <div class="stage done"><b></b><span>评</span><em>16:29</em></div>
+              <div class="stage"><b></b><span>被回复</span><em>—</em></div>
+              <div class="stage"><b></b><span>我回</span><em>—</em></div>
+            </div>
+            <p class="quote"><span class="who">我 · 16:29</span>30块6亿token这个账很直观，不过更想知道这七项里哪些是跑完真能用的、哪些只是能跑起来。海战那船反向转太真实了。</p>
+            <div class="act-foot"><span>还没有人回复 · 5 分钟后自动复查</span><span class="mono">未取到 rpid</span></div>
+          </div>
+        </details>
+
+        <!-- 活动 3-5：纯点赞（折叠） -->
+        <details class="act">
+          <summary>
+            <div class="sum-row">
+              <span class="bvid">BV1VHJ964EM7</span>
+              <span class="grade worth">值得看</span>
+              <span class="chip like">赞</span>
+              <span class="chev">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </span>
+            </div>
+            <div class="sum-title" style="margin-top:4px">股市亏掉1500万后，我才从傻白甜真正长大</div>
+            <div class="sum-meta">摩的司机徐师傅 · 22 万播放 · 31:20 · 来源 热门</div>
+          </summary>
+          <div class="act-body">
+            <div class="stages">
+              <div class="stage done"><b></b><span>刷到</span><em>16:30</em></div>
+              <div class="stage done"><b></b><span>看</span><em>16:30</em></div>
+              <div class="stage done"><b></b><span>赞</span><em>16:31</em></div>
+              <div class="stage"><b></b><span>评</span><em>没评</em></div>
+              <div class="stage"><b></b><span>被回复</span><em>—</em></div>
+              <div class="stage"><b></b><span>我回</span><em>—</em></div>
+            </div>
+            <div class="act-foot"><span>只点赞 · 没有可说的话就不评（章程）</span></div>
+          </div>
+        </details>
+
+        <details class="act">
+          <summary>
+            <div class="sum-row">
+              <span class="bvid">BV1AHnB6NEhM</span>
+              <span class="grade ok">可以看</span>
+              <span class="chip like">赞</span>
+              <span class="chev">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </span>
+            </div>
+            <div class="sum-title" style="margin-top:4px">《影之刃零》最终预告</div>
+            <div class="sum-meta">影之刃零 · 140.2 万播放 · 3:11 · 来源 热门</div>
+          </summary>
+          <div class="act-body"><div class="act-foot"><span>只点赞</span></div></div>
+        </details>
+
+        <details class="act">
+          <summary>
+            <div class="sum-row">
+              <span class="bvid">BV1einm61Eht</span>
+              <span class="grade worth">值得看</span>
+              <span class="chip like">赞</span>
+              <span class="chev">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              </span>
+            </div>
+            <div class="sum-title" style="margin-top:4px">我诬告了别人的 AI</div>
+            <div class="sum-meta">肥鱼爱吃大白饭 · 90 播放 · 4:16 · 来源 搜索「大模型」</div>
+          </summary>
+          <div class="act-body"><div class="act-foot"><span>只点赞</span></div></div>
+        </details>
+
+        <!-- 跳过：默认折叠 -->
+        <details class="group">
+          <summary>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+            跳过 3 条：同题重复 1 · 争议话题 1 · 信息密度低 1
+          </summary>
+          <ul class="skip-list">
+            <li class="skip-item">
+              <span class="bvid">BV1XynB6EEiM</span>
+              <span class="skip-title">【何同学】能折！但代价呢？iPhone Duo 首发体验</span>
+              <span class="skip-reason">与影视飓风同题重复</span>
+            </li>
+            <li class="skip-item">
+              <span class="bvid">BV1GTnK6sE4Y</span>
+              <span class="skip-title">为什么福利这么好，法国依然动荡不断？</span>
+              <span class="skip-reason">评论区立场争吵</span>
+            </li>
+            <li class="skip-item">
+              <span class="bvid">BV1abc123XYZ</span>
+              <span class="skip-title">AI 丧尸剧 · 合集</span>
+              <span class="skip-reason">信息密度低</span>
+            </li>
+          </ul>
+        </details>
+
+        <!-- 更早 -->
+        <details class="group">
+          <summary>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+            更早 · 10-22（5 条活动） · 10-21（无记录）
+          </summary>
+          <ul class="skip-list">
+            <li class="skip-item">
+              <span class="bvid">10-22</span>
+              <span class="skip-title">14:08 未登录 → 16:26 恢复登录后跑了 5 条</span>
+              <span class="skip-reason">查看该日</span>
+            </li>
+          </ul>
+        </details>
+      </section>
+
+      <!-- ══════════════ 操作台 ══════════════ -->
+      <section id="view-console" hidden>
+        <div class="ctabs" role="tablist" aria-label="操作台分区">
+          <button role="tab" aria-selected="true" data-pane="config">配置</button>
+          <button role="tab" aria-selected="false" data-pane="log">日志</button>
+          <button role="tab" aria-selected="false" data-pane="seen">判重表</button>
+          <button role="tab" aria-selected="false" data-pane="artifacts">产物</button>
+        </div>
+
+        <!-- 配置 -->
+        <div id="pane-config">
+          <div class="card">
+            <div class="form-group">
+              <h3 class="group-title">值班节奏</h3>
+              <div class="row">
+                <span class="row-label">自动值班</span>
+                <div class="row-body">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="自动值班"></button>
+                  <span class="card-note">开启后在谷时窗口自动拉起一轮；关闭后只能手动触发</span>
+                </div>
+              </div>
+              <div class="row">
+                <span class="row-label">中午窗口</span>
+                <div class="row-body">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="中午窗口"></button>
+                  <span class="card-note">12:00 – 14:00</span>
+                </div>
+              </div>
+              <div class="row">
+                <span class="row-label">晚间窗口</span>
+                <div class="row-body">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="晚间窗口"></button>
+                  <span class="card-note">18:00 – 次日 09:00</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <h3 class="group-title">配额</h3>
+              <div class="row">
+                <span class="row-label">每天挑中</span>
+                <div class="row-body">
+                  <div class="num"><button aria-label="减少">−</button><input value="5" inputmode="numeric"><button aria-label="增加">+</button></div>
+                  <span class="card-note">全天总量上限</span>
+                </div>
+              </div>
+              <div class="row">
+                <span class="row-label">每天评论</span>
+                <div class="row-body"><div class="num"><button>−</button><input value="5"><button>+</button></div><span class="card-note">每条视频只评一次</span></div>
+              </div>
+              <div class="row">
+                <span class="row-label">每轮评论</span>
+                <div class="row-body"><div class="num"><button>−</button><input value="2"><button>+</button></div></div>
+              </div>
+              <div class="row">
+                <span class="row-label">每天点赞</span>
+                <div class="row-body"><div class="num"><button>−</button><input value="10"><button>+</button></div><span class="card-note">成本最低的存在感</span></div>
+              </div>
+              <div class="row">
+                <span class="row-label">每天动态</span>
+                <div class="row-body"><div class="num"><button>−</button><input value="1"><button>+</button></div></div>
+              </div>
+              <div class="row">
+                <span class="row-label">每轮跟进回复</span>
+                <div class="row-body"><div class="num"><button>−</button><input value="2"><button>+</button></div></div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <h3 class="group-title">内容源</h3>
+              <div class="row">
+                <span class="row-label">关键词</span>
+                <div class="row-body">
+                  <div class="chips">
+                    <span class="tag">AI 实测 <button aria-label="删除">×</button></span>
+                    <span class="tag">大模型 <button aria-label="删除">×</button></span>
+                    <button class="tag-add">+ 添加</button>
+                  </div>
+                </div>
+              </div>
+              <div class="row">
+                <span class="row-label">订阅 UP 主</span>
+                <div class="row-body">
+                  <div class="chips">
+                    <span class="tag">UID 312299788 <button aria-label="删除">×</button></span>
+                    <button class="tag-add">+ 添加</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <h3 class="group-title">人设</h3>
+              <div class="row" style="align-items:flex-start">
+                <span class="row-label">人设提示词<div class="row-help">留空＝中性说话</div></span>
+                <div class="row-body">
+                  <textarea placeholder="例如：二十五六岁，喜欢硬件测评和游戏，说话短、不客套，偶尔自嘲。"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <h3 class="group-title">运行环境</h3>
+              <div class="row">
+                <span class="row-label">dsh CLI</span>
+                <div class="row-body">
+                  <span class="pill"><i class="dot ok"></i>已探测</span>
+                  <span class="card-note mono">…/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js</span>
+                </div>
+              </div>
+              <div class="row">
+                <span class="row-label">headless profile</span>
+                <div class="row-body"><span class="tag">headless</span><span class="card-note">值班轮用独立 profile，避免与桌面版抢锁</span></div>
+              </div>
+              <div class="row">
+                <span class="row-label">家目录</span>
+                <div class="row-body"><span class="card-note mono">C:\Users\Administrator\.dsh\bili-fenshen</span></div>
+              </div>
+            </div>
+
+            <div class="form-foot">
+              <button class="btn ghost">恢复默认</button>
+              <button class="btn primary">保存并生效</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 日志 -->
+        <div id="pane-log" hidden>
+          <div class="panel-tools">
+            <button class="btn small">复制路径</button>
+            <button class="btn small ghost">打开文件夹</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-title">宿主事件</span><span class="card-note">结构化，异常标红</span></div>
+            <div class="log-events">
+              <div class="log-line"><span class="log-t">09:43:45</span><span class="log-msg">dshBin 探测：asarBin=…\dsh\lib\bin.js exists=true</span></div>
+              <div class="log-line"><span class="log-t">16:25:50</span><span class="log-msg">扫码登录成功，凭证已写入 bili_credential.json</span></div>
+              <div class="log-line"><span class="log-t">16:26:18</span><span class="log-msg">值班轮开跑（web）：profile=headless</span></div>
+              <div class="log-line"><span class="log-t">16:28:25</span><span class="log-msg">值班轮结束（web，code=0）· 耗时 2m 07s</span></div>
+              <div class="log-line err"><span class="log-t">16:28:25</span><span class="log-msg">注册 webServer 路由失败（已兜住）：duplicate prefix route "/api/bili-fenshen"</span></div>
+            </div>
+          </div>
+
+          <details class="group">
+            <summary>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              子进程原文（68 KB · 含模型推理文本，默认收起）
+            </summary>
+            <pre class="raw">[2026-10-22T08:26:18.503Z] 正在读取热门视频…
+Let me check the subtitle first, then decide whether this is worth a comment.
+[2026-10-22T08:27:02.118Z] bili_reply → {"success": true, "message": "评论发送成功"}
+…
+（此处为 headless 会话 stdout/stderr 全文，仅诊断用）</pre>
+          </details>
+        </div>
+
+        <!-- 判重表 -->
+        <div id="pane-seen" hidden>
+          <div class="panel-tools">
+            <input class="search" placeholder="搜索 BV 号或标题">
+            <span class="card-note" style="align-self:center">共 7 条 · 这是「这个号看过什么」的唯一账本</span>
+          </div>
+          <div class="card">
+            <table class="grid">
+              <thead><tr><th>日期</th><th>BV 号</th><th>动作</th><th>标题</th></tr></thead>
+              <tbody>
+                <tr><td>10-22 16:26</td><td class="bv">BV1xrnz6gEVD</td><td><span class="chip like">赞</span> <span class="chip cmt">评论</span> <span class="chip rep">动态</span></td><td>折1万次，会坏吗？iPhone Duo深度评测</td></tr>
+                <tr><td>10-22 16:26</td><td class="bv">BV1mAn168EtF</td><td><span class="chip like">赞</span> <span class="chip cmt">评论</span></td><td>6亿 Token 只要30元？DeepSeek Harness 7项开发测试实测</td></tr>
+                <tr><td>10-22 16:26</td><td class="bv">BV1VHJ964EM7</td><td><span class="chip like">赞</span></td><td>股市亏掉1500万后，我才从傻白甜真正长大</td></tr>
+                <tr><td>10-22 16:26</td><td class="bv">BV1AHnB6NEhM</td><td><span class="chip like">赞</span></td><td>《影之刃零》最终预告</td></tr>
+                <tr><td>10-22 16:26</td><td class="bv">BV1einm61Eht</td><td><span class="chip like">赞</span></td><td>我诬告了别人的 AI</td></tr>
+                <tr><td>10-22 16:26</td><td class="bv">BV1XynB6EEiM</td><td><span class="chip">跳过 · 同题重复</span></td><td>【何同学】能折！但代价呢？iPhone Duo 首发体验</td></tr>
+                <tr><td>10-22 16:26</td><td class="bv">BV1GTnK6sE4Y</td><td><span class="chip">跳过 · 争议</span></td><td>为什么福利这么好，法国依然动荡不断？</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 产物 -->
+        <div id="pane-artifacts" hidden>
+          <div class="split">
+            <div class="card" style="padding:8px">
+              <div class="artifact-list">
+                <button class="artifact-item" aria-selected="true"><span class="name">2026-10-22.md</span><span class="meta">6.9 KB</span></button>
+                <button class="artifact-item"><span class="name">2026-10-21.md</span><span class="meta">—</span></button>
+                <button class="artifact-item"><span class="name">digest/2026-10.md</span><span class="meta">归档</span></button>
+                <button class="artifact-item"><span class="name">headless-overlay.yml</span><span class="meta">诊断</span></button>
+              </div>
+            </div>
+            <div class="card" style="padding:0;border:0;background:transparent">
+              <pre class="doc">## 16:26 值班轮次（登录已恢复）
+
+账号「不吃鱼的豆腐」已登录。内容源：热门 30 条 + 关键词搜索（「AI 实测」「大模型」，按最新排序）。
+
+### BV1xrnz6gEVD
+
+- 标题：折1万次，会坏吗？iPhone Duo深度评测
+- UP：影视飓风 · 播放 313.6 万 · 24:52
+- **档位**：值得看
+- 动作：点赞 + 评论（「用原子力显微镜查指纹为什么难擦…」）+ 发动态分享
+
+总结：本轮挑中 5 条、点赞 5 个、评论 2 条、动态 1 条、跟进回复 0 条。</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- 预览控制 -->
+<div class="demo-bar" role="group" aria-label="预览控制">
+  <span class="demo-tag">设计预览 · 数据取自 10-22 实跑</span>
+  <button data-theme-btn="light" aria-selected="true">浅色</button>
+  <button data-theme-btn="dark" aria-selected="false">深色</button>
+</div>
+
+<script>
+// 主题
+document.querySelectorAll('[data-theme-btn]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = b.dataset.themeBtn;
+    document.documentElement.setAttribute('data-theme', t);
+    document.querySelectorAll('[data-theme-btn]').forEach(function (x) {
+      x.setAttribute('aria-selected', String(x === b));
+    });
+  });
+});
+
+// 子页切换
+document.querySelectorAll('.segmented [data-view]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var view = b.dataset.view;
+    document.querySelectorAll('.segmented [data-view]').forEach(function (x) {
+      x.setAttribute('aria-selected', String(x === b));
+    });
+    document.getElementById('view-dashboard').hidden = view !== 'dashboard';
+    document.getElementById('view-console').hidden = view !== 'console';
+  });
+});
+
+// 操作台 tab
+document.querySelectorAll('.ctabs [data-pane]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var pane = b.dataset.pane;
+    document.querySelectorAll('.ctabs [data-pane]').forEach(function (x) {
+      x.setAttribute('aria-selected', String(x === b));
+    });
+    ['config', 'log', 'seen', 'artifacts'].forEach(function (p) {
+      document.getElementById('pane-' + p).hidden = p !== pane;
+    });
+  });
+});
+
+// 开关
+document.querySelectorAll('.switch').forEach(function (s) {
+  s.addEventListener('click', function () {
+    s.setAttribute('aria-checked', s.getAttribute('aria-checked') === 'true' ? 'false' : 'true');
+  });
+});
+
+// 数字步进
+document.querySelectorAll('.num').forEach(function (n) {
+  var input = n.querySelector('input');
+  n.querySelectorAll('button').forEach(function (btn, i) {
+    btn.addEventListener('click', function () {
+      var v = parseInt(input.value, 10) || 0;
+      input.value = String(Math.max(0, v + (i === 0 ? -1 : 1)));
+    });
+  });
+});
+
+// 追加 chip（占位交互）
+document.querySelectorAll('.tag-add').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var chips = b.parentElement;
+    var tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.innerHTML = '新关键词 <button aria-label="删除">×</button>';
+    chips.insertBefore(tag, b);
+  });
+});
+
+// 预览直达：#dark / #console / #console,log|seen|artifacts（便于截图与分享某个状态）
+(function () {
+  var parts = (location.hash || '').replace('#', '').split(',').filter(Boolean);
+  if (!parts.length) return;
+  function click(sel) { var el = document.querySelector(sel); if (el) el.click(); }
+  if (parts.indexOf('dark') >= 0) click('[data-theme-btn="dark"]');
+  if (parts.indexOf('console') >= 0) {
+    click('[data-view="console"]');
+    var pane = ['log', 'seen', 'artifacts'].filter(function (p) { return parts.indexOf(p) >= 0; })[0] || 'config';
+    click('[data-pane="' + pane + '"]');
+  }
+})();
+</script>
+</body>
+</html>

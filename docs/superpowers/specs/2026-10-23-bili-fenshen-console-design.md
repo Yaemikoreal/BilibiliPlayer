@@ -13,6 +13,8 @@
 
 核心新增能力是 **B站活动生命周期**：把「刷了什么视频 → 是否点赞 → 是否评论 → 评论了什么 → 有人回复吗 → 回了什么 → 我又回了什么」呈现为一条连贯的活动线，而不是散落在日报、判重表、日志三处的碎片。
 
+**设计预览**（静态 HTML，仅用于确认观感，不是实现产物）：`docs/demo/bili-fenshen-console.html`，截图见 `docs/demo/shots/`。预览里的颜色、字体栈、圆角、边框细度全部取自宿主真实定义（`packages/client/ui-theme/src/styles/design-platform.css` 与 `base.css`：`body{…}` 为浅色、`body[data-ds-dark-theme]{…}` 为深色），不是估算值。打开方式：浏览器直接打开该文件，或用 `#console` / `#dark` / `#console,seen` 直达某个状态。
+
 ## 2. 落点：槽位与容器
 
 DSH 的左侧栏是 `sidebar.panellist`（list，注册项 `id/order/label`），每个条目 id 对应 `main`（keyed by sidebar entry id）中同 key 的面板。现状占用：
