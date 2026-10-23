@@ -13,11 +13,14 @@ writeFileSync(join(home, 'out', '2026-10-23.md'), '## 测试日报\n')
 writeFileSync(join(home, 'digest', '2026-10.md'), '# 归档\n')
 writeFileSync(join(home, 'seen.md'), '2026-10-23 16:26 · BV1xrnz6gEVD · 赞过+评论过 · 折1万次\n')
 writeFileSync(join(home, 'duty.log'), '[2026-10-23T01:00:00.000Z] host 已激活\n推理原文一行\n')
-// 账本 fixture（/activity 数据源）
+// 账本 fixture（/activity + 今日配额计数的数据源）：用相对时间，保证「本地今天」判定永远成立
+const H = 3600_000
+const isoAgo = (h) => new Date(Date.now() - h * H).toISOString()
 writeFileSync(join(home, 'ledger.jsonl'), [
-  JSON.stringify({ t: '2026-10-23T00:26:11Z', round: 'r1', type: 'view', bvid: 'BV1', title: 'A', grade: 'worth', source: 'hot' }),
-  JSON.stringify({ t: '2026-10-23T00:27:00Z', round: 'r1', type: 'comment', bvid: 'BV1', text: 'c', rpid: 1 }),
-  JSON.stringify({ t: '2026-10-23T01:00:00Z', round: 'r1', type: 'reply-in', bvid: 'BV1', parent: 1, rpid: 2, from: '张三', text: 'hi', notifId: 1 }),
+  JSON.stringify({ t: isoAgo(2), round: 'r1', type: 'view', bvid: 'BV1', title: 'A', grade: 'worth', source: 'hot' }),
+  JSON.stringify({ t: isoAgo(2) , round: 'r1', type: 'comment', bvid: 'BV1', text: 'c', rpid: 1 }),
+  JSON.stringify({ t: isoAgo(1.5), round: 'r1', type: 'reply-in', bvid: 'BV1', parent: 1, rpid: 2, from: '张三', text: 'hi', notifId: 1 }),
+  JSON.stringify({ t: isoAgo(9 * 24), round: 'old', type: 'view', bvid: 'BVold', title: '九天前', source: 'hot' }),
   '',
 ].join('\n'))
 
@@ -59,6 +62,10 @@ const ov = await call('GET', '/api/bili-fenshen/overview')
 check('GET /overview 200', ov.status === 200 && ov.json?.ok === true, { status: ov.status })
 check('/overview 形状（duty/quota/round/health）', !!(ov.json?.duty && ov.json?.quota && ov.json?.round && ov.json?.health), ov.json)
 check('/overview home 指向临时目录', ov.json?.home === home, ov.json?.home)
+// ⭐ 今日配额按账本计数：fixture 今天 1 view + 1 comment（9 天前的 view 不计）
+check('/overview 配额按账本计数（picked=1 comments=1 likes=0 dynamics=0）',
+  ov.json?.quota?.picked === 1 && ov.json?.quota?.comments === 1 && ov.json?.quota?.likes === 0 && ov.json?.quota?.dynamics === 0,
+  ov.json?.quota)
 
 const act = await call('GET', '/api/bili-fenshen/activity')
 check('GET /activity 200 且 days[0] 含 BV1', act.status === 200 && act.json?.days?.[0]?.rounds?.[0]?.items?.some((x) => x.bvid === 'BV1'), act.json)

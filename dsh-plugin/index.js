@@ -28,7 +28,7 @@ import { createApiHandler } from './lib/api.js'
 import { effectiveConfig, writeOverride } from './lib/config.js'
 import { fetchAccount } from './lib/account.js'
 import { fetchReplyNotifs, toReplyIn } from './lib/replies.js'
-import { toActivities } from './lib/activity.js'
+import { toActivities, dayKeyOf } from './lib/activity.js'
 
 const require = createRequire(import.meta.url)
 const pluginDir = dirname(fileURLToPath(import.meta.url))
@@ -229,19 +229,25 @@ const rotateLogIfBig = () => {
 // ⭐ 每次都重读覆盖层 ⇒ 操作台保存后，调度器与下一轮值班立即用新值（无需重启）
 const effCfg = () => effectiveConfig(cfgSnapshot || {}, CONFIG_FILE).values
 
-/* ───────────────────────── 今日配额账本（报告是事实来源） ───────────────────────── */
-
-const countToday = (marker) => {
+/* ───────────────────────── 今日配额（账本是唯一事实来源，设计文档 §4.1） ─────────────────────────
+ * 旧版按报告正则计数有两处硬伤：`^### BV` 无 m 标志只匹配文件起点（永远数 0）；
+ * 「评论：已发 / 赞过 / 动态：已发」等标记与 Agent 实际报告格式（「动作：点赞；评论（rpid …）」）不符。
+ * 全部废弃 —— 改按账本事件按本地日计数：view=挑中、comment=评论、like=点赞、dynamic=动态。
+ */
+const quotaFromLedger = () => {
+  const day = dayKey()
+  const acc = { picked: 0, comments: 0, likes: 0, dynamics: 0 }
   try {
-    const f = join(OUT_DIR, `${dayKey()}.md`)
-    if (!existsSync(f)) return 0
-    return (readFileSync(f, 'utf8').match(new RegExp(marker, 'g')) || []).length
-  } catch { return 0 }
+    for (const e of readEvents(LEDGER_FILE)) {
+      if (dayKeyOf(e.t) !== day) continue
+      if (e.type === 'view') acc.picked++
+      else if (e.type === 'comment') acc.comments++
+      else if (e.type === 'like') acc.likes++
+      else if (e.type === 'dynamic') acc.dynamics++
+    }
+  } catch { /* 账本读不到 ⇒ 全 0，不拖垮调用方 */ }
+  return acc
 }
-const countPickedToday = () => countToday('^### BV')
-const countCommentsToday = () => countToday('评论：(\\[?已发|发出|rpid)')
-const countLikesToday = () => countToday('赞过')
-const countDynamicsToday = () => countToday('动态：(\\[?已发|发出)')
 
 const WINDOWS = {
   noon: { start: 12 * 60, end: 14 * 60 },
@@ -483,7 +489,8 @@ const buildDutyPrompt = (cfg, roundId) => {
     ? `\n\n===== 小号人设${personaNote}（**按这个来说话**）=====\n${persona.slice(0, 6000)}\n===== 人设结束 =====\n`
     : '\n\n⭐ 本轮没有拿到人设 ⇒ 按中性、礼貌、有点好奇心的普通人说话，别编人格。\n'
 
-  const picked = countPickedToday()
+  const q = quotaFromLedger()
+  const picked = q.picked
   const quota = Math.max(0, Number(cfg?.perDay) || 0)
   const left = Math.max(0, quota - picked)
   const kws = Array.isArray(cfg?.keywords) ? cfg.keywords.filter(Boolean) : []
@@ -503,9 +510,9 @@ const buildDutyPrompt = (cfg, roundId) => {
     + `- 记账：本轮 round id = ${roundId}（账本 ${LEDGER_FILE} 事件的 round 字段用这个值）；账本绝对路径 = ${LEDGER_FILE}。\n`
     + `- 报告：${report}\n`
     + `- 配额（全天总量）：挑中 ${quota} 条（今天已挑 ${picked} ⇒ 本轮最多再挑 ${left} 条）；`
-    + `评论 ${Math.max(0, Number(cfg?.commentsPerDay) || 0)} 条/天（今天已 ${countCommentsToday()}），本轮最多 ${Math.max(0, Number(cfg?.commentsPerRound) || 0)} 条；`
-    + `点赞 ${Math.max(0, Number(cfg?.likesPerDay) || 0)} 个/天（今天已 ${countLikesToday()}）；`
-    + `动态 ${Math.max(0, Number(cfg?.dynamicsPerDay) || 0)} 条/天（今天已 ${countDynamicsToday()}）；`
+    + `评论 ${Math.max(0, Number(cfg?.commentsPerDay) || 0)} 条/天（今天已 ${q.comments}），本轮最多 ${Math.max(0, Number(cfg?.commentsPerRound) || 0)} 条；`
+    + `点赞 ${Math.max(0, Number(cfg?.likesPerDay) || 0)} 个/天（今天已 ${q.likes}）；`
+    + `动态 ${Math.max(0, Number(cfg?.dynamicsPerDay) || 0)} 条/天（今天已 ${q.dynamics}）；`
     + `跟进回复本轮最多 ${Math.max(0, Number(cfg?.repliesPerRound) || 0)} 条。\n`
     + `- 内容源：热门 + ${kws.length ? `关键词搜索（${kws.join('、')}）` : '章程默认关键词'}`
     + `${uids.length ? ` + 订阅 UP 主（UID：${uids.join('、')}，用 bili_user_videos 逐个拉最新投稿）` : ''}。\n`
@@ -677,7 +684,7 @@ const tick = () => {
     const now = new Date()
     const st = readJson(STATE_FILE, {})
     const today = dayKey(now)
-    if (countPickedToday() >= Math.max(0, Number(cfg?.perDay) || 0)) return
+    if (quotaFromLedger().picked >= Math.max(0, Number(cfg?.perDay) || 0)) return
     for (const k of ['noon', 'night']) {
       if (!cfg?.[k]) continue
       if (!inWindow(now, WINDOWS[k])) continue
@@ -714,6 +721,7 @@ const buildOverview = () => {
   const cfg = effCfg()
   const st = readJson(STATE_FILE, {})
   const cli = dshCliCached(cfg)
+  const q = quotaFromLedger()
   return {
     account: null,                       // 由 /account 单独提供（需要网络，不阻塞 overview）
     duty: {
@@ -722,10 +730,10 @@ const buildOverview = () => {
       nextWindowLabel: nextWindowLabel(),
     },
     quota: {
-      picked: countPickedToday(),
-      comments: countCommentsToday(),
-      likes: countLikesToday(),
-      dynamics: countDynamicsToday(),
+      picked: q.picked,
+      comments: q.comments,
+      likes: q.likes,
+      dynamics: q.dynamics,
       limits: {
         perDay: cfg.perDay, commentsPerDay: cfg.commentsPerDay,
         likesPerDay: cfg.likesPerDay, dynamicsPerDay: cfg.dynamicsPerDay,
@@ -798,11 +806,12 @@ export function apply(ctx, config) {
           const cfg = effCfg()
           const cli = dshCliCached(cfg)
           const st = readJson(STATE_FILE, {})
+          const q = quotaFromLedger()
           return {
             home: HOME,
             autoDuty: !!cfg?.autoDuty,
             perDay: cfg?.perDay,
-            today: { picked: countPickedToday(), comments: countCommentsToday(), likes: countLikesToday(), dynamics: countDynamicsToday() },
+            today: { picked: q.picked, comments: q.comments, likes: q.likes, dynamics: q.dynamics },
             dutyCli: cli || '（未找到，可配置 dshBin）',
             running,
             lastRunAt: st.lastRunAt || '',
@@ -854,11 +863,12 @@ export function apply(ctx, config) {
           const cfg = effCfg()
           const st = readJson(STATE_FILE, {})
           const cli = dshCliCached(cfg)
+          const q = quotaFromLedger()
           return sendJson(res, 200, {
             ok: true, home: HOME, running,
             autoDuty: !!cfg?.autoDuty,
             quota: { perDay: cfg?.perDay, comments: cfg?.commentsPerDay, likes: cfg?.likesPerDay, dynamics: cfg?.dynamicsPerDay, replies: cfg?.repliesPerRound },
-            today: { picked: countPickedToday(), comments: countCommentsToday(), likes: countLikesToday(), dynamics: countDynamicsToday() },
+            today: { picked: q.picked, comments: q.comments, likes: q.likes, dynamics: q.dynamics },
             lastRunAt: st.lastRunAt || '', lastWhy: st.lastWhy || '',
             dutyCli: cli || '',
             reportToday: join(OUT_DIR, dayKey() + '.md'),
