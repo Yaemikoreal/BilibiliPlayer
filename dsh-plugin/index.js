@@ -326,6 +326,7 @@ let cfgSnapshot = {}
 let currentChild = null
 let currentRoundId = null
 let currentRoundAt = 0
+let routeRegistered = false   // prefix 路由同进程一次性守卫（§12.2）
 
 const refreshCfg = () => {
   try { cfgSnapshot = applyCtx?.config || cfgSnapshot } catch { /* 快照过期就过期 */ }
@@ -925,14 +926,17 @@ export function apply(ctx, config) {
         return sendJson(res, 404, { ok: false, error: `unknown ${req.method} ${path}` })
       }
 
-      // ⭐ 路由工厂接管新增端点；旧端点先认领、工厂未命中再走 legacyHandle、最终 404 由 legacy 兜底。
-      //    （工厂自身对未知路由也回 404——那是对「直连工厂」的契约；组合时按下面方式分发，避免吃掉旧端点。）
-      const FACTORY_ROUTES = new Set([
-        'GET /overview', 'GET /activity', 'GET /account', 'GET /config', 'GET /log', 'GET /seen', 'GET /reports',
-        'POST /duty', 'POST /run', 'POST /stop',
+      // ⭐ 路由工厂接管新增端点；工厂路径先认领、未命中再走 legacyHandle、最终 404 由 legacy 兜底。
+      //    （工厂自身对未知路由也回 404——那是对「直连工厂」的契约；组合时按完整路径分发，避免吃掉旧端点。）
+      const FACTORY_PATHS = new Set([
+        '/api/bili-fenshen/overview', '/api/bili-fenshen/activity', '/api/bili-fenshen/account',
+        '/api/bili-fenshen/config', '/api/bili-fenshen/log', '/api/bili-fenshen/seen', '/api/bili-fenshen/reports',
+        '/api/bili-fenshen/duty', '/api/bili-fenshen/run', '/api/bili-fenshen/stop',
       ])
       const mountRoutes = () => {
         if (!web?.register) { log('webServer 不可用：HTTP 路由未挂'); return () => {} }
+        if (routeRegistered) { log('webServer 路由已注册过，跳过重复注册'); return () => {} }
+        routeRegistered = true
         const api = createApiHandler({
           home: HOME,
           ledgerFile: LEDGER_FILE,
@@ -959,7 +963,7 @@ export function apply(ctx, config) {
           handler: async (req, res) => {
             try {
               const url = new URL(req.url, 'http://127.0.0.1')
-              if (FACTORY_ROUTES.has(`${req.method} ${url.pathname}`)) {
+              if (FACTORY_PATHS.has(url.pathname)) {
                 await api(req, res)                                   // 新端点
                 if (res.writableEnded) return
               }
@@ -997,6 +1001,7 @@ export function apply(ctx, config) {
     for (const d of disposers.reverse()) {
       try { d?.() } catch { /* 卸载兜底 */ }
     }
+    routeRegistered = false   // 允许下次激活重新注册路由
     applyCtx = null
   }
 }
