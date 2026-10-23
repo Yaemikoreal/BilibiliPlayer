@@ -1,6 +1,6 @@
 // 端到端 fixture 验证（临时脚本）：用与 index.js 相同的依赖装配 createApiHandler，
 // 对临时家目录灌账本/判重表/日志 fixture，验证 /activity /seen /log /reports 数据通路。
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApiHandler } from '../lib/api.js'
@@ -120,5 +120,6 @@ const c1 = await call('POST', '/api/bili-fenshen/config', { perDay: 7 })
 const c2 = await call('GET', '/api/bili-fenshen/config')
 check('/config 写入覆盖层并生效', c2.json.values.perDay === 7 && c2.json.sources.perDay === 'override', c2.json.values)
 
-console.log(bad === 0 ? `\nE2E FIXTURE ALL GREEN（家目录 ${home}，验证后可删）` : `\n${bad} 项失败`)
+console.log(bad === 0 ? `\nE2E FIXTURE ALL GREEN` : `\n${bad} 项失败`)
+try { rmSync(home, { recursive: true, force: true }) } catch { /* 清理失败不掩盖结果 */ }
 process.exit(bad === 0 ? 0 : 1)

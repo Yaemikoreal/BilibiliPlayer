@@ -122,4 +122,6 @@ check('重新激活后 /overview 仍 200', ov2.status === 200, { status: ov2.sta
 dispose2()
 
 console.log(bad === 0 ? '\nINDEX INTEGRATION ALL GREEN' : `\n${bad} 项失败`)
+const { rmSync } = await import('node:fs')
+try { rmSync(home, { recursive: true, force: true }) } catch { /* 清理失败不掩盖结果 */ }
 process.exit(bad === 0 ? 0 : 1)
