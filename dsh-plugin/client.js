@@ -499,7 +499,11 @@ window.__ModuleLoader__.load({
     const useOverview = () => usePoll(React.useCallback(() => apiGet('/overview'), []), 3000)
     // 活动流：运行中 3s、空闲 15s（§8 轮询节奏）
     const useActivity = (running) => usePoll(React.useCallback(() => apiGet('/activity'), []), running ? 3000 : 15000)
-    const useAccount = () => usePoll(React.useCallback(() => apiGet('/account'), []), 60000)
+    // /account 响应是 { ok, account } —— 解包成账号对象，未登录降级 { loggedIn:false }
+    const useAccount = () => usePoll(React.useCallback(async () => {
+      const r = await apiGet('/account')
+      return r?.account || { loggedIn: false }
+    }, []), 60000)
 
     /* ═══════════════════════ §3 基础组件 ═══════════════════════ */
 
@@ -1096,7 +1100,6 @@ window.__ModuleLoader__.load({
       }, [ov, act, acct])
       const refreshAll = () => { ov.refresh(); act.refresh(); acct.refresh() }
       const account = acct.data
-      const credOk = !!ov.data?.health?.cred
       return h('div', { className: 'bf-console' },
         h('div', { className: 'bf-page' },
           h('header', { className: 'bf-page-head' },
@@ -1105,8 +1108,8 @@ window.__ModuleLoader__.load({
               h('p', { className: 'bf-page-sub' }, T.subtitle),
             ),
             h('div', { className: 'bf-head-tools' },
-              h(Pill, { tone: account?.loggedIn ? 'ok' : credOk ? 'warn' : 'warn' },
-                account?.loggedIn ? '登录有效' : account === null ? '检查登录…' : credOk ? '凭证待核' : '未登录'),
+              h(Pill, { tone: account?.loggedIn ? 'ok' : 'warn' },
+                account === null ? '检查登录…' : account?.loggedIn ? '登录有效' : '未登录'),
               h(Btn, { small: true, variant: 'ghost', onClick: refreshAll }, T.refresh),
             ),
           ),
