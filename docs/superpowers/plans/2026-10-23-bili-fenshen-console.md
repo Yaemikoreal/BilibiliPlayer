@@ -831,12 +831,12 @@ test('toReplyIn 对缺字段的通知返回 null（不猜）', () => {
 
 test('normalizeAccount 归一 nav + relation/stat', () => {
   const a = normalizeAccount(
-    { code: 0, data: { isLogin: true, uname: '不吃鱼的豆腐', mid: 312299788, face: 'https://f', level_info: { current_level: 6 }, money: 1447.5, vipStatus: 0 } },
+    { code: 0, data: { isLogin: true, uname: '蓝鱼小号', mid: 10000001, face: 'https://f', level_info: { current_level: 6 }, money: 1447.5, vipStatus: 0 } },
     { code: 0, data: { follower: 12, following: 34 } },
   )
   assert.equal(a.loggedIn, true)
-  assert.equal(a.uname, '不吃鱼的豆腐')
-  assert.equal(a.mid, '312299788')
+  assert.equal(a.uname, '蓝鱼小号')
+  assert.equal(a.mid, '10000001')
   assert.equal(a.level, 6)
   assert.equal(a.coins, 1447.5)
   assert.equal(a.fans, 12)

@@ -54,10 +54,10 @@ const FIX = {
       }],
     }],
   },
-  '/api/bili-fenshen/account': { ok: true, account: { loggedIn: true, uname: '不吃鱼的豆腐', mid: '312299788', face: '', level: 6, coins: 1447.5, fans: 12, vip: false } },
+  '/api/bili-fenshen/account': { ok: true, account: { loggedIn: true, uname: '蓝鱼小号', mid: '10000001', face: '', level: 6, coins: 1447.5, fans: 12, vip: false } },
   '/api/bili-fenshen/config': {
     ok: true,
-    values: { autoDuty: true, noon: true, night: true, perDay: 5, commentsPerDay: 5, commentsPerRound: 2, likesPerDay: 10, dynamicsPerDay: 1, repliesPerRound: 2, keywords: ['AI 实测'], followUids: [312299788], personaPrompt: '', reportLevel: 'full', dshBin: '', headlessProfile: 'headless', dutyTools: [] },
+    values: { autoDuty: true, noon: true, night: true, perDay: 5, commentsPerDay: 5, commentsPerRound: 2, likesPerDay: 10, dynamicsPerDay: 1, repliesPerRound: 2, keywords: ['AI 实测'], followUids: [10000001], personaPrompt: '', reportLevel: 'full', dshBin: '', headlessProfile: 'headless', dutyTools: [] },
     sources: { perDay: 'patch' },
     defaults: { autoDuty: false, noon: true, night: true, perDay: 5, commentsPerDay: 5, commentsPerRound: 2, likesPerDay: 10, dynamicsPerDay: 1, repliesPerRound: 2, keywords: [], followUids: [], personaPrompt: '', reportLevel: 'full', dshBin: '', headlessProfile: 'headless', dutyTools: [] },
   },

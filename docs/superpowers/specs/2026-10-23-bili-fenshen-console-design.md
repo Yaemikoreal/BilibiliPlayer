@@ -279,8 +279,8 @@ type Activity = {
 ├ 子页切换 ───────────────────────────────────────────────┤
 │ [看板] 操作台                                            │
 ├ 账号条 ─────────────────────────────────────────────────┤
-│ (头像) 不吃鱼的豆腐 LV6 ●登录有效        [B站主页][重新扫码]│
-│        UID 312299788 · 硬币 1447.5 · 粉丝 12 · 大会员未开通│
+│ (头像) 蓝鱼小号 LV6 ●登录有效        [B站主页][重新扫码]│
+│        UID 10000001 · 硬币 1447.5 · 粉丝 12 · 大会员未开通│
 ├ 值班条 ─────────────────────────────────────────────────┤
 │ [开关]自动值班 已开  下一窗 12:00（2h54m）本轮 运行中 1m12s│
 │                                            [中止][跑一轮] │
@@ -367,7 +367,7 @@ type Activity = {
 
 ```json
 {
-  "account": { "loggedIn": true, "uname": "不吃鱼的豆腐", "mid": "312299788", "level": 6, "coins": 1447.5, "fans": 12, "face": "https://…" },
+  "account": { "loggedIn": true, "uname": "蓝鱼小号", "mid": "10000001", "level": 6, "coins": 1447.5, "fans": 12, "face": "https://…" },
   "duty": { "autoDuty": true, "windows": { "noon": true, "night": true }, "nextWindowAt": "2026-10-23T12:00:00+08:00" },
   "quota": { "picked": 3, "comments": 2, "likes": 6, "dynamics": 0,
              "limits": { "perDay": 5, "comments": 5, "likes": 10, "dynamics": 1, "repliesPerRound": 2 } },
