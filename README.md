@@ -125,9 +125,20 @@ pip install -r requirements.txt
 
 [dsh-plugin/](./dsh-plugin/) 是 DeepSeek Harness 插件：把上面 28 个工具挂载给 DSH 的 Agent，再配一套**值班章程**，让它按配额自动运营一个小号——刷到 → 看 → 赞 → 评 → 被回复 → 我回，全程可审计。
 
-| 看板（浅色） | 看板（深色） | 操作台 · 配置 |
-|:---:|:---:|:---:|
-| <img src="docs/demo/shots/01-dashboard-light.png" alt="B站分身看板（浅色）：账号、值班状态、今日配额与每条视频的活动生命周期"> | <img src="docs/demo/shots/02-dashboard-dark.png" alt="B站分身看板（深色）"> | <img src="docs/demo/shots/03-console-config.png" alt="B站分身操作台：值班节奏、配额、内容源、人设"> |
+<p align="center"><img src="docs/demo/shots/01-dashboard-light.png" alt="B站分身看板（浅色）：账号、值班状态、今日配额与每条视频的活动生命周期" width="100%"></p>
+
+<details>
+<summary><b>更多界面截图</b>：深色看板 / 操作台 / 判重表 / 产物</summary>
+
+| 看板（深色） | 操作台 · 配置 |
+|:---:|:---:|
+| <img src="docs/demo/shots/02-dashboard-dark.png" alt="B站分身看板（深色）"> | <img src="docs/demo/shots/03-console-config.png" alt="B站分身操作台：值班节奏、配额、内容源、人设"> |
+
+| 判重表 | 产物 |
+|:---:|:---:|
+| <img src="docs/demo/shots/04-console-seen.png" alt="B站分身判重表：已处理过哪些视频"> | <img src="docs/demo/shots/05-console-artifacts.png" alt="B站分身产物：每轮报告与运行覆盖配置"> |
+
+</details>
 
 <sub>控制台界面预览（数据取自真实值班轮）。看板看账号 / 值班 / 配额 / 活动生命周期，操作台调配额、内容源、人设，也看日志、判重表与产物。</sub>
 
