@@ -1,6 +1,6 @@
 {
     "name":  "dsh-bili-fenshen",
-    "version":  "0.4.0",
+    "version":  "0.5.0",
     "description":  "B站分身：让 Agent 稳定、高效地运营你的B站小号——混迹视频与评论区",
     "license":  "MIT",
     "private":  true,
@@ -20,7 +20,7 @@
                   "client.js",
                   "lib/*.js",
                   "cordis.patch.yml",
-                  "prompts/duty.md",
+                  "prompts/*.md",
                   "locale/*.json",
                   "icon.svg"
               ],

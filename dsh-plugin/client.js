@@ -5,10 +5,10 @@
  * 结构（设计文档 §10）：
  *   §0 常量（PANEL_ID / 文案表 T / 轮询间隔）
  *   §1 CSS（宿主 --dsw-* token 映射为局部变量 + demo 组件样式，bf- 前缀）
- *   §2 数据层（apiGet/apiPost/usePoll：3s/15s 可变间隔 + visibility 暂停）
- *   §3 基础组件（Btn/Switch/Num/Chip/Pill/Card/Tabs/Group/Row/ChipsInput/Banner/EmptyState/LoginModal）
- *   §4 看板（AccountBar/DutyBar/QuotaTiles/ActivityFeed/ActivityCard/StageRail/ReplyThread）
- *   §5 操作台（ConfigPane/LogPane/SeenPane/ArtifactsPane）
+ *   §2 数据层（apiGet/apiPost/usePoll + useModels/useLive/useDiagnose：SSE 优先、降级轮询、visibility 暂停）
+ *   §3 基础组件（Btn/Switch/Num/Chip/Pill/Card/Tabs/Group/Row/ChipsInput/Select/Banner/EmptyState/DiagnosePanel/LoginModal）
+ *   §4 看板（AccountBar/DutyBar/LiveCard/QuotaTiles/ActivityFeed/ActivityCard/StageRail/ReplyThread）
+ *   §5 操作台（LivePane/ConfigPane/LogPane/SeenPane/ArtifactsPane）
  *   §6 页面（ConsolePage：标题行 + 子页切换；SettingsEntry：设置页瘦身版）
  *   §7 注册（apply → panellist 图标 + main 页面 + settings.section）
  *
@@ -37,10 +37,16 @@ window.__ModuleLoader__.load({
       stop: '中止',
       login: '扫码登录',
       reopen: '重新扫码',
+      live: '实时',
     }
 
     const SRC_LABEL = { hot: '热门', search: '搜索', follow: '订阅' }
     const GRADE_TEXT = { worth: '值得看', ok: '可以看', meh: '不值当' }
+
+    // 实时事件：本地最多留 300 条（§1.5）；kind → 中文短标签（配色走 CSS）
+    const LIVE_MAX_EVENTS = 300
+    const LIVE_KIND_CN = { host: '宿主', tool: '工具', reasoning: '推理', error: '错误', text: '输出', state: '状态' }
+    const DIAG_ICON = { pass: '✓', warn: '!', fail: '✗' }
 
     /* ═══════════════════════ §1 CSS ═══════════════════════
      * token 全部映射自宿主真实定义（--dsw-*）：
@@ -82,6 +88,8 @@ window.__ModuleLoader__.load({
         --bubble:color-mix(in srgb, var(--business) 10%, var(--bg-layer-1));
         --bili-pink:#fb7299;
         --bili-blue:#23ade5;
+        --live-tool:color-mix(in srgb, var(--bili-blue) 76%, var(--label-primary));
+        --live-host:color-mix(in srgb, var(--bili-pink) 52%, var(--bili-blue));
         --r-xs:4px; --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:20px;
         --font-text:inherit;
         --font-code:"SF Mono","JetBrains Mono","Fira Code",Consolas,"Liberation Mono",Menlo,Courier,monospace;
@@ -397,6 +405,63 @@ window.__ModuleLoader__.load({
         color:var(--label-secondary);max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;
       }
 
+      /* ───────── select（模型配置下拉） ───────── */
+      .bf-select{
+        height:30px;min-width:180px;max-width:280px;padding:0 8px;border-radius:var(--r-sm);
+        border:.5px solid var(--border-l4);background:var(--input);color:var(--label-primary);
+        font-size:13px;line-height:20px;outline:none;cursor:pointer;
+      }
+      .bf-select:focus{border-color:var(--label-caption)}
+      .bf-select:disabled{opacity:.5;cursor:not-allowed}
+      .bf-select option{background:var(--bg-layer-1);color:var(--label-primary)}
+
+      /* ───────── 一键诊断 ───────── */
+      .bf-diag{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+      .bf-diag-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+      .bf-diag-summary{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;line-height:18px;color:var(--label-secondary)}
+      .bf-diag-stat{font-family:var(--font-code);font-size:12px;font-variant-numeric:tabular-nums}
+      .bf-diag-stat.pass{color:var(--success)}
+      .bf-diag-stat.warn{color:var(--warn)}
+      .bf-diag-stat.fail{color:var(--error)}
+      .bf-diag-head .bf-btn{margin-left:auto}
+      .bf-diag-list{display:flex;flex-direction:column;border-top:.5px solid var(--border-l1)}
+      .bf-diag-item{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:.5px solid var(--border-l1)}
+      .bf-diag-item:last-child{border-bottom:0}
+      .bf-diag-icon{flex:0 0 14px;text-align:center;font-family:var(--font-code);font-size:12px;line-height:18px;font-weight:600}
+      .bf-diag-item.pass .bf-diag-icon{color:var(--success)}
+      .bf-diag-item.warn .bf-diag-icon{color:var(--warn)}
+      .bf-diag-item.fail .bf-diag-icon{color:var(--error)}
+      .bf-diag-label{flex:0 0 118px;font-size:12px;line-height:18px;color:var(--label-primary)}
+      .bf-diag-body{flex:1;min-width:0}
+      .bf-diag-detail{font-size:12px;line-height:18px;color:var(--label-secondary);word-break:break-word}
+      .bf-diag-fix{font-size:11px;line-height:16px;color:var(--label-caption);margin-top:2px}
+      .bf-diag-empty{font-size:12px;line-height:18px;color:var(--label-tertiary)}
+
+      /* ───────── 实时运行 ───────── */
+      .bf-live-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+      .bf-live-clock{font-family:var(--font-code);font-size:13px;line-height:20px;color:var(--label-primary);font-variant-numeric:tabular-nums}
+      .bf-live-meta{font-size:12px;line-height:18px;color:var(--label-tertiary)}
+      .bf-live-actions{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+      .bf-live-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0 10px}
+      .bf-live-body{
+        max-height:440px;overflow:auto;border:.5px solid var(--border-l1);border-radius:var(--r-sm);
+        background:var(--bg-module-platform);padding:8px 10px;
+        font-family:var(--font-code);font-size:11px;line-height:18px;
+      }
+      .bf-live-body.mini{max-height:none;overflow:hidden;margin-top:10px}
+      .bf-live-line{display:flex;gap:8px;padding:1px 0;word-break:break-word}
+      .bf-live-t{flex:0 0 54px;color:var(--label-caption);font-variant-numeric:tabular-nums}
+      .bf-live-kind{flex:0 0 auto;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--label-tertiary)}
+      .bf-live-text{flex:1;min-width:0;color:var(--label-secondary);white-space:pre-wrap}
+      .bf-live-line.tool .bf-live-kind,.bf-live-line.tool .bf-live-text{color:var(--live-tool)}
+      .bf-live-line.reasoning .bf-live-text{color:var(--label-tertiary)}
+      .bf-live-line.error .bf-live-kind,.bf-live-line.error .bf-live-text{color:var(--error)}
+      .bf-live-line.host .bf-live-text{color:var(--live-host)}
+      .bf-live-line.state .bf-live-text{color:var(--warn)}
+      .bf-live-empty{padding:30px 14px;text-align:center;color:var(--label-tertiary);font-family:var(--font-text);font-size:13px;line-height:20px}
+      .bf-live-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:11px;line-height:16px;color:var(--label-caption)}
+      .bf-live-err{color:var(--warn)}
+
       /* ───────── table（判重表） ───────── */
       table.bf-grid{width:100%;border-collapse:collapse;font-size:12px;line-height:19px}
       table.bf-grid th{
@@ -519,6 +584,232 @@ window.__ModuleLoader__.load({
       return r?.account || { loggedIn: false }
     }, []), 60000)
 
+    /* ─── 实时运行（§1.5）：SSE 优先，EventSource 不可用或断线时降级轮询 ─── */
+
+    const LIVE_EMPTY = {
+      running: false,
+      roundId: null,
+      startedAt: null,
+      elapsedMs: 0,
+      why: '',
+      phase: { key: 'think', label: '思考' },
+      stats: { events: 0, tools: {}, actions: { like: 0, comment: 0, dynamic: 0, reply: 0 }, errors: 0 },
+      quota: null,
+      events: [],
+      lastCode: null,
+      lastDurationMs: null,
+    }
+
+    const hasEventSource = () => typeof EventSource !== 'undefined'
+    const pageHidden = () => typeof document !== 'undefined' && document.hidden === true
+
+    /**
+     * useLive：优先 EventSource('/api/bili-fenshen/live/stream')；
+     *   - type:'snapshot' 覆盖 meta（含 events 快照），type:'event' 追加 frame；
+     *   - EventSource 不存在或 onerror → 降级 GET /live?after=<cursor>（运行中 1000ms / 空闲 5000ms）；
+     *   - 本地按 seq 去重、最多 300 条；页面隐藏暂停轮询；卸载 close / clearTimeout。
+     * 返回 { data, mode:'sse'|'poll', error, refresh }（refresh 供跑一轮后立刻拉一次）。
+     */
+    function useLive() {
+      const sse = hasEventSource()
+      const [state, setState] = React.useState({ data: LIVE_EMPTY, mode: sse ? 'sse' : 'poll', error: '' })
+      const refreshRef = React.useRef(() => {})
+      React.useEffect(() => {
+        let alive = true
+        let mode = sse ? 'sse' : 'poll'
+        let cursor = 0
+        let running = false
+        let roundId = null
+        let meta = { ...LIVE_EMPTY, events: [] }
+        let buf = []
+        let timer = null
+        let es = null
+        let busy = false
+
+        const build = () => ({
+          running: !!meta.running,
+          roundId: meta.roundId ?? null,
+          startedAt: meta.startedAt ?? null,
+          elapsedMs: Number(meta.elapsedMs) || 0,
+          why: meta.why || '',
+          phase: meta.phase || { key: 'think', label: '思考' },
+          stats: meta.stats || LIVE_EMPTY.stats,
+          quota: meta.quota || null,
+          lastCode: meta.lastCode ?? null,
+          lastDurationMs: meta.lastDurationMs ?? null,
+          events: buf.slice(),
+        })
+        const publish = (patch) => { if (alive) setState((prev) => ({ ...prev, ...patch })) }
+        const emit = (patch) => publish({ data: build(), ...(patch || {}) })
+
+        // 按 seq 去重合并（快照和增量帧可能重叠）
+        const mergeFrames = (frames) => {
+          if (!Array.isArray(frames) || !frames.length) return
+          const seen = new Set()
+          for (const e of buf) if (e && e.seq != null) seen.add(e.seq)
+          let added = 0
+          for (const f of frames) {
+            if (!f || typeof f !== 'object') continue
+            if (f.seq != null && seen.has(f.seq)) continue
+            if (f.seq != null) seen.add(f.seq)
+            buf.push(f)
+            added++
+          }
+          if (!added) return
+          buf.sort((a, b) => (Number(a?.seq) || 0) - (Number(b?.seq) || 0))
+          if (buf.length > LIVE_MAX_EVENTS) buf = buf.slice(-LIVE_MAX_EVENTS)
+        }
+
+        // 轮次切换（roundId 变了）→ 清空本地事件与游标，避免 seq 重置后误去重
+        const applyMeta = (raw) => {
+          if (!raw || typeof raw !== 'object') return
+          if (raw.roundId && raw.roundId !== roundId) { buf = []; cursor = 0 }
+          roundId = raw.roundId ?? roundId
+          const { events, ...rest } = raw
+          meta = { ...meta, ...rest }
+          running = !!raw.running
+          if (typeof raw.cursor === 'number') cursor = Math.max(cursor, raw.cursor)
+          mergeFrames(events)
+        }
+
+        const applySnapshot = (snap) => {
+          if (!snap || typeof snap !== 'object') return
+          applyMeta(snap)
+          emit({ error: '' })
+        }
+
+        const stopTimer = () => { if (timer) { clearTimeout(timer); timer = null } }
+
+        const schedulePoll = (delay) => {
+          if (!alive || mode !== 'poll' || timer) return
+          timer = setTimeout(() => { timer = null; pollOnce() }, delay)
+        }
+
+        const pollOnce = async () => {
+          if (!alive || mode !== 'poll' || busy) return
+          if (pageHidden()) return // 页面隐藏：暂停轮询（回前台时 onVis 立即补一次）
+          busy = true
+          try {
+            const raw = await apiGet(`/live?after=${cursor}`)
+            if (!alive) return
+            if (raw && raw.ok) {
+              applyMeta(raw)
+              emit({ error: '' })
+            } else {
+              publish({ error: raw?.error || '实时数据不可用' })
+            }
+          } catch (e) {
+            if (alive) publish({ error: String(e?.message ?? e) })
+          } finally {
+            busy = false
+            if (alive && mode === 'poll') schedulePoll(running ? 1000 : 5000)
+          }
+        }
+
+        const startPoll = () => {
+          mode = 'poll'
+          publish({ mode: 'poll' })
+          stopTimer()
+          pollOnce()
+        }
+
+        const startSse = () => {
+          if (!sse) { startPoll(); return }
+          try { es = new EventSource('/api/bili-fenshen/live/stream') } catch { es = null }
+          if (!es) { startPoll(); return }
+          mode = 'sse'
+          publish({ mode: 'sse' })
+          es.onmessage = (ev) => {
+            if (!alive) return
+            let msg = null
+            try { msg = JSON.parse(ev?.data) } catch { return }
+            if (!msg || typeof msg !== 'object') return
+            if (msg.type === 'snapshot' && msg.snapshot) applySnapshot(msg.snapshot)
+            else if (msg.type === 'event' && msg.frame) {
+              mergeFrames([msg.frame])
+              if (msg.frame.seq != null) cursor = Math.max(cursor, msg.frame.seq)
+              if (msg.frame.kind === 'tool') running = true
+              emit({ error: '' })
+            }
+          }
+          es.onerror = () => {
+            if (!alive) return
+            try { es.close?.() } catch { /* 已断开，忽略 */ }
+            es = null
+            publish({ error: '事件流断开，已降级轮询' })
+            startPoll()
+          }
+        }
+
+        const onVis = () => {
+          if (!alive) return
+          if (pageHidden()) stopTimer()
+          else if (mode === 'poll') { stopTimer(); pollOnce() }
+        }
+        if (typeof document !== 'undefined' && document.addEventListener) {
+          document.addEventListener('visibilitychange', onVis)
+        }
+
+        refreshRef.current = () => {
+          if (!alive) return
+          if (mode === 'poll') { stopTimer(); pollOnce() }
+          // SSE 已实时，无需手动刷新
+        }
+
+        startSse()
+
+        return () => {
+          alive = false
+          stopTimer()
+          if (es) { try { es.close?.() } catch { /* 忽略 */ } es = null }
+          if (typeof document !== 'undefined' && document.removeEventListener) {
+            document.removeEventListener('visibilitychange', onVis)
+          }
+        }
+      }, [sse])
+      const refresh = React.useCallback(() => { try { refreshRef.current?.() } catch { /* 忽略 */ } }, [])
+      return { data: state.data, mode: state.mode, error: state.error, refresh }
+    }
+
+    /** 本地秒表：running 时每秒更新（不依赖服务端刷新）；否则用服务端 elapsedMs */
+    function useElapsed(running, startedAt, fallbackMs) {
+      const [now, setNow] = React.useState(() => Date.now())
+      React.useEffect(() => {
+        if (!running) return undefined
+        setNow(Date.now())
+        const t = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(t)
+      }, [running, startedAt])
+      const fallback = Math.max(0, Number(fallbackMs) || 0)
+      if (!running) return fallback
+      const start = startedAt ? Date.parse(startedAt) : NaN
+      return Number.isFinite(start) ? Math.max(0, now - start) : fallback
+    }
+
+    /** /models：当前生效模型 + provider/model/推理强度目录，60s 轮询 + 手动 refresh */
+    const useModels = () => usePoll(React.useCallback(() => apiGet('/models'), []), 60000)
+
+    /** POST /diagnose 的加载/结果状态（失败保留 error，成功覆盖 report） */
+    function useDiagnose() {
+      const [report, setReport] = React.useState(null)
+      const [error, setError] = React.useState('')
+      const [loading, setLoading] = React.useState(false)
+      const run = React.useCallback(async () => {
+        setLoading(true)
+        setError('')
+        try {
+          const r = await apiPost('/diagnose')
+          if (r && Array.isArray(r.items)) setReport(r)
+          else { setReport(null); setError(r?.error || '返回格式不对') }
+        } catch (e) {
+          setError(String(e?.message ?? e))
+        } finally {
+          setLoading(false)
+        }
+      }, [])
+      return { report, loading, error, run }
+    }
+
     /* ═══════════════════════ §3 基础组件 ═══════════════════════ */
 
     const Btn = ({ variant = 'default', small, children, ...rest }) =>
@@ -545,6 +836,61 @@ window.__ModuleLoader__.load({
       h('span', { className: 'bf-pill' }, h('i', { className: `bf-dot ${tone}`, 'aria-hidden': 'true' }), children)
     const Card = ({ children, className = '', style }) =>
       h('div', { className: `bf-card ${className}`.trimEnd(), style }, children)
+
+    /** 原生下拉（模型配置用），token 配色；options: [[value, label], ...] */
+    function Select({ value, onChange, options = [], disabled, label, width }) {
+      return h('select', {
+        className: 'bf-select',
+        value: value ?? '',
+        disabled: !!disabled,
+        'aria-label': label,
+        style: width ? { width } : undefined,
+        onChange: (e) => onChange(e.target.value),
+      }, options.map(([v, text]) => h('option', { key: v, value: v }, text)))
+    }
+
+    /** 一键诊断面板（§1.5）：汇总行 + 逐项状态/说明/修复提示；compact 只列 warn/fail */
+    function DiagnosePanel({ report, loading, onRun, compact = false, error = '' }) {
+      const items = report?.items || []
+      const s = report?.summary || {}
+      const shown = compact ? items.filter((it) => it.status !== 'pass') : items
+      const summary = report
+        ? h('span', { className: 'bf-diag-summary' },
+            h('span', { className: 'bf-diag-stat pass' }, `${DIAG_ICON.pass}${s.pass ?? 0}`),
+            h('span', { className: 'bf-diag-stat warn' }, `${DIAG_ICON.warn}${s.warn ?? 0}`),
+            h('span', { className: 'bf-diag-stat fail' }, `${DIAG_ICON.fail}${s.fail ?? 0}`),
+            report.durationMs != null ? h('span', { className: 'bf-note' }, `耗时 ${fmtDur(report.durationMs)}`) : null,
+          )
+        : h('span', { className: 'bf-note' }, loading ? '正在检查插件安装状态…' : '还没诊断过')
+      return h('div', { className: 'bf-diag' },
+        h('div', { className: 'bf-diag-head' },
+          summary,
+          onRun
+            ? h(Btn, {
+                small: true, variant: compact ? 'primary' : 'default',
+                disabled: !!loading, onClick: onRun,
+              }, loading ? '诊断中…' : '一键诊断')
+            : null,
+        ),
+        error
+          ? h('div', { className: 'bf-banner error', style: { margin: '2px 0 0' } }, h('span', null, `诊断失败：${error}`))
+          : null,
+        shown.length
+          ? h('div', { className: 'bf-diag-list' }, shown.map((it) => h('div', {
+              className: `bf-diag-item ${it.status || 'pass'}`, key: it.id || it.label,
+            },
+              h('span', { className: 'bf-diag-icon', 'aria-hidden': 'true' }, DIAG_ICON[it.status] || '·'),
+              h('span', { className: 'bf-diag-label' }, it.label || it.id || '检查项'),
+              h('div', { className: 'bf-diag-body' },
+                h('div', { className: 'bf-diag-detail' }, it.detail || ''),
+                it.fix ? h('div', { className: 'bf-diag-fix' }, `修复：${it.fix}`) : null,
+              ),
+            )))
+          : report
+            ? h('div', { className: 'bf-diag-empty' }, compact ? '全部通过，没有需要处理的项' : '（没有检查项）')
+            : null,
+      )
+    }
 
     function Tabs({ items, value, onChange }) {
       return h('div', { className: 'bf-ctabs', role: 'tablist' },
@@ -904,16 +1250,66 @@ window.__ModuleLoader__.load({
       return h('div', null, nodes)
     }
 
-    function Dashboard({ ov, act, acct }) {
+    /* ─── 实时运行（LiveCard / LivePane 共用） ─── */
+
+    const liveClock = (iso) => {
+      try { return new Date(iso).toTimeString().slice(0, 8) } catch { return '' }
+    }
+
+    /** 一行实时事件：时间 + kind/tool 标签 + 正文（配色由 CSS 按 kind 决定） */
+    function LiveLine({ e }) {
+      const kind = e?.kind || 'text'
+      return h('div', { className: `bf-live-line ${kind}` },
+        h('span', { className: 'bf-live-t' }, liveClock(e?.t)),
+        h('span', { className: 'bf-live-kind' }, e?.tool || LIVE_KIND_CN[kind] || ''),
+        h('span', { className: 'bf-live-text' }, e?.text || ''),
+      )
+    }
+
+    /** 看板实时卡：运行中才显示（DutyBar 之后），最近 5 条事件 + 打开实时 */
+    function LiveCard({ live, onOpen }) {
+      const d = live?.data || LIVE_EMPTY
+      const elapsed = useElapsed(d.running, d.startedAt, d.elapsedMs)
+      if (!d.running) return null
+      const stats = d.stats || {}
+      const toolTotal = Object.values(stats.tools || {}).reduce((n, v) => n + (Number(v) || 0), 0)
+      const acts = stats.actions || {}
+      const recent = (d.events || []).slice(-5)
+      return h(Card, null,
+        h('div', { className: 'bf-live-head' },
+          h(Pill, { tone: 'ok' }, '运行中'),
+          h('span', { className: 'bf-live-clock' }, fmtDur(elapsed)),
+          h('span', { className: 'bf-live-meta' }, `阶段 ${d.phase?.label || '思考'}`),
+          h(Chip, null, `工具 ${toolTotal}`),
+          h(Chip, null, `赞 ${acts.like || 0} · 评 ${acts.comment || 0} · 动态 ${acts.dynamic || 0}`),
+          h('div', { className: 'bf-live-actions' },
+            h(Btn, { small: true, onClick: onOpen }, '打开实时')),
+        ),
+        recent.length
+          ? h('div', { className: 'bf-live-body mini' },
+              recent.map((e, i) => h(LiveLine, { key: e?.seq != null ? e.seq : i, e })))
+          : h('div', { className: 'bf-live-meta', style: { marginTop: 8 } }, '还没有实时事件…'),
+      )
+    }
+
+    function Dashboard({ ov, act, acct, live, onOpenLive }) {
       const data = ov.data
       const onToggle = async (v) => { await apiPost('/duty', { autoDuty: v }); ov.refresh() }
-      const onRun = async () => { await apiPost('/run'); ov.refresh() }
+      const onRun = async () => {
+        let r = null
+        try { r = await apiPost('/run') } catch { /* 失败留在看板，Banner 会提示 */ }
+        ov.refresh()
+        live?.refresh?.()
+        // POST /run 成功返回 { started:true, why, roundId }（没有 ok 字段）；失败是 { started:false, error }
+        if (r?.started || r?.ok) onOpenLive?.() // 跑一轮成功后自动切「操作台 → 实时」
+      }
       const onStop = async () => { await apiPost('/stop'); ov.refresh() }
       const onLogin = React.useCallback(() => { window.dispatchEvent(new CustomEvent('bf-login')) }, [])
       return h('div', null,
         h(Banner, { health: data?.health, account: acct.data, round: data?.round, onLogin }),
         h(AccountBar, { data: { ...data, account: acct.data }, onLogin }),
         h(DutyBar, { data, onToggle, onRun, onStop }),
+        h(LiveCard, { live, onOpen: onOpenLive }),
         h(QuotaTiles, { data }),
         h(ActivityFeed, { data: act.data, onRun, onLogin }),
       )
@@ -921,14 +1317,79 @@ window.__ModuleLoader__.load({
 
     /* ═══════════════════════ §5 操作台 ═══════════════════════ */
 
+    /** 模型组（§1.5）：当前生效 + 值班轮 provider/model/推理强度；留空 = 跟随当前会话默认 */
+    function ModelFields({ draft, onChange, models, onFollow }) {
+      const md = models?.data || null
+      const loading = !md
+      const eff = md?.effective || null
+      const providers = md?.providers || []
+      const modelsByProvider = md?.models || {}
+      const efforts = md?.reasoningEfforts || []
+      const warnings = md?.warnings || []
+      const provider = draft.modelProvider || ''
+      const model = draft.modelName || ''
+      const providerModels = provider ? (modelsByProvider[provider] || []) : []
+
+      const providerOptions = [['', '跟随默认（不指定）'], ...providers.map((p) => [p.id, p.name || p.id])]
+      if (provider && !providers.some((p) => p.id === provider)) providerOptions.push([provider, `${provider}（目录里没有）`])
+      const modelOptions = [[
+        '', provider ? (providerModels.length ? '跟随默认（自动选）' : '该 provider 没有可用模型') : '先选 provider',
+      ], ...providerModels.map((m) => [m.id, m.name || m.id])]
+      if (model && !providerModels.some((m) => m.id === model)) modelOptions.push([model, `${model}（目录里没有）`])
+      const effortOptions = [['', '默认'], ...efforts.map((x) => [x.id, x.name || x.id])]
+
+      return h(Group, { title: '模型' },
+        h(Row, { label: '当前生效' },
+          loading
+            ? h('span', { className: 'bf-note' }, '加载中…')
+            : eff
+              ? h(React.Fragment, null,
+                  h(Pill, { tone: 'ok' }, `${eff.provider || '—'} / ${eff.model || '—'}`),
+                  h(Pill, { tone: eff.mode === 'config' ? 'ok' : 'off' }, eff.mode === 'config' ? '插件配置' : '跟随默认'),
+                  eff.reasoningEffort ? h(Chip, null, `推理 ${eff.reasoningEffort}`) : null,
+                )
+              : h('span', { className: 'bf-note' }, '取不到当前会话模型，保存后仍按宿主默认处理'),
+          h(Btn, { small: true, variant: 'ghost', onClick: onFollow }, '跟随当前会话模型'),
+        ),
+        h(Row, { label: 'provider' },
+          h(Select, {
+            label: '值班轮 provider', value: provider, disabled: loading,
+            onChange: (v) => onChange({ modelProvider: v, modelName: '' }),
+            options: providerOptions,
+          }),
+        ),
+        h(Row, { label: 'model' },
+          h(Select, {
+            label: '值班轮 model', value: model, disabled: loading || !provider,
+            onChange: (v) => onChange({ modelName: v }),
+            options: modelOptions,
+          }),
+          provider && !model ? h(Chip, { kind: 'warn' }, 'provider 有值但 model 为空：保存后按跟随默认处理') : null,
+        ),
+        h(Row, { label: '推理强度' },
+          h(Select, {
+            label: '推理强度', value: draft.modelReasoningEffort || '', disabled: loading,
+            onChange: (v) => onChange({ modelReasoningEffort: v }),
+            options: effortOptions,
+          }),
+          h('span', { className: 'bf-note' }, '留空＝不改值班轮的推理强度'),
+        ),
+        warnings.length ? h('div', { className: 'bf-note' }, warnings.join('；')) : null,
+        h('div', { className: 'bf-note', style: { marginTop: 8 } }, '只影响值班轮（headless 会话），不影响当前对话。'),
+      )
+    }
+
     function ConfigPane({ ov }) {
       const cfg = usePoll(React.useCallback(() => apiGet('/config'), []), 30000)
+      const models = useModels()
+      const diag = useDiagnose()
       const [draft, setDraft] = React.useState(null)
       React.useEffect(() => { if (cfg.data && !draft) setDraft({ ...cfg.data.values }) }, [cfg.data, draft])
       const [msg, setMsg] = React.useState('')
       if (!draft) return h('div', { className: 'bf-note' }, '加载中…')
 
-      const set = (k, v) => setDraft({ ...draft, [k]: v })
+      const setPatch = (patch) => setDraft((prev) => ({ ...(prev || {}), ...patch }))
+      const set = (k, v) => setPatch({ [k]: v })
       const save = async () => {
         const patch = {}
         for (const k of Object.keys(draft)) {
@@ -938,8 +1399,21 @@ window.__ModuleLoader__.load({
         const r = await apiPost('/config', patch)
         setMsg(r.ok ? '已保存并生效' : `保存失败：${r.error}`)
         cfg.refresh()
+        models.refresh?.()
+      }
+      // 「跟随当前会话模型」：清空 3 个模型字段并立即保存
+      const followDefault = async () => {
+        const patch = { modelProvider: '', modelName: '', modelReasoningEffort: '' }
+        setPatch(patch)
+        try {
+          const r = await apiPost('/config', patch)
+          setMsg(r?.ok ? '已跟随当前会话模型' : `保存失败：${r?.error || '未知错误'}`)
+        } catch (e) { setMsg('保存失败：' + String(e?.message ?? e)) }
+        cfg.refresh()
+        models.refresh?.()
       }
       return h(Card, null,
+        h(ModelFields, { draft, onChange: setPatch, models, onFollow: followDefault }),
         h(Group, { title: '值班节奏' },
           h(Row, { label: '自动值班' }, h(Switch, { checked: !!draft.autoDuty, onChange: (v) => set('autoDuty', v) }),
             h('span', { className: 'bf-note' }, '开启后在谷时窗口自动拉起一轮；关闭后只能手动触发')),
@@ -947,17 +1421,39 @@ window.__ModuleLoader__.load({
           h(Row, { label: '晚间窗口' }, h(Switch, { checked: !!draft.night, onChange: (v) => set('night', v) }), h('span', { className: 'bf-note' }, '18:00 – 次日 09:00')),
         ),
         h(Group, { title: '配额' },
-          [['perDay', '每天挑中', '全天总量上限'], ['commentsPerDay', '每天评论', '每条视频只评一次'], ['commentsPerRound', '每轮评论', ''],
+          [['perDay', '每天挑中', '全天总量上限'], ['commentsPerDay', '每天评论', ''], ['commentsPerRound', '每轮评论', ''],
            ['likesPerDay', '每天点赞', '成本最低的存在感'], ['dynamicsPerDay', '每天动态', ''], ['repliesPerRound', '每轮跟进回复', '']]
             .map(([k, label, note]) => h(Row, { key: k, label },
               h(Num, { value: Number(draft[k] ?? 0), onChange: (v) => set(k, v) }),
               note ? h('span', { className: 'bf-note' }, note) : null))),
         h(Group, { title: '内容源' },
-          h(Row, { label: '关键词' }, h(ChipsInput, { values: draft.keywords || [], onChange: (v) => set('keywords', v) })),
-          h(Row, { label: '订阅 UP 主' }, h(ChipsInput, {
+          h(Row, { label: '指定 UP 主' }, h(ChipsInput, {
             values: (draft.followUids || []).map(String),
             onChange: (v) => set('followUids', v.map((x) => Number(x)).filter(Boolean)),
-          }))),
+          }), h('span', { className: 'bf-note' }, 'UID，可留空；留空就靠下面的自动拉取')),
+          h(Row, { label: '自动拉关注' }, h(Switch, { checked: draft.followAuto !== false, onChange: (v) => set('followAuto', v) }),
+            h('span', { className: 'bf-note' }, '用 bili_followings 按「最常访问」拉常看的 UP 主，免手填 UID')),
+          h(Row, { label: '每轮抽查' }, h(Num, { value: Number(draft.followPerRound ?? 8), onChange: (v) => set('followPerRound', v) }),
+            h('span', { className: 'bf-note' }, '取「最常访问」前几个常看 UP 主的最新投稿（都看过就顺延；0 = 不抽查）')),
+          h(Row, { label: '关键词' }, h(ChipsInput, { values: draft.keywords || [], onChange: (v) => set('keywords', v) }),
+            h('span', { className: 'bf-note' }, '其次搜索')),
+          h(Row, { label: '不看清单' }, h(ChipsInput, { values: draft.avoidList || [], onChange: (v) => set('avoidList', v) }),
+            h('span', { className: 'bf-note' }, 'BV号 / UP主（名或UID）/ 标题关键词；命中整条跳过（不读不赞不评不发）')),
+        ),
+        h(Group, { title: '禁令' },
+          [['banPrivacy', '不透露隐私', '账号 / 路径 / 用户名 / 聊天内容不进评论与动态'],
+           ['banImpersonation', '不冒充真实的人', '不模仿任何具体用户'],
+           ['banControversy', '不碰争议话题', '立场 / 性别 / 地域 / 引战'],
+           ['banRepeat', '同视频只评一次 / 不刷屏', '含动态不连发'],
+           ['banReplyRefusal', '不接敏感请求', '写代码 / 做作品 / 承诺 / 贴隐私 / 无关请求']]
+            .map(([k, label, note]) => h(Row, { key: k, label },
+              h(Switch, { checked: draft[k] !== false, onChange: (v) => set(k, v) }),
+              note ? h('span', { className: 'bf-note' }, note) : null)),
+          h(Row, { label: '纯文本感想动态' },
+            h(Switch, { checked: draft.dynamicPureText !== false, onChange: (v) => set('dynamicPureText', v) }),
+            h('span', { className: 'bf-note' }, '关闭后动态只发「分享视频 + 短评」')),
+          h('div', { className: 'bf-note' }, '提示注入防御与「先落报告/账本」等保底纪律始终生效，不在开关范围。'),
+        ),
         h(Group, { title: '人设' },
           h(Row, { label: '人设提示词' },
             h('textarea', {
@@ -966,7 +1462,7 @@ window.__ModuleLoader__.load({
               placeholder: '例如：二十五六岁，喜欢硬件测评和游戏，说话短、不客套，偶尔自嘲。',
               onChange: (e) => set('personaPrompt', e.target.value),
             }),
-            h('span', { className: 'bf-note' }, '留空＝中性说话；也可填一个文件路径')),
+            h('span', { className: 'bf-note' }, '留空＝中性说话；也可填文件路径，支持 /绝对路径 与 ~/（目录则读其中的 AGENTS.md）')),
         ),
         h(Group, { title: '运行环境' },
           h(Row, { label: 'dsh CLI' },
@@ -983,11 +1479,108 @@ window.__ModuleLoader__.load({
             h('span', { className: 'bf-note' }, '值班轮用独立 profile，避免与桌面版抢锁')),
           h(Row, { label: '家目录' }, h('span', { className: 'bf-note bf-mono' }, ov?.data?.home || '—')),
           h(Row, { label: '账本' }, h('span', { className: 'bf-note bf-mono' }, ov?.data?.ledgerFile || '—')),
+          h('div', { className: 'bf-card-note', style: { margin: '10px 0 2px' } },
+            '安装自检：检查 Python 依赖、MCP 连接、登录凭证与模型是否就绪'),
+          h(DiagnosePanel, {
+            report: diag.report, loading: diag.loading, error: diag.error, onRun: diag.run,
+          }),
         ),
         h('div', { className: 'bf-form-foot' },
           msg ? h('span', { className: 'bf-note' }, msg) : null,
           h(Btn, { variant: 'ghost', onClick: () => setDraft({ ...cfg.data.defaults }) }, '恢复默认'),
           h(Btn, { variant: 'primary', onClick: save }, '保存并生效'),
+        ),
+      )
+    }
+
+    /** 操作台「实时」tab（§1.5）：状态/秒表/阶段/统计/配额 + 按 kind 配色的事件流（自动滚底） */
+    function LivePane({ live, ov }) {
+      const d = live?.data || LIVE_EMPTY
+      const mode = live?.mode || 'poll'
+      const err = live?.error || ''
+      const elapsed = useElapsed(d.running, d.startedAt, d.elapsedMs)
+      const [autoScroll, setAutoScroll] = React.useState(true)
+      const bodyRef = React.useRef(null)
+      const events = d.events || []
+      const stats = d.stats || {}
+      const q = d.quota || null
+      const toolTotal = Object.values(stats.tools || {}).reduce((n, v) => n + (Number(v) || 0), 0)
+      const acts = stats.actions || {}
+      const shown = d.running ? events : events.slice(-80) // 空闲时保留上一轮尾部供回看
+      const onRun = async () => {
+        try { await apiPost('/run') } catch { /* 失败靠下一轮轮询反映真实状态 */ }
+        ov?.refresh?.()
+        live?.refresh?.()
+      }
+      const onStop = async () => {
+        try { await apiPost('/stop') } catch { /* 忽略 */ }
+        ov?.refresh?.()
+        live?.refresh?.() // 中止后立刻拉一次，留在实时页看到结束状态
+      }
+
+      // 自动滚底：新事件到达就滚到最后；用户手动上滚时 onScroll 关掉自动滚动
+      React.useEffect(() => {
+        const el = bodyRef.current
+        if (!el || !autoScroll) return
+        el.scrollTop = el.scrollHeight
+      }, [events.length, autoScroll, d.running])
+
+      const onScroll = () => {
+        const el = bodyRef.current
+        if (!el) return
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+        if (!nearBottom && autoScroll) setAutoScroll(false)
+      }
+      const toggleAuto = (v) => {
+        setAutoScroll(v)
+        if (v && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+      }
+
+      return h('div', null,
+        h('div', { className: 'bf-panel-tools' },
+          h(Pill, { tone: d.running ? 'ok' : 'off' }, d.running ? '运行中' : '空闲'),
+          h('span', { className: 'bf-live-clock' }, fmtDur(elapsed)),
+          h('span', { className: 'bf-live-meta' }, `阶段 ${d.phase?.label || '思考'}`),
+          mode === 'poll' ? h(Chip, { kind: 'warn' }, '降级轮询') : null,
+          h('div', { className: 'bf-live-actions' },
+            h('span', { className: 'bf-note' }, '自动滚动'),
+            h(Switch, { checked: autoScroll, label: '自动滚动', onChange: toggleAuto }),
+            h(Btn, { small: true, variant: 'danger', disabled: !d.running, onClick: onStop }, T.stop),
+            h(Btn, { small: true, variant: 'primary', disabled: d.running, onClick: onRun }, T.run),
+          ),
+        ),
+        h('div', { className: 'bf-live-chips' },
+          h(Chip, null, `工具 ${toolTotal}`),
+          h(Chip, null, `赞 ${acts.like || 0}`),
+          h(Chip, null, `评 ${acts.comment || 0}`),
+          h(Chip, null, `动态 ${acts.dynamic || 0}`),
+          h(Chip, null, `回复 ${acts.reply || 0}`),
+          stats.errors ? h(Chip, { kind: 'warn' }, `错误 ${stats.errors}`) : null,
+          q
+            ? h('span', { className: 'bf-live-meta' },
+                `配额 挑 ${q.picked ?? 0}/${q.limits?.perDay ?? 0}`
+                + ` · 评 ${q.comments ?? 0}/${q.limits?.commentsPerDay ?? 0}`
+                + ` · 赞 ${q.likes ?? 0}/${q.limits?.likesPerDay ?? 0}`
+                + ` · 动态 ${q.dynamics ?? 0}/${q.limits?.dynamicsPerDay ?? 0}`)
+            : null,
+        ),
+        h('div', { className: 'bf-live-body', ref: bodyRef, onScroll },
+          shown.length
+            ? shown.map((e, i) => h(LiveLine, { key: e?.seq != null ? e.seq : i, e }))
+            : h('div', { className: 'bf-live-empty' },
+                d.running
+                  ? '等待第一条事件…（工具调用 / 推理 / 宿主日志都会出现在这里）'
+                  : d.lastCode != null
+                    ? '空闲中 · 上一轮已结束，事件已清空'
+                    : '空闲中 · 点「跑一轮」开始值班'),
+        ),
+        h('div', { className: 'bf-live-foot' },
+          h('span', null, `事件 ${events.length}`),
+          !d.running && d.lastCode != null
+            ? h('span', null, `上一轮退出码 ${d.lastCode}${d.lastDurationMs ? ` · 耗时 ${fmtDur(d.lastDurationMs)}` : ''}`)
+            : null,
+          !d.running && events.length ? h('span', null, '显示上一轮尾部') : null,
+          err ? h('span', { className: 'bf-live-err' }, err) : null,
         ),
       )
     }
@@ -1083,11 +1676,14 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function ConsoleView({ ov }) {
-      const [pane, setPane] = React.useState('config')
+    function ConsoleView({ ov, pane, setPane, live }) {
       return h('div', null,
-        h(Tabs, { items: [['config', '配置'], ['log', '日志'], ['seen', '判重表'], ['artifacts', '产物']], value: pane, onChange: setPane }),
+        h(Tabs, {
+          items: [['config', '配置'], ['live', T.live], ['log', '日志'], ['seen', '判重表'], ['artifacts', '产物']],
+          value: pane, onChange: setPane,
+        }),
         pane === 'config' ? h(ConfigPane, { ov })
+          : pane === 'live' ? h(LivePane, { live, ov })
           : pane === 'log' ? h(LogPane, null)
           : pane === 'seen' ? h(SeenPane, null)
           : h(ArtifactsPane, null),
@@ -1096,13 +1692,24 @@ window.__ModuleLoader__.load({
 
     /* ═══════════════════════ §6 页面 ═══════════════════════ */
 
-    function ConsolePage() {
-      const [view, setView] = React.useState('dashboard')
+    /**
+     * 控制台页面。view（看板/操作台）与 pane（操作台 tab）提升到这里，
+     * 这样看板「跑一轮」成功后 / LiveCard「打开实时」能直接切到「实时」。
+     * props.initialView / props.initialPane / props.live 仅用于渲染冒烟测试注入初始状态。
+     */
+    function ConsolePage(props) {
+      const [view, setView] = React.useState(props?.initialView || 'dashboard')
+      const [pane, setPane] = React.useState(props?.initialPane || 'config')
       const [loginOpen, setLoginOpen] = React.useState(false)
       const ov = useOverview()
       const running = !!ov.data?.round?.running
       const act = useActivity(running)
       const acct = useAccount()
+      const liveState = useLive()
+      const live = props?.live || liveState
+      const openLive = React.useCallback(() => {
+        setView('console'); setPane('live'); liveState.refresh?.()
+      }, [liveState.refresh])
       React.useEffect(() => {
         const open = () => setLoginOpen(true)
         window.addEventListener('bf-login', open)
@@ -1112,7 +1719,7 @@ window.__ModuleLoader__.load({
         setLoginOpen(false)
         ov.refresh(); act.refresh(); acct.refresh()
       }, [ov, act, acct])
-      const refreshAll = () => { ov.refresh(); act.refresh(); acct.refresh() }
+      const refreshAll = () => { ov.refresh(); act.refresh(); acct.refresh(); live?.refresh?.() }
       const account = acct.data
       return h('div', { className: 'bf-console' },
         h('div', { className: 'bf-page' },
@@ -1137,21 +1744,31 @@ window.__ModuleLoader__.load({
               }, k === 'dashboard' ? T.dashboard : T.console)),
           ),
           view === 'dashboard'
-            ? h(Dashboard, { ov, act, acct })
-            : h(ConsoleView, { ov }),
+            ? h(Dashboard, { ov, act, acct, live, onOpenLive: openLive })
+            : h(ConsoleView, { ov, pane, setPane, live }),
         ),
         loginOpen ? h(LoginModal, { onClose: () => setLoginOpen(false), onLoggedIn }) : null,
       )
     }
 
-    /* ─── 设置页瘦身版（§2.3：只保留一行说明 + 打开控制台） ─── */
+    /* ─── 设置页瘦身版（§2.3：顶部安装自检 + 一行说明 + 打开控制台） ─── */
 
     let ctxLayout = null
 
     function SettingsEntry() {
       const acct = useAccount()
+      const diag = useDiagnose()
       const a = acct.data || {}
       return h('div', { className: 'bf-console', style: { padding: 16 } },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '安装自检'),
+            h('span', { className: 'bf-card-note' }, '检查插件依赖、MCP 连接、登录与模型是否就绪'),
+          ),
+          h(DiagnosePanel, {
+            report: diag.report, loading: diag.loading, error: diag.error, onRun: diag.run, compact: true,
+          }),
+        ),
         h('p', null, 'B站分身已经把控制台搬到左侧栏：账号、值班、配额与每条视频的活动生命周期都在那里。'),
         h('p', { className: 'bf-note' }, a.loggedIn ? `当前账号：${a.uname}（UID ${a.mid}）` : '当前未登录'),
         h(Btn, {

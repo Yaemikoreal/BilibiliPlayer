@@ -87,18 +87,23 @@ const check = (name, cond, detail) => {
 }
 
 // 1) /activity：按天分组、阶段、未回数、7 天窗口
+// ⭐ 不要假设「5 小时前」仍落在 days[0]：凌晨跑测试时它会跨自然日；一律跨天查找。
 const act = await call('GET', '/api/bili-fenshen/activity')
-const d0 = act.json.days[0]
-const bv1 = d0.rounds.flatMap((r) => r.items).find((x) => x.bvid === 'BV1xrnz6gEVD')
+const allDays = act.json.days
+const allRounds = allDays.flatMap((d) => d.rounds)
+const allItems = allRounds.flatMap((r) => r.items)
+const bv1 = allItems.find((x) => x.bvid === 'BV1xrnz6gEVD')
+const r1 = allRounds.find((r) => r.id === round1)
+const r2 = allRounds.find((r) => r.id === round2)
 check('/activity 200', act.status === 200, act.status)
-check('旧事件被 7 天窗口滤掉', !act.json.days.flatMap((d) => d.rounds).flatMap((r) => r.items).some((x) => x.bvid === 'BVold'))
-check('r2 倒序在前', d0.rounds[0].items[0].bvid === 'BV1AHnB6NEhM' || d0.rounds[0].id !== round1)
+check('旧事件被 7 天窗口滤掉', !allItems.some((x) => x.bvid === 'BVold'))
+check('r2 倒序在前', !!r2 && allRounds.indexOf(r2) < allRounds.indexOf(r1), allRounds.map((r) => r.id))
 check('BV1 聚合 stage.replies === 2', bv1.stage.replies === 2, bv1.stage)
 check('BV1 repliedBack === true', bv1.stage.repliedBack === true, bv1.stage)
 check('BV1 pendingReply === 1（回了 1 条剩 1 条）', bv1.stage.pendingReply === 1, bv1.stage)
 check('BV1 阶段 liked/commented', bv1.stage.liked && bv1.stage.commented)
-check('跳过项归组', d0.rounds.flatMap((r) => r.items).find((x) => x.bvid === 'BV1XynB6EEiM')?.skipped?.reason === '同题重复')
-check('轮次来源标签 热门', d0.rounds.find((r) => r.id === round1)?.sourceLabel === '热门')
+check('跳过项归组', allItems.find((x) => x.bvid === 'BV1XynB6EEiM')?.skipped?.reason === '同题重复')
+check('轮次来源标签 热门', r1?.sourceLabel === '热门')
 
 // 2) /seen
 const seen = await call('GET', '/api/bili-fenshen/seen')

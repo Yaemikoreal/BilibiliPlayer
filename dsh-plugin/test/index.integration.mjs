@@ -44,7 +44,7 @@ const check = (name, cond, detail) => {
 }
 
 check('webServer prefix 路由已注册', routeDef?.kind === 'prefix' && routeDef?.path === '/api/bili-fenshen', routeDef)
-check('Agent 工具已注册', registeredTools.join(',') === 'bili_fenshen_status,bili_fenshen_run', registeredTools)
+check('Agent 工具已注册', registeredTools.join(',') === 'bili_fenshen_status,bili_fenshen_run,bili_fenshen_diagnose', registeredTools)
 
 const call = async (method, url, body) => {
   const res = {
@@ -81,6 +81,56 @@ check('GET /log 宿主事件≥1 且原文含推理行（事件不含推理行�
 const rep = await call('GET', '/api/bili-fenshen/reports')
 check('GET /reports days/digests', rep.status === 200 && rep.json?.days?.[0] === '2026-10-23' && rep.json?.digests?.[0] === '2026-10', rep.json)
 
+// ── 新增端点：模型目录 / 实时流 / 一键诊断 ──
+const mdl = await call('GET', '/api/bili-fenshen/models')
+check('GET /models 200 且形状完整',
+  mdl.status === 200 && mdl.json?.ok === true
+  && Array.isArray(mdl.json?.providers) && typeof mdl.json?.models === 'object'
+  && typeof mdl.json?.effective?.mode === 'string'
+  && 'modelProvider' in (mdl.json?.config || {})
+  && Array.isArray(mdl.json?.reasoningEfforts) && Array.isArray(mdl.json?.warnings), mdl.json?.status || mdl.json)
+check('/models 无 llm 服务时降级为空目录（不 500）',
+  mdl.json?.providers?.length === 0 && mdl.json?.effective?.mode === 'default', mdl.json?.effective)
+
+const lv = await call('GET', '/api/bili-fenshen/live')
+check('GET /live 200 且空闲形状完整',
+  lv.status === 200 && lv.json?.ok === true && lv.json?.running === false
+  && Array.isArray(lv.json?.events)
+  && lv.json.events.every((e) => typeof e.seq === 'number' && typeof e.kind === 'string' && typeof e.t === 'string')
+  && typeof lv.json?.cursor === 'number' && lv.json?.cursor >= 0
+  && lv.json?.stats?.actions?.like === 0 && typeof lv.json?.phase?.label === 'string'
+  && typeof lv.json?.quota?.picked === 'number', lv.json?.status || lv.json)
+
+// SSE：连上先收 snapshot 帧，插件卸载时由 closeSse 关掉
+let sseOut = ''
+const sseRes = {
+  headersSent: false, writableEnded: false,
+  writeHead() { this.headersSent = true },
+  flushHeaders() {},
+  write(chunk) { sseOut += String(chunk) },
+  end() { this.writableEnded = true },
+  on() {},
+}
+await routeHandler({ method: 'GET', url: '/api/bili-fenshen/live/stream' }, sseRes)
+check('GET /live/stream 首帧是 snapshot（SSE）',
+  sseRes.headersSent === true && /data: \{"type":"snapshot"/.test(sseOut) && /"running":false/.test(sseOut), sseOut.slice(0, 200))
+
+// 诊断：offline（fetch 抛错 → 凭证项 warn），仍应返回 10 项报告
+const realFetch = globalThis.fetch
+globalThis.fetch = async () => { throw new Error('offline-test') }
+const dg = await call('POST', '/api/bili-fenshen/diagnose')
+globalThis.fetch = realFetch
+check('POST /diagnose 200 且 10 项齐全',
+  dg.status === 200 && dg.json?.items?.length === 10
+  && dg.json.items.map((x) => x.id).join(',') === 'python,deps,mcp-server,mcp-connection,credential,dsh-cli,headless-profile,home,model,route'
+  && dg.json.items.every((x) => ['pass', 'warn', 'fail'].includes(x.status)), dg.json)
+check('/diagnose summary 与 ok 规则一致',
+  dg.json?.summary?.pass + dg.json?.summary?.warn + dg.json?.summary?.fail === 10
+  && dg.json?.ok === (dg.json?.summary?.fail === 0), dg.json?.summary)
+check('/diagnose offline 时凭证项不 fail（warn）',
+  ['pass', 'warn'].includes(dg.json?.items?.find((x) => x.id === 'credential')?.status),
+  dg.json?.items?.find((x) => x.id === 'credential'))
+
 // legacy 端点（不被工厂吃掉）
 const st = await call('GET', '/api/bili-fenshen/status')
 check('GET /status 200（legacy 保留）', st.status === 200 && st.json?.ok === true, { status: st.status })
@@ -110,6 +160,17 @@ check('POST /duty 切换开关', du1.status === 200 && du1.json?.autoDuty === tr
 const du2 = await call('POST', '/api/bili-fenshen/duty', {})
 check('POST /duty 缺 boolean 400', du2.status === 400, { status: du2.status })
 
+// 模型配置写回 + /models 反映生效模型
+const mc = await call('POST', '/api/bili-fenshen/config', { modelProvider: 'deepseek-account', modelName: 'deepseek-flash', modelReasoningEffort: 'high' })
+check('POST /config 模型字段 200', mc.status === 200 && mc.json?.values?.modelName === 'deepseek-flash', mc.json)
+const mdl2 = await call('GET', '/api/bili-fenshen/models')
+check('/models 生效模型=插件配置', mdl2.json?.effective?.mode === 'config'
+  && mdl2.json?.effective?.provider === 'deepseek-account'
+  && mdl2.json?.effective?.model === 'deepseek-flash'
+  && mdl2.json?.effective?.reasoningEffort === 'high', mdl2.json?.effective)
+// 还原成「跟随默认」，别把临时覆盖层带到后续断言
+await call('POST', '/api/bili-fenshen/config', { modelProvider: '', modelName: '', modelReasoningEffort: '' })
+
 // stop（无子进程 → stopped:false，不应抛）
 const sp = await call('POST', '/api/bili-fenshen/stop')
 check('POST /stop 空闲时 stopped:false', sp.status === 200 && sp.json?.stopped === false, sp.json)
@@ -118,8 +179,9 @@ check('POST /stop 空闲时 stopped:false', sp.status === 200 && sp.json?.stoppe
 const statusTool = null
 check('工具名正确', registeredTools.includes('bili_fenshen_status'))
 
-// 卸载 → 再激活：路由一次性守卫应允许重新注册
+// 卸载 → 再激活：路由一次性守卫应允许重新注册；SSE 连接应被关闭
 dispose()
+check('卸载时 SSE 连接被关闭', sseRes.writableEnded === true)
 let reRegistered = false
 const fakeWeb2 = { register: (def) => { reRegistered = true; routeHandler = def.handler; return () => {} } }
 const dispose2 = apply({ get: (k) => (k === 'webServer' ? fakeWeb2 : k === 'tools' ? fakeTools : null) }, patchConfig)

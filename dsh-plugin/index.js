@@ -16,7 +16,7 @@
  */
 
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, mkdirSync, unlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -25,10 +25,13 @@ import { fileURLToPath } from 'node:url'
 import { appendEvents, readEvents, isDuplicate } from './lib/ledger.js'
 import { parseRoundReport } from './lib/report.js'
 import { createApiHandler } from './lib/api.js'
-import { effectiveConfig, writeOverride } from './lib/config.js'
+import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort } from './lib/config.js'
 import { fetchAccount } from './lib/account.js'
 import { fetchReplyNotifs, toReplyIn } from './lib/replies.js'
+import { loadPersona } from './lib/persona.js'
 import { toActivities, dayKeyOf } from './lib/activity.js'
+import { runDiagnose, formatDiagnoseText } from './lib/diagnose.js'
+import { createLiveStream } from './lib/live.js'
 
 const require = createRequire(import.meta.url)
 const pluginDir = dirname(fileURLToPath(import.meta.url))
@@ -46,6 +49,14 @@ const BILI_SPI = 'https://api.bilibili.com/x/frontend/finger/spi'
 // 项目根 = 插件目录的上一级（本插件与 mcp_server.py 同仓存放；换机器 clone 到任意路径都成立）
 const PROJECT_ROOT = dirname(pluginDir)
 const BILI_CRED_FILE = join(PROJECT_ROOT, 'bili_credential.json')
+// 跨平台 venv 解释器：Windows 在 .venv/Scripts/python.exe，macOS/Linux 在 .venv/bin/python；
+// 按存在性择优，找不到时回退平台默认（保证 spawn 至少有明确报错路径）。
+const VENV_PYTHON = (() => {
+  const candidates = process.platform === 'win32'
+    ? [join(PROJECT_ROOT, '.venv', 'Scripts', 'python.exe'), join(PROJECT_ROOT, '.venv', 'bin', 'python')]
+    : [join(PROJECT_ROOT, '.venv', 'bin', 'python'), join(PROJECT_ROOT, '.venv', 'bin', 'python3'), join(PROJECT_ROOT, '.venv', 'Scripts', 'python.exe')]
+  return candidates.find((p) => existsSync(p)) ?? candidates[0]
+})()
 
 const pickCookies = (list) => {
   const jar = {}
@@ -155,8 +166,22 @@ export const Config = !z ? undefined : z.object({
   repliesPerRound: z.natural().default(2),
   /** 关注关键词（空 = 用章程默认） */
   keywords: z.array(z.string()).default([]),
-  /** 订阅 UP 主 UID 列表 */
+  /** 订阅 UP 主 UID 列表（指定优先，可留空） */
   followUids: z.array(z.natural()).default([]),
+  /** 自动拉取「我关注的 UP 主」列表（bili_followings；免手填 UID） */
+  followAuto: z.boolean().default(true),
+  /** 每轮从关注列表随机抽查几个 UP 主的最新投稿（0 = 不抽查） */
+  followPerRound: z.natural().default(8),
+  /** 不看清单：BV号 / UP主 / 标题关键词（命中整条跳过） */
+  avoidList: z.array(z.string()).default([]),
+  /** 默认禁令开关（true=生效；都是用户在控制台里可改的） */
+  banPrivacy: z.boolean().default(true),
+  banImpersonation: z.boolean().default(true),
+  banControversy: z.boolean().default(true),
+  banRepeat: z.boolean().default(true),
+  banReplyRefusal: z.boolean().default(true),
+  /** 是否允许纯文本感想动态（false = 动态只发「分享视频 + 短评」） */
+  dynamicPureText: z.boolean().default(true),
   /** 人设提示词（留空 = 中性说话；可填一段文字或一个文件路径） */
   personaPrompt: z.string().default(''),
   /** 日报形态：full=完整 · brief=薄版 · off=不写 */
@@ -165,10 +190,16 @@ export const Config = !z ? undefined : z.object({
   dshBin: z.string().default(''),
   /** headless 那一轮用哪个 profile（desktop 被 Electron 独占，必须用独立 profile） */
   headlessProfile: z.string().default('headless'),
+  /** 值班轮模型 provider（留空 = 跟随当前会话默认模型） */
+  modelProvider: z.string().default(''),
+  /** 值班轮模型 id（留空 = 跟随当前会话默认模型） */
+  modelName: z.string().default(''),
+  /** 值班轮推理强度（留空 = 不覆盖） */
+  modelReasoningEffort: z.string().default(''),
   /** MCP 白名单：值班轮可见的工具（BILI_MCP_TOOLS） */
   dutyTools: z.array(z.string()).default([
     'bili_search', 'bili_hot_videos', 'bili_weekly_hot', 'bili_rank',
-    'bili_user_videos', 'bili_video_info', 'bili_subtitle', 'bili_comments',
+    'bili_followings', 'bili_user_videos', 'bili_video_info', 'bili_subtitle', 'bili_comments',
     'bili_reply', 'bili_like', 'bili_send_dynamic', 'bili_check_credential',
     'bili_received_replies', 'bili_user_info',
   ]),
@@ -187,6 +218,21 @@ const STATE_FILE = join(HOME, 'state.json')
 const OVERLAY_FILE = join(HOME, 'headless-overlay.yml')
 const LEDGER_FILE = join(HOME, 'ledger.jsonl')   // 机器账本（设计文档 §4）
 const CONFIG_FILE = join(HOME, 'config.json')    // 运行时配置覆盖层（§12.3）
+
+// ⭐ 实时运行流：内存环形缓冲（值班轮 stdout/stderr + 宿主事件），供 /live 与 /live/stream 消费。
+//    全局单例：跨轮保留最后一批事件，页面刷新后仍能看到上一轮尾部。
+const live = createLiveStream()
+
+// profile 根目录：桌面版由 DSH_PROFILE_DIR 指向 …/profiles/desktop，取其父目录；否则退回 ~/.dsh/profiles
+const PROFILE_ROOT = (() => {
+  try {
+    if (process.env.DSH_PROFILE_DIR) return dirname(process.env.DSH_PROFILE_DIR)
+    return join(process.env.USERPROFILE || process.env.HOME || '.', '.dsh', 'profiles')
+  } catch { return '' }
+})()
+const headlessProfileDirOf = (cfg) => (PROFILE_ROOT
+  ? join(PROFILE_ROOT, String(cfg?.headlessProfile || 'headless').trim() || 'headless')
+  : '')
 
 for (const d of [HOME, OUT_DIR, DIGEST_DIR]) {
   try { if (!existsSync(d)) mkdirSync(d, { recursive: true }) } catch { /* 让后续写入自己报 */ }
@@ -213,6 +259,8 @@ const log = (msg) => {
     appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${msg}\n`, 'utf8')
     rotateLogIfBig()
   } catch { /* 写日志绝不能抛 */ }
+  // ⭐ 同时推进实时流：控制台「实时」页无需轮询日志文件即可看到宿主事件
+  try { live.pushHost(msg) } catch { /* 实时流失败不能影响日志 */ }
 }
 const rotateLogIfBig = () => {
   try {
@@ -327,6 +375,7 @@ const dshCliCached = (cfg) => {
 /* ───────────────────────── 值班轮（轮次生命周期，设计文档 §12.4） ───────────────────────── */
 
 let running = false
+let starting = false // 正在做 spawn 前的异步准备（模型能力查询），防并发重复触发
 let applyCtx = null
 let cfgSnapshot = {}
 let currentChild = null
@@ -335,7 +384,8 @@ let currentRoundAt = 0
 let routeRegistered = false   // prefix 路由同进程一次性守卫（§12.2）
 
 const refreshCfg = () => {
-  try { cfgSnapshot = applyCtx?.config || cfgSnapshot } catch { /* 快照过期就过期 */ }
+  // cfgSnapshot 在 apply() 里已由 Loader 校验后的 config 赋值；这里只保证返回最新快照
+  // （⭐ 不能把 ctx 展开成普通对象：ctx.get 等是原型方法，展开后会丢，导致 agentDefaultModel/llm 查不到）
   return cfgSnapshot
 }
 
@@ -415,40 +465,96 @@ const backfillFromReport = (roundId) => {
   }
 }
 
-const buildOverlay = (cfg) => {
+/* ───────────────────────── 值班轮模型（插件配置优先，否则跟随当前会话默认） ───────────────────────── */
+
+// ⭐ 三种选择途径：① 插件配置 modelProvider+modelName；② agentDefaultModel 当前选择；③ 都没有 ⇒ 空（headless 用内置行）
+const currentSelectionSafe = () => {
+  try { return applyCtx?.get?.('agentDefaultModel')?.currentSelection?.() ?? null } catch { return null }
+}
+const effectiveModel = (cfg) => {
+  const provider = String(cfg?.modelProvider || '').trim()
+  const model = String(cfg?.modelName || '').trim()
+  if (provider && model) {
+    return { mode: 'config', provider, model, reasoningEffort: String(cfg?.modelReasoningEffort || '').trim() }
+  }
+  const sel = currentSelectionSafe() || {}
+  return {
+    mode: 'default',
+    provider: sel.provider ?? sel.providerId ?? '',
+    model: sel.model ?? sel.modelId ?? '',
+    reasoningEffort: sel.reasoningEffort ?? '',
+  }
+}
+
+// ⭐ 模型能力（推理强度）查询：异步、失败返回 null（未知）。空数组 = 该模型没有推理强度。
+//    为什么必须查：headless dsh 对不支持的显式强度直接报 UNSUPPORTED_REASONING_EFFORT 并退轮（2026-10-25 事故）。
+const resolveModelEfforts = async (provider, model) => {
+  try {
+    if (!provider || !model) return null
+    const llm = llmService()
+    if (!llm?.resolveModelInfo) return null
+    const info = await withTimeout(Promise.resolve(llm.resolveModelInfo(provider, model)), 5000)
+    const efforts = info?.reasoning?.efforts
+    if (!Array.isArray(efforts)) return []
+    return efforts.map((x) => String(x?.id ?? x ?? '').trim()).filter(Boolean)
+  } catch { return null }
+}
+
+// ⭐ 生效模型：模型不支持某个推理强度时就不设置它（不强行下发），其余原样。
+const resolveEffectiveModel = async (cfg) => {
+  const em = effectiveModel(cfg)
+  if (!em.provider || !em.model || !em.reasoningEffort) return em
+  const supported = await resolveModelEfforts(em.provider, em.model)
+  const picked = pickReasoningEffort(em.reasoningEffort, supported)
+  if (!picked.ignored) return em
+  log(`overlay：模型 ${em.provider} / ${em.model} 不支持推理强度 ${picked.ignored}，本轮不设置该项`)
+  return { ...em, reasoningEffort: '' }
+}
+
+const buildOverlay = (cfg, em) => {
   const yml = []
   // ⭐ headless（0.2.1-rc.2）默认禁用三个服务 ⇒ overlay 是最后一层，把它们打开
   for (const id of ['credentials', 'authorization', 'deepseek-account']) {
     yml.push(`- id: ${id}`, '  disabled: false', '')
   }
-  // ⭐ 跟随用户当前模型 + **把 provider 行带进 headless**（0.2.1 实测冒烟结论）：
-  //    ① headless profile（dsh-base+dsh-headless）只内置 deepseek 系 provider 行，没有用户的自定义 provider；
-  //    ② 直接 insert dsh-llm-pi-ai 会撞 "provider already declared"（dsh-base 已插过，dormant）；
-  //    ③ 正确做法：对 **同名行 llm-pi-ai 做配置覆盖**（provider 定义随之激活），模型跟随用户当前选择。
-  let sel = null
-  try { sel = applyCtx?.get?.('agentDefaultModel')?.currentSelection?.() ?? null } catch { /* 老版本没有这个服务 */ }
-  const provider = sel?.provider ?? sel?.providerId
-  const model = sel?.model ?? sel?.modelId
-  if (provider && model) {
-    yml.push('- id: agent-default-model', '  config:', `    provider: ${provider}`, `    model: ${model}`, '')
+  // ⭐ 值班轮模型：插件配置优先（操作台「模型」组可改），留空则跟随用户当前选择。
+  //    provider 行定义仍需带进 headless（见下）：① headless profile（dsh-base+dsh-headless）只内置 deepseek 系
+  //    provider 行，没有用户的自定义 provider；② 直接 insert dsh-llm-pi-ai 会撞 "provider already declared"；
+  //    ③ 正确做法：对 **同名行 llm-pi-ai 做配置覆盖**（provider 定义随之激活）。
+  //    em 由 runDuty 传入：已按模型能力净化过推理强度（不支持的不写，避免 headless 报 UNSUPPORTED_REASONING_EFFORT）。
+  if (em.provider && em.model) {
+    const lines = ['- id: agent-default-model', '  config:', `    provider: ${em.provider}`, `    model: ${em.model}`]
+    if (em.reasoningEffort) lines.push(`    reasoningEffort: ${em.reasoningEffort}`)
+    lines.push('')
+    yml.push(...lines)
+    log(`overlay：值班轮模型 = ${em.provider} / ${em.model}${em.reasoningEffort ? ` / ${em.reasoningEffort}` : ''}（${em.mode === 'config' ? '插件配置' : '跟随默认'}）`)
+  } else {
+    log('overlay：没有拿到可用模型（插件未配置且当前默认选择为空），headless 将用内置 deepseek 行')
   }
   // provider 行定义：从桌面版 profile 的 cordis.patch.yml 读 llm-pi-ai 配置（用户自己配的 key/模型），
   // 原样覆盖进 headless 的同名行。读不到就不覆盖（那时只能用 deepseek 系内置行）。
   try {
-    const profilePatch = readFileSync(join(process.env.DSH_PROFILE_DIR || join(process.env.USERPROFILE || '', '.dsh', 'profiles', 'desktop'), 'cordis.patch.yml'), 'utf8')
-    const m = /- id: llm-pi-ai\r?\n(?:[^\n]*\n)?\s*config:\r?\n((?:[ \t]+.*\r?\n)+?)(?=- id:|\z)/.exec(profilePatch)
-    if (m) {
-      yml.push('- id: llm-pi-ai', '  config:', m[1].replace(/\r?\n$/, ''), '')
+    // ⭐ 桌面版 profile 的 patch 路径：优先用 PROFILE_ROOT（由 DSH_PROFILE_DIR 推导，缺省 ~/.dsh/profiles）
+    const profilePatchPath = join(PROFILE_ROOT || '.', 'desktop', 'cordis.patch.yml')
+    const profilePatch = readFileSync(profilePatchPath, 'utf8')
+    // ⭐ 不能用正则：旧正则在这份 patch 上会灾难性回溯，同步卡死宿主（2026-10-25 事故根因）。
+    const providerCfg = extractConfigBlock(profilePatch, 'llm-pi-ai')
+    if (providerCfg) {
+      yml.push('- id: llm-pi-ai', '  config:', providerCfg, '')
       log('overlay：已把桌面版 llm-pi-ai provider 配置带入 headless')
     } else {
-      log('overlay：profile 里没找到 llm-pi-ai 段（headless 轮将依赖内置 deepseek 行）')
+      log(`overlay：profile（${profilePatchPath}）里没找到 llm-pi-ai 段（headless 轮将依赖内置 deepseek 行）`)
     }
-  } catch (e) { log(`overlay：读 profile provider 配置失败（不影响其余 overlay）：${e?.message ?? e}`) }
+  } catch (e) {
+    log(`overlay：读 profile provider 配置失败（不影响其余 overlay）：${e?.message ?? e}`)
+  }
   // ⭐ 白名单收窄的 MCP（配合 mcp_server.py 的 BILI_MCP_TOOLS 门禁；凭证走独立 env 路径）
   const posix = (p) => String(p).replace(/\\/g, '/')
-  const venvPython = join(PROJECT_ROOT, '.venv', 'Scripts', 'python.exe').replace(/\\/g, '/')
+  const venvPython = VENV_PYTHON.replace(/\\/g, '/')
   const serverPy = join(PROJECT_ROOT, 'mcp_server.py').replace(/\\/g, '/')
-  const tools = Array.isArray(cfg?.dutyTools) && cfg.dutyTools.length ? cfg.dutyTools : ['bili_search', 'bili_video_info']
+  const tools = Array.isArray(cfg?.dutyTools) && cfg.dutyTools.length ? cfg.dutyTools.slice() : ['bili_search', 'bili_video_info']
+  // ⭐ 自动拉关注依赖 bili_followings：开了 followAuto 就确保白名单里有它（老配置的 dutyTools 是旧的冻结列表）
+  if (cfg?.followAuto !== false && !tools.includes('bili_followings')) tools.push('bili_followings')
   yml.push(
     '- insert:',
     '    - id: bili-fenshen-duty-mcp',
@@ -472,22 +578,15 @@ const buildDutyPrompt = (cfg, roundId) => {
   const charter = (() => {
     try { return readFileSync(join(PROMPTS_DIR, 'duty.md'), 'utf8').split('<家目录>').join(HOME) } catch { return '' }
   })()
-  // 人设：文字或文件路径；留空 = 中性
-  let persona = String(cfg?.personaPrompt || '').trim()
-  let personaNote = ''
-  if (persona && !persona.includes('\n')) {
-    const looksPath = /^[A-Za-z]:[\\/]/.test(persona) || persona.startsWith('~/')
-    if (looksPath) {
-      try {
-        let f = persona.replace(/^~\//, (process.env.USERPROFILE || '') + '/')
-        if (existsSync(f) && statSync(f).isDirectory()) f = join(f, 'AGENTS.md')
-        if (existsSync(f)) { persona = readFileSync(f, 'utf8'); personaNote = `（读自文件）` }
-      } catch { /* 读不到就当普通文字 */ }
-    }
-  }
+  // 人设：普通文字 / 文件路径（/…、~/…、Windows 盘符）；留空 = 中性
+  // 路径识别与读取在 lib/persona.js：读不到就降级为中性并记日志，绝不把路径字符串当人设。
+  const { text: persona, note: personaNote } = loadPersona(cfg?.personaPrompt)
+  if (!persona && personaNote) log(`人设加载失败：${personaNote}`)
   const personaBlock = persona
-    ? `\n\n===== 小号人设${personaNote}（**按这个来说话**）=====\n${persona.slice(0, 6000)}\n===== 人设结束 =====\n`
-    : '\n\n⭐ 本轮没有拿到人设 ⇒ 按中性、礼貌、有点好奇心的普通人说话，别编人格。\n'
+    ? `\n\n===== 人设${personaNote}（**按这个来说话**）=====\n${persona}\n===== 人设结束 =====\n`
+    : personaNote
+      ? `\n\n⚠️ ${personaNote}\n`
+      : '\n\n⭐ 本轮没有拿到人设 ⇒ 按一个独立、有自己判断的普通网友说话，别编人格。\n'
 
   const q = quotaFromLedger()
   const picked = q.picked
@@ -495,13 +594,45 @@ const buildDutyPrompt = (cfg, roundId) => {
   const left = Math.max(0, quota - picked)
   const kws = Array.isArray(cfg?.keywords) ? cfg.keywords.filter(Boolean) : []
   const uids = Array.isArray(cfg?.followUids) ? cfg.followUids.filter(Boolean) : []
+  const avoid = Array.isArray(cfg?.avoidList) ? cfg.avoidList.map((x) => String(x ?? '').trim()).filter(Boolean) : []
   const report = cfg?.reportLevel === 'off'
     ? '本轮不写日报文件，只把做过的动作记进判重表。'
     : cfg?.reportLevel === 'brief'
       ? `日报写到 ${join(OUT_DIR, dayKey() + '.md')}（薄版：每条一两行）。`
       : `报告写到 ${join(OUT_DIR, dayKey() + '.md')}（完整版；已有内容追加到末尾）。`
 
-  return `你是B站小号的分身，现在执行一轮值班。`
+  // ⭐ 默认禁令开关：true=生效（不传 = 生效），false=本轮不执行。用户可在控制台改。
+  const on = (v) => v !== false
+  const flag = (v, onText, offText) => (on(v) ? `✅ ${onText}` : `⛔ ${offText}`)
+  const switchLines = [
+    `- 不透露隐私（账号 / 机器路径 / 用户名 / 聊天内容）：${flag(cfg?.banPrivacy, '生效', '已关闭 —— 本轮不做这条限制')}`,
+    `- 不冒充任何真实存在的人：${flag(cfg?.banImpersonation, '生效', '已关闭 —— 本轮不做这条限制')}`,
+    `- 不碰争议话题（立场 / 性别 / 地域 / 引战）：${flag(cfg?.banControversy, '生效', '已关闭 —— 本轮自行判断')}`,
+    `- 同视频只评一次 / 不刷屏 / 动态不连发：${flag(cfg?.banRepeat, '生效', '已关闭 —— 仍受配额与质量要求约束')}`,
+    `- 不接敏感请求（写代码 / 做作品 / 承诺任何事 / 贴隐私 / 与视频无关的请求）：${flag(cfg?.banReplyRefusal, '生效', '已关闭 —— 本轮自行判断')}`,
+    `- 纯文本感想动态：${on(cfg?.dynamicPureText) ? '✅ 允许（全天最多一条）' : '⛔ 不允许 —— 动态只发「分享视频 + 一句短评」'}`,
+  ]
+  // ⭐ 关注 UP 主：手动 UID 优先；没指定（或额外）时按「最常访问」拉常看的 UP 主
+  const followAuto = on(cfg?.followAuto)
+  const followN = cfg?.followPerRound === undefined ? 8 : Math.max(0, Number(cfg.followPerRound) || 0)
+  const followParts = []
+  if (uids.length) followParts.push(`指定 UID：${uids.join('、')}（优先；用 bili_user_videos 逐个拉最新投稿，order=pubdate）`)
+  if (followAuto && followN > 0) {
+    followParts.push(`用 bili_followings 按「最常访问」排序（sort=attention，ps=50）拉我常看的 UP 主，取前 ${followN} 个`
+      + '（这些的最新投稿都看过/没有新的，就按顺序往后顺延取），再用 bili_user_videos 逐个拉最新投稿（order=pubdate）')
+  }
+  const sourceLines = [
+    `  1. 订阅 UP 主的新投稿（${followParts.length ? followParts.join('；') : '自动拉关注已关闭且没指定 UID，跳过这一档'}）`,
+    `  2. 关键词搜索（${kws.length ? kws.join('、') + '，用 bili_search，近 7 天优先' : '未配置，跳过这一档'}）`,
+    `  3. 热门榜兜底（bili_hot_videos）`,
+  ]
+  const avoidBlock = avoid.length
+    ? '不看清单（命中任意一条就整条跳过：不读字幕、不点赞、不评论、不发动态；跳过理由写「不看清单：<命中条目>」）：\n'
+      + avoid.map((x, i) => `  ${i + 1}. ${x}`).join('\n')
+      + '\n  命中规则：BV 号完全相同 / UP 主名或 UID 命中 / 标题包含该词（不区分大小写）。'
+    : '不看清单：（空）'
+
+  return `你是这个账号的用户本人——一个独立、有自己判断的普通网友。现在按自己的兴趣刷一轮B站，看到值得的留下点痕迹。`
     + personaBlock
     + (charter
       ? `\n===== 值班章程（<家目录> 已替换为真实路径）—— 严格按它执行 =====\n\n${charter}\n===== 章程结束 =====\n\n`
@@ -514,17 +645,19 @@ const buildDutyPrompt = (cfg, roundId) => {
     + `点赞 ${Math.max(0, Number(cfg?.likesPerDay) || 0)} 个/天（今天已 ${q.likes}）；`
     + `动态 ${Math.max(0, Number(cfg?.dynamicsPerDay) || 0)} 条/天（今天已 ${q.dynamics}）；`
     + `跟进回复本轮最多 ${Math.max(0, Number(cfg?.repliesPerRound) || 0)} 条。\n`
-    + `- 内容源：热门 + ${kws.length ? `关键词搜索（${kws.join('、')}）` : '章程默认关键词'}`
-    + `${uids.length ? ` + 订阅 UP 主（UID：${uids.join('、')}，用 bili_user_videos 逐个拉最新投稿）` : ''}。\n`
+    + `- 内容源（按这个优先级拉；上一档挑够或没有可看的，再看下一档）：\n${sourceLines.join('\n')}\n`
+    + `- ${avoidBlock}\n`
+    + `- 本轮开关（与章程/人设冲突时以本节为准）：\n${switchLines.map((x) => '  ' + x).join('\n')}\n`
+    + `- 评论口吻：像普通观众随口一句——短、口语、只抓一个点，**不写观后感/测评、不总结视频、不必把话说完**；长度双峰（多数 10–30 字，至少一条 ≤15 字，别写 40–60 字的中评）；不要提「小号 / 分身 / 值班 / 运营 / 账号主人」。\n`
     + `- 你的 MCP 工具带 bili- 前缀（如 bili_search / bili_subtitle / bili_reply / bili_like / bili_send_dynamic）。\n`
     + `- 判重表 = ${join(HOME, 'seen.md')}（绝对路径，别写错地方）；归档 = ${join(DIGEST_DIR, dayKey().slice(0, 7) + '.md')}。\n`
     + `- 完成后：报告（按章程契约）+ 判重表，最后用一句话汇报本轮做了什么。现在几点了自己看一眼系统时间。`
 }
 
-const runDuty = (why = 'manual') => {
+const runDuty = async (why = 'manual') => {
   try {
     const cfg = effCfg()
-    if (running) return { started: false, why, error: '上一轮还没结束' }
+    if (running || starting) return { started: false, why, error: '上一轮还没结束' }
     const cli = dshCliCached(cfg)
     if (!cli) {
       const msg = '这一轮没跑：找不到 dsh CLI（常见位置与应用目录都翻过了）。可在配置 dshBin 里手动填 …/@deepseek-ai/dsh/lib/bin.js'
@@ -532,11 +665,18 @@ const runDuty = (why = 'manual') => {
       stubReportIfMissing(1)
       return { started: false, why, error: msg }
     }
-    const overlay = buildOverlay(cfg)
+    const roundId = new Date().toISOString()
+    // ⭐ 实时流先开：overlay 生成、spawn 调试、子进程输出都会进「实时」页
+    try { live.start({ roundId, startedAt: roundId, why }) } catch { /* 实时流失败不阻断值班 */ }
+    // ⭐ 模型能力查询是异步的（最多 5s）：期间标记 starting 防并发；冲突则按“上一轮还没结束”拒绝。
+    starting = true
+    const em = await resolveEffectiveModel(cfg)
+    starting = false
+    if (running) return { started: false, why, error: '上一轮还没结束' }
+    const overlay = buildOverlay(cfg, em)
     const profile = String(cfg?.headlessProfile || 'headless').trim() || 'headless'
     const args = ['--profile', profile]
     if (overlay) args.push('--patch', overlay)
-    const roundId = new Date().toISOString()
     args.push(buildDutyPrompt(cfg, roundId))
     log(`值班轮开跑（${why}）：profile=${profile} cli=${cli}`)
     log(`值班轮 spawn 调试：execPath=${process.execPath} resourcesPath=${process.resourcesPath || '（无）'}`)
@@ -558,18 +698,20 @@ const runDuty = (why = 'manual') => {
     currentChild = child
     currentRoundId = roundId
     currentRoundAt = Date.now()
-    child.stdout?.on('data', appendLogChunk)
-    child.stderr?.on('data', appendLogChunk)
+    child.stdout?.on('data', (buf) => { appendLogChunk(buf); try { live.pushChildChunk(buf) } catch { /* 实时流失败不影响日志 */ } })
+    child.stderr?.on('data', (buf) => { appendLogChunk(buf); try { live.pushChildChunk(buf) } catch { /* 同上 */ } })
     child.on('error', (e) => {
       log(`值班轮起不来：${e?.message ?? e}`)
       running = false
       currentChild = null
+      try { live.end({ code: null, durationMs: Date.now() - currentRoundAt }) } catch { /* 兜住 */ }
     })
     child.on('exit', (code) => {
       running = false
       const durationMs = Date.now() - currentRoundAt
       currentChild = null
       log(`值班轮结束（${why}，code=${code}）`)
+      try { live.end({ code, durationMs }) } catch { /* 兜住 */ }
       try {
         appendEvents(LEDGER_FILE, [{ t: new Date().toISOString(), round: currentRoundId, type: 'round-end', code, durationMs }])
         backfillFromReport(currentRoundId)
@@ -582,10 +724,15 @@ const runDuty = (why = 'manual') => {
       t.unref?.()
     })
     bumpState({ lastRunAt: new Date().toISOString(), lastWhy: why })
-    return { started: true, why, roundId, profile, cli, cwd: HOME, log: LOG_FILE }
+    return {
+      started: true, why, roundId, profile, cli, cwd: HOME, log: LOG_FILE,
+      model: { provider: em.provider, model: em.model, reasoningEffort: em.reasoningEffort },
+    }
   } catch (e) {
+    starting = false
     running = false
     currentChild = null
+    try { live.end({ code: null, durationMs: 0 }) } catch { /* 兜住 */ }
     log(`值班轮开跑失败（${why}）：${e?.stack ?? e}`)
     return { started: false, why, error: String(e?.message ?? e) }
   }
@@ -691,7 +838,7 @@ const tick = () => {
       const key = `${today}:${k}`
       if (st.windows?.[key]) continue
       bumpState({ windows: { ...(st.windows || {}), [key]: true } })
-      runDuty(`window:${k}`)
+      runDuty(`window:${k}`).catch((e) => log(`定时值班触发失败（已兜住）：${e?.message ?? e}`))
       return
     }
   } catch (e) {
@@ -750,6 +897,7 @@ const buildOverview = () => {
       lastDurationMs: st.lastDurationMs ?? null,
     },
     health: { cli: cli || '', cred: existsSync(BILI_CRED_FILE), routeOk: true },
+    model: effectiveModel(cfg),
     lastReplyPollAt: st.lastReplyPollAt || '',
     home: HOME,
     ledgerFile: LEDGER_FILE,
@@ -772,12 +920,222 @@ const listReports = () => {
   return { days: days.sort().reverse(), digests: digests.sort().reverse(), overlay: existsSync(OVERLAY_FILE) }
 }
 
+/* ───────────────────────── 一键诊断 / 模型目录（依赖注入给 lib/diagnose.js 与 /models） ───────────────────────── */
+
+let toolsService = null   // apply() 里捕获，供诊断检查 MCP 工具是否注册
+
+const llmService = () => {
+  try { return applyCtx?.get?.('llm') ?? null } catch { return null }
+}
+
+// 工具名列表：tools.schemas() 不保证有 scope，拿不到就退化为按名字探测
+const mcpToolNames = () => {
+  const out = []
+  try {
+    const svc = toolsService
+    if (!svc) return out
+    let list = []
+    try { list = svc.schemas?.() || [] } catch { list = [] }
+    for (const t of list) {
+      const n = typeof t === 'string' ? t : t?.name
+      if (n) out.push(n)
+    }
+    if (!out.length) {
+      for (const n of ['mcp__bili-fenshen__bili_check_credential', 'mcp__bili-fenshen__bili_search']) {
+        try { if (svc.get?.(n)) out.push(n) } catch { /* 兜住 */ }
+      }
+    }
+  } catch { /* 兜住 */ }
+  return out
+}
+
+// spawn 捕获（带超时；绝不抛）——诊断用
+const captureRun = (cmd, args, opts = {}) => new Promise((resolve) => {
+  let settled = false
+  const finish = (v) => { if (!settled) { settled = true; resolve(v) } }
+  try {
+    const timeoutMs = Math.max(1000, Math.min(Number(opts?.timeoutMs) || 10_000, 20_000))
+    const child = spawn(cmd, Array.isArray(args) ? args : [], {
+      cwd: opts?.cwd || HOME,
+      windowsHide: true,
+      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', ...(opts?.env || {}) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.on('data', (b) => { try { stdout += toText(b) } catch { /* 兜住 */ } })
+    child.stderr?.on('data', (b) => { try { stderr += toText(b) } catch { /* 兜住 */ } })
+    child.on('error', (e) => finish({ code: null, stdout, stderr, error: String(e?.message ?? e) }))
+    child.on('exit', (code, signal) => finish({ code, signal, stdout, stderr }))
+    const t = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* 已退出 */ }
+      finish({ code: null, stdout, stderr, error: 'timeout' })
+    }, timeoutMs)
+    t.unref?.()
+  } catch (e) {
+    finish({ code: null, stdout: '', stderr: '', error: String(e?.message ?? e) })
+  }
+})
+
+const diagnoseEnv = () => {
+  const cfg = effCfg()
+  const llm = llmService()
+  return {
+    platform: process.platform,
+    paths: {
+      projectRoot: PROJECT_ROOT,
+      python: VENV_PYTHON,
+      mcpServer: join(PROJECT_ROOT, 'mcp_server.py'),
+      credential: BILI_CRED_FILE,
+      home: HOME,
+      logFile: LOG_FILE,
+      ledgerFile: LEDGER_FILE,
+      outDir: OUT_DIR,
+      headlessProfileDir: headlessProfileDirOf(cfg),
+      dshCli: dshCliCached(cfg) || '',
+    },
+    config: {
+      modelProvider: cfg?.modelProvider || '',
+      modelName: cfg?.modelName || '',
+      modelReasoningEffort: cfg?.modelReasoningEffort || '',
+      dutyTools: Array.isArray(cfg?.dutyTools) ? cfg.dutyTools : [],
+      headlessProfile: cfg?.headlessProfile || 'headless',
+    },
+    exists: (p) => { try { return !!p && existsSync(p) } catch { return false } },
+    readText: (p) => { try { return readFileSync(p, 'utf8') } catch { return null } },
+    readJson: (p) => readJson(p, null),
+    writeText: (p, text) => { try { writeFileSync(p, String(text), 'utf8'); return true } catch { return false } },
+    removeFile: (p) => { try { unlinkSync(p) } catch { /* 兜住 */ } },
+    run: captureRun,
+    fetchJson: async (url, opts = {}) => {
+      const r = await fetch(url, opts)
+      let json = null
+      try { json = await r.json() } catch { /* 非 JSON 响应 */ }
+      return { status: r.status, json }
+    },
+    readCred,
+    listProviders: async () => {
+      try { return llm?.listProviders ? await llm.listProviders() : [] } catch { return [] }
+    },
+    listModels: async (provider) => {
+      try { return llm?.listModels ? await llm.listModels(provider) : [] } catch { return [] }
+    },
+    selection: () => currentSelectionSafe(),
+    mcpToolNames,
+    routeOk: routeRegistered,
+  }
+}
+
+const runDiagnoseSafely = async () => {
+  try {
+    return await runDiagnose(diagnoseEnv(), { timeoutMs: 8000 })
+  } catch (e) {
+    return {
+      ok: false,
+      generatedAt: new Date().toISOString(),
+      durationMs: 0,
+      summary: { pass: 0, warn: 0, fail: 1 },
+      items: [{ id: 'internal', label: '诊断未跑起来', status: 'fail', detail: String(e?.message ?? e), fix: '把这条错误反馈给插件作者', durationMs: 0 }],
+    }
+  }
+}
+
+// 模型目录：provider / models / 推理强度 / 当前选择 / 插件配置 + 生效模型（供控制台「模型」组）
+const withTimeout = (p, ms) => Promise.race([
+  Promise.resolve(p),
+  new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('timeout')), ms); t.unref?.() }),
+])
+
+const buildModelsInfo = async () => {
+  const cfg = effCfg()
+  const llm = llmService()
+  const em = effectiveModel(cfg)
+  const providers = []
+  const models = {}
+  const warnings = []
+  try {
+    const list = await withTimeout(llm?.listProviders ? llm.listProviders() : [], 5000)
+    for (const p of list || []) if (p?.id) providers.push({ id: p.id, name: p.name || p.id })
+  } catch (e) { warnings.push(`拉取 provider 失败：${e?.message ?? e}`) }
+  await Promise.all(providers.map(async (p) => {
+    try {
+      const list = await withTimeout(llm?.listModels ? llm.listModels(p.id) : [], 5000)
+      models[p.id] = (list || []).map((m) => ({ id: m.id, name: m.name || m.id })).filter((m) => m.id)
+    } catch (e) {
+      models[p.id] = []
+      warnings.push(`${p.id} 拉取模型失败：${e?.message ?? e}`)
+    }
+  }))
+  let reasoningEfforts = []
+  if (em.provider && em.model) {
+    try {
+      const info = await withTimeout(llm?.resolveModelInfo ? llm.resolveModelInfo(em.provider, em.model) : null, 5000)
+      reasoningEfforts = (info?.reasoning?.efforts || []).map((x) => ({
+        id: x.id, name: x.name || x.id, description: x.description || '',
+      }))
+    } catch (e) { warnings.push(`拉取推理强度失败：${e?.message ?? e}`) }
+  }
+  return {
+    ok: true,
+    selection: currentSelectionSafe() || null,
+    effective: em,
+    config: {
+      modelProvider: cfg?.modelProvider || '',
+      modelName: cfg?.modelName || '',
+      modelReasoningEffort: cfg?.modelReasoningEffort || '',
+    },
+    providers,
+    models,
+    reasoningEfforts,
+    warnings,
+  }
+}
+
+// 实时快照（契约 §1.2）：lib/live 的 snapshot + 今日配额
+const liveSnapshot = (after = 0) => {
+  let snap = { ok: true, running: false, events: [], cursor: 0, phase: { key: 'think', label: '思考' }, stats: { events: 0, tools: {}, actions: { like: 0, comment: 0, dynamic: 0, reply: 0 }, errors: 0 } }
+  try { snap = live.snapshot(after) } catch { /* 兜住 */ }
+  const q = quotaFromLedger()
+  const cfg = effCfg()
+  return {
+    ok: true,
+    ...snap,
+    quota: {
+      picked: q.picked, comments: q.comments, likes: q.likes, dynamics: q.dynamics,
+      limits: {
+        perDay: cfg.perDay, commentsPerDay: cfg.commentsPerDay,
+        likesPerDay: cfg.likesPerDay, dynamicsPerDay: cfg.dynamicsPerDay,
+        repliesPerRound: cfg.repliesPerRound,
+      },
+    },
+  }
+}
+
+/* ───────────────────────── 路由残留自愈（HMR 开发期兜底） ─────────────────────────
+ * ⚠️ webserver 的 exact/prefixes 是内部 Map（注册返回的 disposer 才会删除条目）。
+ *    实测：插件行 toggle 或 HMR 重载时，若旧实例的 cleanup 没被调用，旧路由会残留，
+ *    新实例再注册同名路径就抛 duplicate。这里在注册冲突时尽力删掉残留条目并重试一次；
+ *    内部结构变化（字段改名）时静默失败，退回“跳过这条路由”的降级路径。
+ *    正常情况下 cleanup 会注销路由，这段不会触发。
+ */
+const healStaleRoute = (web, kind, path) => {
+  try {
+    const table = kind === 'exact' ? web?.exact : web?.prefixes
+    if (!table || typeof table.delete !== 'function' || typeof table.has !== 'function') return false
+    if (!table.has(path)) return false
+    table.delete(path)
+    return true
+  } catch { return false }
+}
+
 /* ───────────────────────── Host 插件入口 ───────────────────────── */
 
 export const inject = ['webServer', 'tools']
 
 export function apply(ctx, config) {
-  applyCtx = { ...ctx, config }
+  // ⭐ 保存真实 ctx（不要展开成普通对象：ctx.get 是原型方法，展开后会丢，
+  //    agentDefaultModel / llm / tools 等服务就查不到，模型跟随与诊断模型项都会误报）
+  applyCtx = ctx
   cfgSnapshot = config || {}
   const disposers = []
 
@@ -796,6 +1154,7 @@ export function apply(ctx, config) {
   }
   try {
     const tools = ctx.get?.('tools') ?? ctx.tools
+    toolsService = tools || null
     if (tools?.register) {
       const defStatus = {
         name: 'bili_fenshen_status',
@@ -828,10 +1187,22 @@ export function apply(ctx, config) {
           + '同轮进行中会拒绝重复触发。',
         parameters: { type: 'object', properties: { why: { type: 'string', description: '触发原因，默认 manual' } }, additionalProperties: false },
         output: textOutput,
-        execute: async (args) => safe(runDuty(String(args?.why || 'manual'))),
+        execute: async (args) => safe(await runDuty(String(args?.why || 'manual'))),
+      }
+      const defDiagnose = {
+        name: 'bili_fenshen_diagnose',
+        description: '一键诊断B站分身插件：Python 环境与依赖、MCP Server 与连接、B站登录凭证、dsh CLI、headless profile、'
+          + '家目录可写、值班轮模型可用性、控制台路由。返回每项 pass/warn/fail 与修复建议。',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        output: textOutput,
+        execute: async () => {
+          const report = await runDiagnoseSafely()
+          return { report, text: formatDiagnoseText(report) }
+        },
       }
       disposers.push(tools.register(defStatus))
       disposers.push(tools.register(defRun))
+      disposers.push(tools.register(defDiagnose))
     } else {
       log('tools 服务不可用：手动触发工具未注册（仅影响工具入口，不影响调度）')
     }
@@ -876,7 +1247,7 @@ export function apply(ctx, config) {
           })
         }
         if (req.method === 'POST' && path === '/api/bili-fenshen/run') {
-          return sendJson(res, 200, runDuty('web'))
+          return sendJson(res, 200, await runDuty('web'))
         }
         if (req.method === 'GET' && path === '/api/bili-fenshen/report') {
           try {
@@ -904,7 +1275,7 @@ export function apply(ctx, config) {
             try {
               const png = join(HOME, 'login-qr.png')
               await new Promise((resolve) => {
-                const child = spawn(join(PROJECT_ROOT, '.venv', 'Scripts', 'python.exe'),
+                const child = spawn(VENV_PYTHON,
                   ['-c', 'import sys, qrcode; qrcode.make(sys.argv[1]).save(sys.argv[2])', s.url, png],
                   { cwd: HOME, windowsHide: true })
                 child.on('exit', (c) => resolve(c === 0))
@@ -942,7 +1313,20 @@ export function apply(ctx, config) {
         '/api/bili-fenshen/overview', '/api/bili-fenshen/activity', '/api/bili-fenshen/account',
         '/api/bili-fenshen/config', '/api/bili-fenshen/log', '/api/bili-fenshen/seen', '/api/bili-fenshen/reports',
         '/api/bili-fenshen/duty', '/api/bili-fenshen/run', '/api/bili-fenshen/stop',
+        // 新增：模型目录 / 一键诊断 / 实时运行流
+        '/api/bili-fenshen/models', '/api/bili-fenshen/diagnose',
+        '/api/bili-fenshen/live', '/api/bili-fenshen/live/stream',
       ])
+      // ⭐ HMR 实测：插件行 toggle off/on 后，旧模块实例可能留下一个无法注销的 prefix 路由
+      //    （旧 handler 继续应答，新实例再 register 同名 prefix 会抛 duplicate）。
+      //    对策：按端点注册 exact 路由（webserver 匹配顺序 exact → 最长 prefix），新实例永远接管已知端点；
+      //    prefix 只作未知路径的 404 兜底，注册失败就跳过（不阻断 exact）。app 重启后两者都正常注册。
+      const ROUTE_PATHS = [
+        ...FACTORY_PATHS,
+        '/api/bili-fenshen/status', '/api/bili-fenshen/report',
+        '/api/bili-fenshen/login/start', '/api/bili-fenshen/login/poll', '/api/bili-fenshen/login/qr.png',
+        '/api/bili-fenshen/cred',
+      ]
       const mountRoutes = () => {
         if (!web?.register) { log('webServer 不可用：HTTP 路由未挂'); return () => {} }
         if (routeRegistered) { log('webServer 路由已注册过，跳过重复注册'); return () => {} }
@@ -966,23 +1350,66 @@ export function apply(ctx, config) {
           stopDuty,
           fetchAccount: () => fetchAccount(readCred()),
           listReports,
-        })
-        return web.register({
-          kind: 'prefix',
-          path: '/api/bili-fenshen',
-          handler: async (req, res) => {
-            try {
-              const url = new URL(req.url, 'http://127.0.0.1')
-              if (FACTORY_PATHS.has(url.pathname)) {
-                await api(req, res)                                   // 新端点
-                if (res.writableEnded) return
-              }
-              await legacyHandle(req, res, url)                       // 旧端点 + 最终 404
-            } catch (e) {
-              try { if (!res.writableEnded) { res.writeHead(500); res.end() } } catch { /* 兜住 */ }
-            }
+          // 新增端点依赖（api.js 里缺失时优雅降级）
+          models: buildModelsInfo,
+          diagnose: runDiagnoseSafely,
+          live: {
+            snapshot: (after) => liveSnapshot(after),
+            subscribe: (listener) => live.onPush(listener),
           },
         })
+        // ⭐ /live/stream 的 SSE 连接需要随插件卸载一起关掉，否则重载后旧连接还在推旧实例数据
+        const closeSse = typeof api?.closeSse === 'function' ? () => { try { api.closeSse() } catch { /* 兜住 */ } } : null
+        disposers.push(closeSse || (() => {}))
+
+        const dispatch = async (req, res) => {
+          try {
+            const url = new URL(req.url, 'http://127.0.0.1')
+            if (FACTORY_PATHS.has(url.pathname)) {
+              await api(req, res)                                   // 新端点
+              // ⭐ SSE（/live/stream）不会 end 响应，用 headersSent 判断是否已由工厂接管
+              if (res.writableEnded || res.headersSent) return
+            }
+            await legacyHandle(req, res, url)                       // 旧端点 + 最终 404
+          } catch (e) {
+            try { if (!res.writableEnded && !res.headersSent) { res.writeHead(500); res.end() } } catch { /* 兜住 */ }
+          }
+        }
+
+        const routeDisposers = []
+        let failed = 0
+        let exactCount = 0
+        let healed = 0
+        for (const path of ROUTE_PATHS) {
+          try {
+            routeDisposers.push(web.register({ kind: 'exact', path, handler: dispatch }))
+            exactCount++
+          } catch (e) {
+            // 冲突时先尝试清掉旧实例残留（正常 cleanup 生效时不会走到这里）
+            if (healStaleRoute(web, 'exact', path)) {
+              try {
+                routeDisposers.push(web.register({ kind: 'exact', path, handler: dispatch }))
+                exactCount++
+                healed++
+                continue
+              } catch { /* 还是不行，走失败计数 */ }
+            }
+            failed++
+            log(`exact 路由注册跳过（${path}）：${e?.message ?? e}`)
+          }
+        }
+        try {
+          routeDisposers.push(web.register({ kind: 'prefix', path: '/api/bili-fenshen', handler: dispatch }))
+        } catch (e) {
+          if (healStaleRoute(web, 'prefix', '/api/bili-fenshen')) {
+            try { routeDisposers.push(web.register({ kind: 'prefix', path: '/api/bili-fenshen', handler: dispatch })) }
+            catch { /* 兜底路由失败不影响已知端点 */ }
+          }
+          // 历史实例残留的 prefix 无法注销：exact 已经能覆盖所有已知端点，这里只影响未知路径的 404 文案
+          log(`prefix 兜底路由注册跳过（已知端点由 exact 路由接管）：${e?.message ?? e}`)
+        }
+        log(`webServer 路由已挂载：exact ${exactCount}/${ROUTE_PATHS.length} 条${failed ? `（失败 ${failed} 条）` : ''}${healed ? `（自愈 ${healed} 条残留）` : ''}`)
+        return () => { for (const d of routeDisposers.reverse()) { try { d?.() } catch { /* 兜住 */ } } }
       }
       disposers.push(mountRoutes())
     } else {
@@ -1005,13 +1432,22 @@ export function apply(ctx, config) {
   hbTimer.unref?.()
   disposers.push(() => { try { clearInterval(hbTimer) } catch { /* 兜住 */ } })
 
-  log(`dsh-bili-fenshen host 已激活（home=${HOME}，autoDuty=${!!effCfg().autoDuty}）`)
+  log(`dsh-bili-fenshen host 已激活（home=${HOME}，autoDuty=${!!effCfg().autoDuty}，profileRoot=${PROFILE_ROOT || '（无）'}）`)
 
-  return () => {
+  // ⭐ 正确的清理路径：Cordis 只保证 ctx.effect 的 disposer 在插件停止时执行；
+  //    仅 return 一个函数在 HMR 重载/行 toggle 时实测不一定会被调用（旧路由/定时器会残留）。
+  //    两种写法都保留，并用 once 守卫避免重复清理；集成测试的 fake ctx 没有 effect 时走返回值。
+  let disposed = false
+  const disposeAll = () => {
+    if (disposed) return
+    disposed = true
     for (const d of disposers.reverse()) {
       try { d?.() } catch { /* 卸载兜底 */ }
     }
     routeRegistered = false   // 允许下次激活重新注册路由
     applyCtx = null
+    toolsService = null
   }
+  try { if (typeof ctx.effect === 'function') ctx.effect(() => disposeAll) } catch { /* 老宿主没有 effect 或注册失败：退回返回值 */ }
+  return disposeAll
 }

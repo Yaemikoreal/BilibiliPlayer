@@ -12,14 +12,19 @@
       config:
         serverName: bili-fenshen
         transport: stdio
-        command: E:\myproject\BilibiliPlayer\.venv\Scripts\python.exe
+        command: /Users/yaemiko/Projects/bilibiliplayer/.venv/bin/python
         args:
-          - E:\myproject\BilibiliPlayer\mcp_server.py
+          - /Users/yaemiko/Projects/bilibiliplayer/mcp_server.py
         env:
           PYTHONUTF8: '1'
           PYTHONIOENCODING: 'utf-8'
-        cwd: E:\myproject\BilibiliPlayer
+        cwd: /Users/yaemiko/Projects/bilibiliplayer
         failOnStartupError: true
     - id: bili-fenshen
       name: 'dsh-bili-fenshen'
       config: {}
+      # 值班轮模型：留空 = 跟随当前会话的默认模型（安装后在控制台「操作台 → 配置 → 模型」里改更方便，
+      # 会写入 <家目录>/config.json 覆盖层，不必改这个文件）。要直接写死就取消下面注释：
+      #   modelProvider: deepseek-account
+      #   modelName: deepseek-flash
+      #   modelReasoningEffort: high
