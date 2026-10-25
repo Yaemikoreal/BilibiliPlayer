@@ -79,7 +79,7 @@ node test/client.render-smoke.mjs   # 需要临时安装 react/react-dom（联�
 ## 添加一个新工具
 
 1. 在 `mcp_server.py` 里用 `@_gated_tool()` 实现，docstring 写全参数。
-2. 更新 README 的「28 个工具全览」：数量、分类表格和徽章数字（`tools-28`）要一起改。
+2. 更新 README 的「29 个工具全览」：数量、分类表格和徽章数字（`tools-29`）要一起改。
 3. 如果 DSH 插件需要它，把工具名加进值班白名单相关配置或 `prompts/duty.md` 的说明。
 4. 跑 `python -m py_compile mcp_server.py`，确认没破坏语法。
 

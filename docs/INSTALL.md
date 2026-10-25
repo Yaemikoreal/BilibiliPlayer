@@ -1,6 +1,6 @@
 # 安装与客户端配置
 
-本文把 [README](../README.md) 的「30 秒上手」展开成完整步骤：从零环境到客户端里能看到 28 个工具，含 Windows 与 macOS / Linux 两套命令、ffmpeg、MCP Inspector 调试、凭证说明和常见安装故障。
+本文把 [README](../README.md) 的「30 秒上手」展开成完整步骤：从零环境到客户端里能看到 29 个工具，含 Windows 与 macOS / Linux 两套命令、ffmpeg、MCP Inspector 调试、凭证说明和常见安装故障。
 
 ---
 
@@ -219,7 +219,7 @@ Windows 把前半段换成 `.venv\Scripts\python.exe` 的绝对路径。
 
 ### 工具白名单（可选）
 
-`BILI_MCP_TOOLS` 是逗号分隔的工具名单：**未设置 = 全量注册 28 个工具**；设置后名单外的工具不会注册，模型根本看不见。
+`BILI_MCP_TOOLS` 是逗号分隔的工具名单：**未设置 = 全量注册 29 个工具**；设置后名单外的工具不会注册，模型根本看不见。
 
 ```json
 {
@@ -265,7 +265,7 @@ npx @modelcontextprotocol/inspector .\.venv\Scripts\python.exe mcp_server.py
 npx @modelcontextprotocol/inspector ./.venv/bin/python mcp_server.py
 ```
 
-打开 Inspector 面板 → Connect → 在 Tools 里应当看到 **28 个** `bili_*` 工具，逐个可调用。日志输出到 stderr，不会污染 stdio 协议通道。
+打开 Inspector 面板 → Connect → 在 Tools 里应当看到 **29 个** `bili_*` 工具，逐个可调用。日志输出到 stderr，不会污染 stdio 协议通道。
 
 ---
 

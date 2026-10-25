@@ -1587,6 +1587,60 @@ async def bili_like(bvid: str, like: bool = True) -> str:
         return _err(f"点赞失败: {e}", bvid=bvid)
 
 
+# ========== Tool 29: 关注列表（我关注的 UP 主） ==========
+
+@_gated_tool()
+async def bili_followings(pn: int = 1, ps: int = 50, sort: str = "attention", keyword: str = "") -> str:
+    """
+    获取当前账号关注的 UP 主列表（订阅列表，分页；支持「最常访问」排序）
+
+    Args:
+        pn: 页码，默认1
+        ps: 每页数量，默认50（最大50）
+        sort: 排序：attention=最常访问（常看的在前，默认）；follow=最近关注在前；follow_asc=最早关注在前
+        keyword: 按昵称过滤（本地过滤当前页，不区分大小写）
+
+    Returns:
+        关注的 UP 主列表：mid、昵称、签名、头像；total = 当前账号总关注数；sort = 实际使用的排序
+    """
+    cred = get_cred()
+    uid = str(cred.dedeuserid or "").strip()
+    if not uid.isdigit():
+        return _err("凭证里缺少 dedeuserid，无法拉取关注列表；请重新扫码登录")
+    page = max(1, min(int(pn or 1), 1000))
+    size = max(1, min(int(ps or 50), 50))
+    sort_key = str(sort or "").strip().lower()
+    attention = sort_key not in ("follow", "follow_asc")
+    follow_asc = sort_key == "follow_asc"
+    order_enum = user.OrderType.asc if follow_asc else user.OrderType.desc
+    u = user.User(uid=int(uid), credential=cred)
+    try:
+        result = await u.get_followings(pn=page, ps=size, attention=attention, order=order_enum)
+    except Exception as e:
+        return _err(f"获取关注列表失败: {e}", uid=int(uid))
+    kw = str(keyword or "").strip().lower()
+    items = []
+    for x in result.get("list") or []:
+        name = str(x.get("uname") or "")
+        if kw and kw not in name.lower():
+            continue
+        items.append({
+            "mid": x.get("mid"),
+            "uname": name,
+            "sign": str(x.get("sign") or "")[:80],
+            "face": x.get("face") or "",
+        })
+    return _ok({
+        "success": True,
+        "uid": int(uid),
+        "page": page,
+        "sort": "attention" if attention else ("follow_asc" if follow_asc else "follow"),
+        "total": result.get("total", 0),
+        "count": len(items),
+        "followings": items,
+    })
+
+
 # ========== 启动 ==========
 
 if __name__ == "__main__":
