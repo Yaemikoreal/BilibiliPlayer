@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300" fill="none">
+  <defs>
+    <linearGradient id="pinkFace" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF93B2"/>
+      <stop offset="0.55" stop-color="#FB7299"/>
+      <stop offset="1" stop-color="#E85C86"/>
+    </linearGradient>
+    <linearGradient id="pinkScreen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="blueFace" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6FD4F5"/>
+      <stop offset="0.5" stop-color="#23ADE5"/>
+      <stop offset="1" stop-color="#1687C4"/>
+    </linearGradient>
+    <linearGradient id="blueScreen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="fishBody" x1="0.1" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#7FDCF7"/>
+      <stop offset="0.45" stop-color="#23ADE5"/>
+      <stop offset="1" stop-color="#1B6FB0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ================= blue TV (back) ================= -->
+  <g transform="rotate(-7 268 126)">
+    <path d="M219 57 L199 25" stroke="#6FD4F5" stroke-width="8" stroke-linecap="round"/>
+    <path d="M317 57 L337 25" stroke="#6FD4F5" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="199" cy="25" r="7" fill="#FFD166"/>
+    <circle cx="337" cy="25" r="7" fill="#FB7299"/>
+    <rect x="178" y="52" width="182" height="140" rx="26" fill="url(#blueFace)"/>
+    <rect x="191" y="65" width="156" height="114" rx="18" fill="url(#blueScreen)"/>
+    <rect x="178" y="52" width="182" height="140" rx="26" stroke="#FFFFFF" stroke-opacity="0.28" stroke-width="1.5"/>
+    <circle cx="268" cy="120" r="13" fill="#FFFFFF"/>
+    <circle cx="322" cy="120" r="13" fill="#FFFFFF"/>
+    <circle cx="345" cy="72" r="5" fill="#FF5C8A"/>
+  </g>
+
+  <!-- ================= pink TV (front) ================= -->
+  <g transform="rotate(4 135 164)">
+    <path d="M83 92 L60 50" stroke="#FFA3BC" stroke-width="9" stroke-linecap="round"/>
+    <path d="M190 92 L213 50" stroke="#FFA3BC" stroke-width="9" stroke-linecap="round"/>
+    <circle cx="60" cy="50" r="8" fill="#23ADE5"/>
+    <circle cx="213" cy="50" r="8" fill="#FFD166"/>
+    <rect x="30" y="86" width="210" height="158" rx="30" fill="url(#pinkFace)"/>
+    <rect x="45" y="101" width="180" height="128" rx="21" fill="url(#pinkScreen)"/>
+    <rect x="30" y="86" width="210" height="158" rx="30" stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="1.8"/>
+    <circle cx="103" cy="161" r="15" fill="#FFFFFF"/>
+    <circle cx="167" cy="161" r="15" fill="#FFFFFF"/>
+    <path d="M112 190 Q135 205 158 190" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+    <ellipse cx="76" cy="182" rx="13" ry="8" fill="#FFFFFF" opacity="0.36"/>
+    <ellipse cx="194" cy="182" rx="13" ry="8" fill="#FFFFFF" opacity="0.36"/>
+    <circle cx="222" cy="104" r="6" fill="#FFFFFF" opacity="0.85"/>
+  </g>
+
+  <!-- ================= chubby blue fish ================= -->
+  <g transform="rotate(-12 322 234)">
+    <path d="M358 234 L398 208 Q389 234 398 260 Z" fill="#1687C4"/>
+    <path d="M340 208 q9 -21 25 -13 q-5 15 -14 19 z" fill="#3FC5F0"/>
+    <ellipse cx="322" cy="234" rx="44" ry="30" fill="url(#fishBody)"/>
+    <ellipse cx="318" cy="247" rx="25" ry="12" fill="#FFFFFF" opacity="0.20"/>
+    <circle cx="300" cy="225" r="9" fill="#FFFFFF"/>
+    <circle cx="297" cy="225" r="4.4" fill="#123B57"/>
+    <circle cx="295" cy="222" r="1.7" fill="#FFFFFF"/>
+    <ellipse cx="310" cy="244" rx="7" ry="5" fill="#FFB3C7" opacity="0.8"/>
+    <path d="M285 239 q6 6 12 0" stroke="#123B57" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+  </g>
+
+  <!-- bubbles + sparkles -->
+  <path d="M28 46 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4 z" fill="#FB7299" opacity="0.9"/>
+  <path d="M372 92 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3 z" fill="#23ADE5" opacity="0.9"/>
+  <path d="M352 40 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2 z" fill="#FFD166" opacity="0.8"/>
+</svg>

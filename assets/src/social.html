@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Bilibili MCP — social preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #0b0e14; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 640px;
+    overflow: hidden;
+    background:
+      radial-gradient(1000px 720px at 84% 22%, rgba(251,114,153,0.17), transparent 64%),
+      radial-gradient(880px 640px at 99% 86%, rgba(35,173,229,0.18), transparent 66%),
+      radial-gradient(700px 560px at 2% 100%, rgba(35,173,229,0.10), transparent 70%),
+      linear-gradient(126deg, #0a0d13 0%, #0c1017 48%, #0b0e16 100%);
+    font-family: "Helvetica Neue", "Hiragino Sans GB", "PingFang SC", "Heiti SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+  }
+  .dots {
+    position: absolute; inset: 0;
+    background-image: radial-gradient(rgba(255,255,255,0.075) 1px, transparent 1px);
+    background-size: 30px 30px;
+    -webkit-mask-image: radial-gradient(1100px 760px at 52% 44%, #000 12%, rgba(0,0,0,0.35) 62%, transparent 90%);
+    mask-image: radial-gradient(1100px 760px at 52% 44%, #000 12%, rgba(0,0,0,0.35) 62%, transparent 90%);
+    opacity: 0.55;
+  }
+  .sheen {
+    position: absolute; left: -10%; top: -80%;
+    width: 120%; height: 160%;
+    background: linear-gradient(104deg, transparent 38%, rgba(255,255,255,0.05) 50%, transparent 62%);
+    pointer-events: none;
+  }
+  .vignette {
+    position: absolute; inset: 0;
+    background: radial-gradient(130% 130% at 50% 46%, transparent 40%, rgba(4,6,10,0.6) 100%);
+    pointer-events: none;
+  }
+  .hairline {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+    background: linear-gradient(90deg, transparent 2%, rgba(251,114,153,0.6) 28%, rgba(126,143,205,0.5) 50%, rgba(35,173,229,0.6) 72%, transparent 98%);
+    opacity: 0.65;
+  }
+  .content {
+    position: absolute; inset: 0;
+    display: flex; align-items: center;
+    padding: 0 72px 0 88px;
+    gap: 12px;
+  }
+  .left { flex: 1 1 auto; min-width: 0; padding-bottom: 16px; }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 11px;
+    height: 34px;
+    padding: 0 17px 0 14px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.10);
+    color: #9aa5b8;
+    font-size: 15px;
+    letter-spacing: 0.10em;
+    white-space: nowrap;
+  }
+  .eyebrow b { color: #e8edf5; font-weight: 600; letter-spacing: 0.05em; }
+  .eyebrow .sep { color: #4d5566; letter-spacing: 0; }
+  .pulse {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #3ddc97;
+    box-shadow: 0 0 0 4px rgba(61,220,151,0.16), 0 0 12px rgba(61,220,151,0.6);
+    flex: 0 0 auto;
+  }
+
+  .lockup {
+    display: flex; align-items: center; gap: 18px;
+    margin-top: 26px;
+    white-space: nowrap;
+  }
+  h1 {
+    font-size: 92px;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: -0.032em;
+    background: linear-gradient(178deg, #ffffff 18%, #cfd9ea 92%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 4px 24px rgba(0,0,0,0.5));
+  }
+  .plugin {
+    display: inline-flex; flex-direction: column; gap: 3px;
+    padding: 10px 15px 12px;
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(251,114,153,0.17), rgba(251,114,153,0.07));
+    border: 1px solid rgba(251,114,153,0.42);
+    box-shadow: 0 8px 30px rgba(251,114,153,0.15);
+    transform: translateY(-4px);
+  }
+  .plugin .tag { font-size: 12px; letter-spacing: 0.16em; color: #ff9fbb; opacity: 0.85; }
+  .plugin .name { font-size: 27px; font-weight: 600; color: #ffd0dd; letter-spacing: 0.01em; }
+
+  .tagline {
+    margin-top: 30px;
+    font-size: 34px;
+    line-height: 1.2;
+    letter-spacing: -0.008em;
+    color: #aab5c8;
+    white-space: nowrap;
+  }
+  .tagline .hi {
+    background: linear-gradient(94deg, #ff8fb0 0%, #ffb3c7 42%, #6fd0f2 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 600;
+  }
+  .zh {
+    margin-top: 20px;
+    font-size: 20px;
+    line-height: 1.5;
+    color: #7f8b9f;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .zh em { font-style: normal; color: #c3cddd; }
+  .zh .bul { color: #fb7299; opacity: 0.85; margin: 0 6px; }
+
+  .chips { display: flex; align-items: center; gap: 10px; margin-top: 32px; white-space: nowrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    height: 34px; padding: 0 15px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.09);
+    color: #a8b3c6;
+    font-size: 15px;
+    letter-spacing: 0.03em;
+  }
+  .chip .ico { width: 7px; height: 7px; border-radius: 2px; }
+  .chip.accent {
+    background: linear-gradient(180deg, rgba(35,173,229,0.18), rgba(35,173,229,0.08));
+    border-color: rgba(35,173,229,0.42);
+    color: #a9e4fb;
+  }
+  .chip.pink {
+    background: linear-gradient(180deg, rgba(251,114,153,0.16), rgba(251,114,153,0.07));
+    border-color: rgba(251,114,153,0.38);
+    color: #ffc2d3;
+  }
+
+  .mascot-wrap {
+    flex: 0 0 auto;
+    position: relative;
+    width: 492px; height: 420px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mascot-glow {
+    position: absolute;
+    width: 450px; height: 380px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 46% 44%, rgba(251,114,153,0.15), rgba(35,173,229,0.08) 52%, transparent 72%);
+    filter: blur(8px);
+  }
+  .mascot-wrap img { position: relative; width: 456px; height: auto; display: block; }
+
+  .footer {
+    position: absolute; left: 88px; right: 72px; bottom: 66px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 15px;
+    color: #6f7b8f;
+    letter-spacing: 0.02em;
+  }
+  .footer .repo { display: flex; align-items: center; gap: 9px; color: #93a0b5; }
+  .footer .repo .dot { width: 5px; height: 5px; border-radius: 50%; background: #fb7299; opacity: 0.8; }
+  .footer .meta { display: flex; align-items: center; gap: 12px; color: #67738a; }
+  .footer .meta .s { width: 3px; height: 3px; border-radius: 50%; background: #46506180; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="dots"></div>
+  <div class="sheen"></div>
+  <div class="vignette"></div>
+
+  <div class="content">
+    <div class="left">
+      <div class="eyebrow"><span class="pulse"></span><b>bilibili-mcp</b><span class="sep">·</span>开源 · MIT · 本地运行</div>
+
+      <div class="lockup">
+        <h1>Bilibili MCP</h1>
+        <span class="plugin"><span class="tag">DSH 插件</span><span class="name">B站分身</span></span>
+      </div>
+
+      <div class="tagline">Let your AI agent <span class="hi">actually</span> use Bilibili.</div>
+
+      <div class="zh">
+        登录<span class="bul">·</span>采集<span class="bul">·</span>发布<span class="bul">·</span>分析<span class="bul">·</span>互动<em>，28 个工具让 AI 真正上手B站</em>
+      </div>
+
+      <div class="chips">
+        <span class="chip pink"><span class="ico" style="background:#fb7299"></span>28 MCP tools</span>
+        <span class="chip">Claude Code</span>
+        <span class="chip">Cursor</span>
+        <span class="chip accent"><span class="ico" style="background:#23ade5"></span>DeepSeek Harness</span>
+      </div>
+    </div>
+
+    <div class="mascot-wrap">
+      <div class="mascot-glow"></div>
+      <img src="mascot.svg" alt="mascot">
+    </div>
+  </div>
+
+  <div class="footer">
+    <span class="repo"><span class="dot"></span>github.com/Yaemikoreal/BilibiliPlayer</span>
+    <span class="meta">Python<span class="s"></span>MCP stdio<span class="s"></span>本地凭证</span>
+  </div>
+
+  <div class="hairline"></div>
+</div>
+</body>
+</html>
