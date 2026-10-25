@@ -1,0 +1,99 @@
+name: Bug 报告
+description: 报告一个可以复现的问题（工具报错、安装失败、客户端看不到工具等）
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！提交前请确认：**不要粘贴 `bili_credential.json` 的内容或二维码截图**，日志里的 UID、路径请自行打码。
+        安全问题请走 [SECURITY.md](https://github.com/Yaemikoreal/BilibiliPlayer/blob/main/SECURITY.md)，不要开公开 issue。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前自查
+      options:
+        - label: 我已经搜索过现有 issue，没有重复
+          required: true
+        - label: 我用的是 `main` 分支的最新代码
+          required: true
+        - label: 我的报告里不含凭证、二维码、真实 UID 等敏感信息
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述
+      description: 发生了什么？期望是什么？
+      placeholder: |
+        调用 bili_comments 时返回 {"success": false, "error": "..."}，
+        期望返回评论列表……
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 越具体越好，最好能贴出你让 AI 说的话或直接调用的工具名与参数
+      placeholder: |
+        1. 对 AI 说「……」
+        2. AI 调用 bili_xxx，参数为 ……
+        3. 看到错误 …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题区域
+      options:
+        - mcp_server.py（MCP 工具本身）
+        - 安装 / 客户端配置（.mcp.json、依赖）
+        - 登录与凭证
+        - dsh-plugin 控制台（看板 / 操作台）
+        - dsh-plugin 值班轮 / 账本
+        - 文档
+        - 其他 / 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: tool
+    attributes:
+      label: 涉及的工具（可选）
+      placeholder: bili_comments / bili_upload_video / bili_fenshen_run …
+    validations:
+      required: false
+
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境
+      description: 操作系统、Python 版本、MCP 客户端及版本、是否装了 ffmpeg、是否使用 DSH 插件
+      placeholder: |
+        OS: macOS 15.3 / Windows 11
+        Python: 3.11.15（.venv 内）
+        客户端: Claude Code 2.x（stdio）
+        ffmpeg: 未安装
+        DSH 插件: 未安装 / 0.x
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错信息 / 日志
+      description: 工具的返回 JSON、终端 stderr 输出。请先删掉凭证、UID、本机路径
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: commit
+    attributes:
+      label: 版本 / commit（可选）
+      placeholder: git rev-parse --short HEAD 的输出
+    validations:
+      required: false

@@ -1,189 +1,26 @@
-# bilibili-mcp（本地版）
+<p align="center"><img src="assets/hero.png" alt="BilibiliPlayer — 让 AI 直接操作B站" width="100%"></p>
 
-B站（Bilibili）MCP Server —— 在本地让 AI 助手直接操作B站。
+<h1 align="center">BilibiliPlayer ｜ 让 AI 直接操作B站</h1>
 
-本项目为**纯本地运行的独立项目**：代码、依赖和登录凭证都保存在本机，不需要从远程仓库克隆，也不关联任何远程仓库。除B站 API 外，不依赖其他外部服务。
+<p align="center"><b>28 个 MCP 工具，一个跑在本机的 MCP Server —— 把B站变成 Agent 可调用的能力。</b><br>
+搜索 · 字幕 · 弹幕 · 评论 · 点赞 · 发动态 · 投稿 · 排行榜 · 私信 · 收藏夹</p>
 
-**28 个工具**，覆盖登录认证、数据采集、内容发布、数据分析、互动运营。
+<p align="center"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"> <img src="https://img.shields.io/badge/MCP-Model_Context_Protocol-4D6BFE?style=flat-square" alt="MCP"> <img src="https://img.shields.io/badge/tools-28-00A1D6?style=flat-square" alt="28 tools"> <a href="https://github.com/Yaemikoreal/BilibiliPlayer/actions/workflows/ci.yml"><img src="https://github.com/Yaemikoreal/BilibiliPlayer/actions/workflows/ci.yml/badge.svg" alt="CI"></a><br>
+<img src="https://img.shields.io/badge/DSH-plugin-8A2BE2?style=flat-square" alt="DSH plugin"> <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="MIT"></a> <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-2ea44f?style=flat-square" alt="PRs welcome"></a></p>
 
-> **DSH 插件**：本项目附带 [dsh-plugin/](./dsh-plugin/) —— DeepSeek Harness 插件「B站分身」，把上述能力挂载给 DSH 的 Agent，并支持按值班章程自动混迹（看视频/点赞/评论/发动态）。详见 [dsh-plugin/README.md](./dsh-plugin/README.md) 与 [CONTEXT.md](./CONTEXT.md)。
+- 🔒 **纯本地运行**：MCP Server 只跑在你自己的机器上，登录凭证写在本地 `bili_credential.json`（已 `.gitignore`），不经过任何第三方服务器，也没有远程后端。
+- 🧰 **真接口，不是爬虫壳**：28 个工具全部基于 [`bilibili-api-python`](https://github.com/Nemo2011/bilibili-api)，读写都走B站 Web API，登录沿用官方扫码流程。
+- 🤖 **Agent 拿来就能干活**：标准 MCP（stdio）接入 Claude Code / Cursor / Cline / OpenClaw；还附赠 DSH 插件「B站分身」——看板 + 操作台 + 值班章程，能让 Agent 自己运营一个小号。
 
-## 功能
-
-### 登录认证（3）
-
-| Tool | 功能 | 说明 |
-|------|------|------|
-| `bili_login` | 扫码登录 | 生成二维码（base64 图片）；凭证失效时自动重新扫码，传 `force=true` 可强制换号 |
-| `bili_login_check` | 登录状态检查 | 轮询扫码状态，确认成功后原子写入凭证 |
-| `bili_check_credential` | 凭证验证 | 检查当前登录是否有效，返回 UID、用户名等信息 |
-
-### 数据采集（7）
-
-| Tool | 功能 | 说明 |
-|------|------|------|
-| `bili_search` | 搜索视频 | 按关键词搜索，支持综合/播放量/最新/弹幕排序，最多 50 条 |
-| `bili_comments` | 获取评论 | 获取视频热门评论（按点赞排序），含子评论，最多 100 条 |
-| `bili_subtitle` | 获取字幕 | 获取视频 AI 字幕（语音转文字） |
-| `bili_danmaku` | 获取弹幕 | 获取视频弹幕列表，最多 1000 条 |
-| `bili_video_info` | 视频详情 | 获取播放量、评论数、收藏数、标签等 |
-| `bili_reply` | 回复评论 | 发表评论或回复评论（支持楼中楼） |
-| `bili_crawl` | 批量采集 | 搜索 + 评论 + 字幕一步到位 |
-
-### 内容发布（5）
-
-| Tool | 功能 | 说明 |
-|------|------|------|
-| `bili_send_dynamic` | 发图文动态 | 发布文字/图文动态，支持定时发布、话题关联 |
-| `bili_upload_video` | 上传视频 | 单P视频上传，支持封面、标签、分区选择 |
-| `bili_upload_video_multi` | 多P上传 | 多分P视频合并投稿 |
-| `bili_send_opus` | 图文长内容 | 以动态形式发布图文长内容（非独立专栏） |
-| `bili_video_zones` | 分区查询 | 获取常用分区 ID，辅助视频上传 |
-
-### 数据分析（6）
-
-| Tool | 功能 | 说明 |
-|------|------|------|
-| `bili_hot_videos` | 热门视频 | 获取当前B站热门视频列表 |
-| `bili_hot_buzzwords` | 热搜关键词 | 获取B站热搜词/热门话题 |
-| `bili_weekly_hot` | 每周必看 | 获取每周必看推荐视频 |
-| `bili_rank` | 排行榜 | 全站及 24 个分类排行榜（含番剧/国创/纪录片/电影/综艺等） |
-| `bili_user_info` | 用户信息 | 获取 UP 主粉丝数、等级、总播放量等 |
-| `bili_user_videos` | 用户视频 | 获取 UP 主投稿列表，支持排序和搜索 |
-
-### 互动运营（6）
-
-| Tool | 功能 | 说明 |
-|------|------|------|
-| `bili_favorite_lists` | 收藏夹列表 | 获取自己或他人的收藏夹 |
-| `bili_favorite_content` | 收藏夹内容 | 获取收藏夹内视频，支持搜索 |
-| `bili_send_message` | 发私信 | 给指定用户发送文字私信 |
-| `bili_unread_messages` | 未读消息 | 获取私信、@、回复、点赞等未读数 |
-| `bili_received_replies` | 收到的回复 | 获取评论回复通知 |
-| `bili_received_at_and_likes` | @和点赞 | 获取 @ 提及和点赞通知 |
-
-## 环境要求
-
-- **Python 3.10+**
-- **ffmpeg**（仅上传视频时自动截取封面需要，可选）
-- 能正常访问B站 API 的网络环境
-- 支持 MCP 的客户端：Claude Code / Cursor / Cline / OpenClaw 等
-
-## 本地安装
-
-进入项目目录后创建虚拟环境：
+## ⚡ 30 秒上手
 
 ```bash
-cd /path/to/BilibiliPlayer
-python -m venv .venv
-```
-
-激活虚拟环境：
-
-**Windows（PowerShell）**
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-如果提示“禁止运行脚本”，可先对当前终端临时放行：
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-```
-
-**macOS / Linux**
-
-```bash
-source .venv/bin/activate
-```
-
-安装依赖：
-
-```bash
-python -m pip install --upgrade pip
+git clone https://github.com/Yaemikoreal/BilibiliPlayer.git && cd BilibiliPlayer
+python -m venv .venv && source .venv/bin/activate   # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-如果不想激活虚拟环境，也可以直接用虚拟环境里的 Python：
-
-```powershell
-# Windows
-.\.venv\Scripts\python.exe mcp_server.py
-```
-
-```bash
-# macOS / Linux
-./.venv/bin/python mcp_server.py
-```
-
-安装 ffmpeg（可选）：
-
-```powershell
-# Windows
-winget install Gyan.FFmpeg
-```
-
-```bash
-# macOS
-brew install ffmpeg
-
-# Debian / Ubuntu
-sudo apt install ffmpeg
-```
-
-安装后可用 `ffmpeg -version` 验证。
-
-## 登录与凭证
-
-### 方式一：通过 MCP 客户端登录（推荐）
-
-1. 按下方说明把本地 MCP Server 接入客户端。
-2. 对 AI 说“登录B站”。
-3. AI 调用 `bili_login`，返回二维码图片（base64）、本地图片文件、终端二维码和扫码 URL。
-4. 用B站 App 扫码并在手机上确认。
-5. AI 轮询 `bili_login_check`，返回 `done` 后凭证自动保存。
-
-凭证过期或需要换号时，调用 `bili_login(force=true)` 强制重新扫码。
-
-### 方式二：本地命令行登录
-
-```bash
-python bili_login.py
-```
-
-按终端提示用B站 App 扫码即可。
-
-### 凭证说明
-
-- 凭证默认保存在项目根目录的 `bili_credential.json`。
-- 文件仅包含 `sessdata`、`bili_jct`、`buvid3`、`dedeuserid`。
-- 已在 `.gitignore` 中忽略，不会进入版本库。
-- 写入采用临时文件 + 原子替换，避免进程中断留下半截 JSON。
-- **不要提交、分享或上传该文件。** 如曾进入 git 历史，仅删除文件不够，需要重写历史，并在B站“退出所有设备”或修改密码使旧会话失效。
-
-## 接入 MCP 客户端
-
-统一原则：`command` 指向项目虚拟环境里的 Python，`args` 指向 `mcp_server.py` 的**绝对路径**。使用 venv 里的 Python 可以避免客户端启动时找不到依赖。
-
-### Claude Code
-
-在项目目录创建 `.mcp.json`。
-
-Windows：
-
-```json
-{
-  "mcpServers": {
-    "bilibili-mcp": {
-      "command": "E:/path/to/BilibiliPlayer/.venv/Scripts/python.exe",
-      "args": ["E:/path/to/BilibiliPlayer/mcp_server.py"]
-    }
-  }
-}
-```
-
-macOS / Linux：
+在项目根目录新建 `.mcp.json`（把 `/path/to` 换成你的实际路径；Windows 写法见[安装文档](docs/INSTALL.md)）：
 
 ```json
 {
@@ -196,129 +33,223 @@ macOS / Linux：
 }
 ```
 
-### Cursor / Cline
+重启客户端 → 对 AI 说 **「登录B站」** → 用B站 App 扫码确认 → 开始使唤它。
 
-在客户端的 MCP Server 设置中新增一项，传输方式选 `stdio`：
+> 完整安装（Windows / macOS / Linux）、Cursor / Cline / OpenClaw 配置、ffmpeg、MCP Inspector 调试、常见安装故障：**[docs/INSTALL.md](docs/INSTALL.md)**
 
-- **command**：venv 里的 Python 绝对路径
-- **args**：`mcp_server.py` 的绝对路径
+## 🧩 它能做什么
 
-例如 Windows：
+| | 能力 | 一句话 |
+|:--:|---|---|
+| 🔐 | **登录与账号** | 扫码登录、凭证校验，换号或过期一条 `force=true` 重来 |
+| 🔍 | **采集与分析** | 搜索、评论、AI 字幕、弹幕、视频详情，还有一步到位的批量采集 |
+| 📤 | **内容发布** | 发动态、图文长内容、单P / 多P 投稿，封面可自动截帧 |
+| 📊 | **发现与榜单** | 热门、热搜、每周必看、分区排行榜、UP 主与收藏夹数据 |
+| 💬 | **互动与消息** | 评论/楼中楼回复、点赞、私信、未读与 @/点赞通知 |
 
-```text
-command: E:\path\to\BilibiliPlayer\.venv\Scripts\python.exe
-args:    E:\path\to\BilibiliPlayer\mcp_server.py
-```
+每个工具的参数、默认值与上限见下方 [28 个工具全览](#-28-个工具全览)。
 
-### OpenClaw / mcporter
+## 🧰 28 个工具全览
+
+> 全部注册在 `mcp_server.py`（FastMCP，stdio 传输），工具名与下方表格逐一对应。数量上限来自代码里的钳位逻辑，不是宣传口径。
+
+<details>
+<summary><b>🔐 登录认证（3）</b> — 扫码、轮询、验活</summary>
+
+| Tool | 作用 | 要点 |
+|---|---|---|
+| `bili_login` | 生成B站扫码登录二维码 | 返回 base64 图片 + 本地 PNG + 终端二维码 + 扫码 URL，180 秒有效；`force=true` 强制换号 |
+| `bili_login_check` | 轮询扫码状态 | 手机确认后返回 `done`，凭证原子写入本机 |
+| `bili_check_credential` | 校验当前凭证 | 返回 UID、用户名等登录状态 |
+
+</details>
+
+<details>
+<summary><b>🔍 数据采集（6）</b> — 搜索、评论、字幕、弹幕、详情、批采</summary>
+
+| Tool | 作用 | 要点 |
+|---|---|---|
+| `bili_search` | 搜索视频 | `order`：综合 / 播放量 / 最新 / 弹幕，最多 50 条 |
+| `bili_comments` | 获取热门评论 | 按点赞排序、含子评论，最多 100 条 |
+| `bili_subtitle` | 获取 AI 字幕 | 语音转文字全文，适合让模型总结视频 |
+| `bili_danmaku` | 获取弹幕 | 最多 1000 条，按时间顺序分页取 |
+| `bili_video_info` | 视频详情 | 播放量、评论数、收藏数、标签等 |
+| `bili_crawl` | 批量采集 | 搜索 + 每个视频的评论 + 字幕，一次调用拿全 |
+
+</details>
+
+<details>
+<summary><b>📤 内容发布（5）</b> — 动态、图文、投稿</summary>
+
+| Tool | 作用 | 要点 |
+|---|---|---|
+| `bili_send_dynamic` | 发布图文动态 | 支持 @ 和表情、话题、定时发布，最多 9 张图 |
+| `bili_upload_video` | 上传单P视频 | 标题/简介/分区/标签/封面/转载来源；未给封面时自动截第 3 秒，失败回退第 0 秒 |
+| `bili_upload_video_multi` | 上传多P视频 | 多个分P合并为一个投稿，逐 P 指定标题 |
+| `bili_send_opus` | 发布图文长内容 | 以动态形式发长图文（不是独立专栏） |
+| `bili_video_zones` | 查询分区 ID | 投稿前查 `tid` |
+
+</details>
+
+<details>
+<summary><b>📊 发现与榜单（6）</b> — 热门、热搜、排行、UP 主</summary>
+
+| Tool | 作用 | 要点 |
+|---|---|---|
+| `bili_hot_videos` | 当前热门视频 | 分页，每页最多 50 |
+| `bili_hot_buzzwords` | 热搜词 | 分页，做选题用 |
+| `bili_weekly_hot` | 每周必看 | `week=0` 返回期数列表 |
+| `bili_rank` | 分区排行榜 | 全站 + 24 个分区/分类，三日榜 / 七日榜 |
+| `bili_user_info` | UP 主数据 | 粉丝数、等级、投稿数、总播放等 |
+| `bili_user_videos` | UP 主投稿列表 | 分页 + 排序（最新/播放/收藏）+ 关键词过滤 |
+
+</details>
+
+<details>
+<summary><b>💬 互动与消息（8）</b> — 评论、点赞、收藏夹、私信、通知</summary>
+
+| Tool | 作用 | 要点 |
+|---|---|---|
+| `bili_reply` | 发表评论 / 回复评论 | 支持楼中楼：`rpid` 指定楼层，`root` 指定根评论 |
+| `bili_like` | 点赞 / 取消点赞 | `like=false` 取消 |
+| `bili_favorite_lists` | 收藏夹列表 | `uid=0` 表示自己的收藏夹 |
+| `bili_favorite_content` | 收藏夹内容 | 分页 + 夹内关键词搜索 |
+| `bili_send_message` | 发送私信 | 指定接收者 `receiver_uid` |
+| `bili_unread_messages` | 未读消息数 | 私信 / @ / 回复 / 点赞分类计数 |
+| `bili_received_replies` | 收到的回复 | 最近的评论回复通知 |
+| `bili_received_at_and_likes` | @ 与点赞通知 | 最近的 @ 提及和点赞记录 |
+
+</details>
+
+## 🖥️ DSH 插件「B站分身」
+
+[dsh-plugin/](./dsh-plugin/) 是 DeepSeek Harness 插件：把上面 28 个工具挂载给 DSH 的 Agent，再配一套**值班章程**，让它按配额自动运营一个小号——刷到 → 看 → 赞 → 评 → 被回复 → 我回，全程可审计。
+
+| 看板（浅色） | 看板（深色） | 操作台 · 配置 |
+|:---:|:---:|:---:|
+| <img src="docs/demo/shots/01-dashboard-light.png" alt="B站分身看板（浅色）：账号、值班状态、今日配额与每条视频的活动生命周期"> | <img src="docs/demo/shots/02-dashboard-dark.png" alt="B站分身看板（深色）"> | <img src="docs/demo/shots/03-console-config.png" alt="B站分身操作台：值班节奏、配额、内容源、人设"> |
+
+<sub>控制台界面预览（数据取自真实值班轮）。看板看账号 / 值班 / 配额 / 活动生命周期，操作台调配额、内容源、人设，也看日志、判重表与产物。</sub>
+
+**它多出来的一件事**：除了全量 `mcp__bili-fenshen__bili_*` 工具，还注册两个宿主工具 `bili_fenshen_status`（状态与配额）、`bili_fenshen_run`（立刻跑一轮）。值班轮会拉起独立 headless 会话，**只暴露最小工具白名单**（`BILI_MCP_TOOLS`），上传、私信这类高权限工具在那一轮里根本不存在。
 
 ```bash
-npx mcporter config add bilibili-mcp "/path/to/BilibiliPlayer/.venv/bin/python /path/to/BilibiliPlayer/mcp_server.py"
+# 1) 先把 dsh-plugin/cordis.patch.yml 里的 command / args / cwd 三处路径改成你的项目位置
+# 2) 安装并重启 DSH
+dsh plugin --profile desktop add link:<项目路径>/dsh-plugin
 ```
 
-Windows 使用 `.venv\Scripts\python.exe` 的绝对路径。
+装好后：重启 DSH → 左侧栏「B站分身」→ 右上角「重新扫码」→ 手机B站确认 → 点「跑一轮」。
 
-## 本地调试
+> 账本（`~/.dsh/bili-fenshen/ledger.jsonl`）、配置字段与安全边界详见 **[dsh-plugin/README.md](./dsh-plugin/README.md)**；领域术语（值班轮 / 章程 / 压审 / 活动生命周期）见 **[CONTEXT.md](./CONTEXT.md)**。
 
-检查语法：
+## 🏗️ 架构
 
-```bash
-python -m py_compile mcp_server.py bili_login.py
+```mermaid
+flowchart LR
+    U["你 / Agent 会话"] -->|自然语言| C["MCP Client<br/>Claude Code · Cursor · Cline · OpenClaw"]
+    U -->|值班调度| P["dsh-plugin<br/>dsh-bili-fenshen<br/>看板 + 操作台 + 章程"]
+    C -->|stdio / JSON-RPC| S["mcp_server.py<br/>FastMCP · 28 tools"]
+    P -->|白名单挂载| S
+    S --> L["bilibili-api-python"]
+    L -->|Web API| B[("B站")]
+    S -.->|只读本机| K["bili_credential.json<br/>SESSDATA 等，已 gitignore"]
 ```
 
-用 MCP Inspector 调试：
+技术栈：[MCP（Model Context Protocol）](https://modelcontextprotocol.io/) · [FastMCP](https://github.com/modelcontextprotocol/python-sdk) · [`bilibili-api-python`](https://github.com/Nemo2011/bilibili-api) · Python 3.10+；插件侧是纯 ESM 的 Node.js 模块，没有第三方运行时依赖。
 
-Windows：
+## 💬 自然语言用法
 
-```powershell
-npx @modelcontextprotocol/inspector .\.venv\Scripts\python.exe mcp_server.py
-```
+接入之后，不用记工具名，直接说人话：
 
-macOS / Linux：
+- 「登录B站」——AI 展示二维码，扫码后自动保存凭证
+- 「搜索B站上关于 AI Agent 的热门视频，按播放量排」
+- 「把这条视频的字幕拿下来，总结成 5 条要点」
+- 「看看这条视频的评论区，大家最在意什么」
+- 「帮我回复这条评论，语气友好一点」
+- 「批量采集『大模型评测』相关视频的评论和字幕」
+- 「发一条B站动态，配这三张图，加个话题」
+- 「把这个视频投到科技区，标题叫……」
+- 「B站现在什么最火？给我全站和科技区榜单前 10」
+- 「分析这个 UP 主的粉丝和投稿数据」
+- 「我有多少未读私信和回复？」
 
-```bash
-npx @modelcontextprotocol/inspector ./.venv/bin/python mcp_server.py
-```
+> 涉及本地文件的参数（上传视频、封面、动态配图）请传**本机绝对路径**——MCP Server 就跑在你的机器上。
 
-日志输出到 stderr，不会污染 stdio 协议通道。
+## 🔐 安全与免责
 
-## 使用示例
+- **凭证不出本机**：`bili_credential.json` 只含 `sessdata`、`bili_jct`、`buvid3`、`dedeuserid`，已在 `.gitignore` 中；路径可用 `BILI_CRED_FILE` 环境变量覆盖。**不要提交、分享或上传这个文件**，泄露处置见 [SECURITY.md](./SECURITY.md)。
+- **写操作是真实的**：评论、点赞、私信、发动态、投稿都会真实作用于你的B站账号，请谨慎使用并遵守B站社区规则。
+- **请控制频率**：搜索、评论、弹幕等批量操作内置了请求间隔（0.3 / 0.5 / 1 秒），仍建议压低频率，避免触发风控。
+- **最小授权**：`BILI_MCP_TOOLS` 可把工具注册限制在白名单内；DSH 插件在值班轮里默认只开最小集，并用 `BILI_FENSHEN_HOME` 隔离插件数据目录。
+- **自动化有风险**：无人值守的点赞/评论可能被平台限制，建议只用小号，并自行承担账号风险。
+- 本项目仅用于学习与研究，与哔哩哔哩官方无关。
 
-接入后可以直接用自然语言操作：
-
-- “登录B站”（AI 会展示二维码给你扫）
-- “搜索B站上关于 AI Agent 的热门视频”
-- “获取这个视频的评论，分析用户需求”
-- “获取视频字幕，总结视频内容”
-- “帮我回复这条评论”
-- “批量采集 AI Agent 相关视频的评论和字幕”
-- “帮我发一条B站动态，配上这几张图片”
-- “把这个视频上传到B站科技区”
-- “看看B站现在什么最火”
-- “获取科技区排行榜前10的视频”
-- “分析这个UP主的粉丝和投稿数据”
-- “我有多少未读私信和回复？”
-- “看看我的收藏夹里有什么”
-
-上传视频、封面的路径必须是**本机路径**，因为 MCP Server 运行在你自己的机器上。
-
-## 项目结构
+## 📁 项目结构
 
 ```text
 BilibiliPlayer/
-├── mcp_server.py          # MCP Server 主文件（28 个工具）
-├── dsh-plugin/            # DSH 插件「B站分身」（MCP 挂载 + 值班调度 + 设置页面板）
-├── CONTEXT.md             # 领域术语表（角色/机制/资产的唯一定义处）
-├── bili_login.py          # 命令行扫码登录（备用）
-├── requirements.txt       # Python 依赖
-├── README.md              # 项目说明
-├── LICENSE                # MIT 协议
-├── .gitignore             # 忽略凭证、二维码和虚拟环境
-├── bili_credential.json   # 登录后自动生成（已忽略）
-└── qrcode_login.png       # 登录二维码临时文件（已忽略）
+├── mcp_server.py            # MCP Server 主文件（28 个工具，FastMCP / stdio）
+├── bili_login.py            # 命令行扫码登录（备用入口）
+├── requirements.txt         # Python 依赖（bilibili-api-python / aiohttp / mcp）
+├── CONTEXT.md               # 领域术语表：值班轮 / 章程 / 账本 / 活动……
+├── docs/
+│   ├── INSTALL.md           # 完整安装与客户端配置
+│   ├── demo/                # 控制台静态预览 + 截图
+│   └── superpowers/         # 控制台设计稿与实施方案
+├── .github/                 # CI（Python 语法检查 + 插件单测）与 issue / PR 模板
+├── dsh-plugin/              # DSH 插件「B站分身」
+│   ├── index.js             # Host 半部：值班调度、路由、轮次生命周期
+│   ├── client.js            # Client 半部：看板 + 操作台
+│   ├── cordis.patch.yml     # bundle 挂载声明（MCP + Host 插件）
+│   ├── lib/                 # 纯逻辑模块：账本 / 报告 / 活动 / 配置 / 回复 / 账号 / api 路由
+│   ├── prompts/             # 值班章程 + 小号人设
+│   ├── locale/              # 中英文案
+│   └── test/                # node --test 单测与冒烟脚本
+├── SECURITY.md / CONTRIBUTING.md
+├── LICENSE                  # MIT
+└── bili_credential.json     # 登录后生成（已忽略，勿提交）
 ```
 
-## 安全与注意事项
+## ❓ 常见问题
 
-- 凭证只保存在本机，不会上传到任何地方。
-- 不要提交 `bili_credential.json`、`qrcode_login.png`，它们已在 `.gitignore` 中。
-- 回复评论、发私信、发布动态和上传视频会真实作用于B站账号，请谨慎使用并遵守B站社区规则。
-- 搜索、评论、弹幕等批量操作自带请求间隔，仍建议控制频率，避免触发风控。
-- 上传视频未指定封面时，自动截取视频第 3 秒画面；失败会回退到第 0 秒。两种方式都失败时需要 ffmpeg 或手动传 `cover_path`。
-- 本项目仅用于学习和研究。
-
-## 常见问题
-
-**提示“未登录B站”？**
-
-先调用 `bili_login` 生成二维码，扫码后在手机上确认，再轮询 `bili_login_check`。
+**提示「未登录B站」？**
+调 `bili_login` 生成二维码 → 手机上确认 → 调 `bili_login_check` 轮询到 `done`。凭证会自动复用。
 
 **凭证过期了，`bili_login` 却返回 `already_logged_in`？**
-
-登录前会自动校验凭证；若仍判断为已登录，调用 `bili_login(force=true)` 强制重新扫码。
+登录前会先验凭证；若它仍然判断为已登录而你确认失效了，传 `bili_login(force=true)` 强制重新扫码。
 
 **返回 `no_session`？**
+扫码会话只存在于内存，进程重启后就没了。重新调 `bili_login` 即可。
 
-进程重启后，内存中的扫码会话会丢失。重新调用 `bili_login` 即可。
+**上传视频报「未找到 ffmpeg」？**
+安装 ffmpeg 并加入 `PATH`，或直接传 `cover_path` 指定封面。安装方式见 [docs/INSTALL.md](docs/INSTALL.md)。
 
-**上传视频报“未找到 ffmpeg”？**
+**接口空结果或报错？**
+先用 `bili_check_credential` 验登录，再降低频率稍后重试；B站接口会有风控和偶发抖动。
 
-安装 ffmpeg 并加入 `PATH`，或直接传入 `cover_path` 指定封面。
+**客户端里一个工具都看不到？**
+客户端需要支持 stdio 的 MCP Server；确认 `command` 指向**同一个 venv** 里的 Python 绝对路径、`args` 指向 `mcp_server.py` 绝对路径。可以用 `npx @modelcontextprotocol/inspector` 单独验证 Server 能否正常启动。
 
-**上传失败时返回里的 `last_phase` 是什么？**
+## 🤝 参与贡献
 
-表示上传中断时所在的阶段，结合 `error` 排查网络或参数问题。
+欢迎 issue 和 PR：新工具、B站接口变化适配、文案与文档都算贡献。动手前请读 [CONTRIBUTING.md](./CONTRIBUTING.md)（开发环境、代码风格、测试命令、提交信息规范）；安全问题请走 [SECURITY.md](./SECURITY.md) 的私下渠道。
 
-**接口返回空结果或报错？**
+```bash
+python -m py_compile mcp_server.py bili_login.py   # 语法检查
+cd dsh-plugin && npm test                          # 插件单测（node --test）
+```
 
-B站接口可能触发风控或需要登录。先用 `bili_check_credential` 验证登录状态，再稍后重试。
+**致谢**：数据层源自 [adoresever/bilibili-mcp](https://github.com/adoresever/bilibili-mcp)（MIT）；值班轮 / 发后复核 / 环境自愈等模式参考 [dsh-bili-scroll](https://github.com/c1overzz/dsh-bili-scroll)（MIT）；B站接口封装来自 [`bilibili-api-python`](https://github.com/Nemo2011/bilibili-api)。
 
-## 技术栈
+## 📄 License
 
-- **[bilibili-api-python](https://github.com/Nemo2011/bilibili-api)** — B站 API 封装库，提供搜索、评论、字幕、弹幕等接口
-- **[MCP (Model Context Protocol)](https://modelcontextprotocol.io/)** — 标准化 AI 与工具交互的开放协议
-- **[FastMCP](https://github.com/modelcontextprotocol/python-sdk)** — MCP Python SDK，用于构建 MCP Server
+[MIT](./LICENSE) —— 可自由使用、修改、分发，请保留版权声明。
 
-## License
+<div align="center">
 
-MIT
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
+
+<sub>用 <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> 构建 · 给 Agent 一个真实的B站</sub>
+
+</div>

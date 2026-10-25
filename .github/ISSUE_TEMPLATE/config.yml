@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 🔐 报告安全问题 / 凭证泄露
+    url: https://github.com/Yaemikoreal/BilibiliPlayer/security/advisories/new
+    about: 不要开公开 issue。请通过 GitHub Security Advisory 私密上报，处置流程见 SECURITY.md。
+  - name: 📖 安装与客户端配置
+    url: https://github.com/Yaemikoreal/BilibiliPlayer/blob/main/docs/INSTALL.md
+    about: Windows / macOS / Linux 安装、.mcp.json、Cursor / Cline / OpenClaw 接入、ffmpeg 与常见安装故障。
+  - name: 🤝 贡献指南
+    url: https://github.com/Yaemikoreal/BilibiliPlayer/blob/main/CONTRIBUTING.md
+    about: 开发环境、代码风格、测试命令、提交信息规范与 PR 流程。

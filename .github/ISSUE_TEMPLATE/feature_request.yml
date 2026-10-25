@@ -1,0 +1,78 @@
+name: 功能建议
+description: 提议一个新工具、新能力或体验改进
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提议！为了避免做无用功，请先说明**使用场景**，再讲想要的实现。
+        可以在 [README 的工具全览](https://github.com/Yaemikoreal/BilibiliPlayer#-28-个工具全览) 里确认现有 28 个工具是否已经覆盖。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前自查
+      options:
+        - label: 我已经搜索过现有 issue，没有重复
+          required: true
+        - label: 这个功能在现有 28 个工具里确实没有（或现有工具做不到）
+          required: true
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 你（或 Agent）想完成什么任务？现在卡在哪一步？
+      placeholder: 我想让 AI 定时汇总某个 UP 主的更新，但现有 bili_user_videos 只能翻页，没有「增量」
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的方案
+      description: 如果有具体想法就写清楚（工具名、参数、返回值、属于哪一类）
+      placeholder: 希望新增 bili_xxx(keyword, since_ts)，返回在 since_ts 之后发布的视频列表
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 所属模块
+      options:
+        - MCP 工具（mcp_server.py）
+        - dsh-plugin 控制台
+        - dsh-plugin 值班 / 账本 / 章程
+        - 安装体验与文档
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你考虑过的替代方案（可选）
+      description: 现在是怎么绕过的？为什么不满意？
+    validations:
+      required: false
+
+  - type: dropdown
+    id: willing
+    attributes:
+      label: 是否愿意提 PR
+      options:
+        - 愿意，我可以自己实现
+        - 愿意，但需要一些方向指引
+        - 暂不方便，只是提建议
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息（可选）
+      description: 截图、参考链接、相关B站接口文档等
+    validations:
+      required: false
