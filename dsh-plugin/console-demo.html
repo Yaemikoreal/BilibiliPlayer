@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B站分身 · 控制台（演示稿 V2）</title>
+<style>
+:root{
+  --bg:#16161d; --sidebar:#1c1c24; --layer1:#20202a; --layer2:#262633;
+  --border:#2e2e3a; --border2:#3a3a4a;
+  --txt:#e8e8ee; --txt2:#9a9aa8; --txt3:#6b6b78;
+  --brand:#4d6bfe; --brand2:#7a90ff;
+  --ok:#34c37e; --warn:#f0a020; --err:#e5484d; --idle:#565664;
+  --bili:#fb7299; --bili2:#00aeec;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--txt);font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+.app{display:flex;height:100vh;overflow:hidden}
+.muted{color:var(--txt3)}
+
+/* ── 左侧栏（示意：DSH 原生渲染，此处仅模拟） ── */
+.side{width:196px;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.brand{padding:16px 14px;font-weight:700;color:var(--txt2);letter-spacing:.5px;border-bottom:1px solid var(--border)}
+.brand b{color:var(--brand2)}
+.side nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px}
+.sitem{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;color:var(--txt2);text-decoration:none;font-size:13.5px}
+.sitem:hover{background:var(--layer1);color:var(--txt)}
+.sitem.active{background:var(--layer2);color:var(--txt)}
+.sitem.active .dot{display:inline-block}
+.dot{display:none;width:6px;height:6px;border-radius:50%;background:var(--bili);margin-left:auto}
+.side .foot{padding:8px;border-top:1px solid var(--border)}
+.side .demo{margin:0 10px 8px;font-size:11px;color:var(--txt3);text-align:center;border:1px dashed var(--border2);border-radius:6px;padding:4px}
+
+/* ── 主区 ── */
+.main{flex:1;overflow-y:auto;padding:18px 22px 40px}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:19px;display:flex;align-items:center;gap:8px}
+h1 .tv{color:var(--bili2)}
+.chip{background:var(--layer1);border:1px solid var(--border);border-radius:99px;padding:3px 12px;font-size:12.5px;color:var(--txt2);display:inline-flex;align-items:center;gap:6px}
+.chip .st{width:8px;height:8px;border-radius:50%;display:inline-block}
+.st.ok{background:var(--ok)} .st.err{background:var(--err)} .st.idle{background:var(--idle)}
+.spacer{flex:1}
+.btn{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 16px;font-size:13.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{filter:brightness(1.12)}
+.btn.ghost{background:var(--layer1);color:var(--txt);border:1px solid var(--border2)}
+.btn.small{padding:5px 12px;font-size:12.5px;border-radius:7px}
+.badge{font-size:11px;color:var(--txt3);border:1px solid var(--border);border-radius:6px;padding:2px 8px}
+
+/* ── 概览三卡 ── */
+.grid{display:grid;grid-template-columns:340px 1fr 1fr;gap:12px;margin-bottom:14px}
+@media (max-width:1100px){.grid{grid-template-columns:1fr}}
+.card{background:var(--layer1);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.card h3{font-size:13px;color:var(--txt2);font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card h3 .r{margin-left:auto;font-size:11px;color:var(--txt3);font-weight:400}
+.qrow{display:flex;align-items:center;gap:10px;margin:9px 0}
+.qrow .lb{width:44px;color:var(--txt2);font-size:12.5px}
+.bar{flex:1;height:8px;background:var(--layer2);border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--brand);border-radius:99px}
+.bar i.full{background:var(--ok)} .bar i.over{background:var(--err)}
+.qrow .val{width:56px;text-align:right;font-size:12.5px;color:var(--txt2);font-variant-numeric:tabular-nums}
+.qrow .val.over{color:var(--err);font-weight:600}
+.qnote{font-size:11.5px;color:var(--txt3);margin-top:8px}
+.pres{display:flex;gap:18px;align-items:flex-end;height:88px;padding:4px 2px 0}
+.day{flex:1;display:flex;gap:4px;align-items:flex-end;justify-content:center;height:100%}
+.day b{width:45%;background:linear-gradient(180deg,var(--bili),#c25b7d);border-radius:3px 3px 0 0;min-height:2px;display:block}
+.day i{width:45%;background:var(--bili2);border-radius:3px 3px 0 0;min-height:2px;display:block;opacity:.85}
+.days{display:flex;margin-top:6px}
+.days span{flex:1;text-align:center;font-size:10.5px;color:var(--txt3)}
+.pchips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.pchip{background:var(--layer2);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--txt2)}
+.pchip b{color:var(--txt);font-size:13px}
+.hot{margin-top:10px;background:var(--layer2);border-left:3px solid var(--bili);border-radius:6px;padding:8px 10px;font-size:12.5px;color:var(--txt2)}
+.hot b{color:var(--txt)}
+.tl{position:relative;margin-left:6px;padding-left:16px;border-left:2px solid var(--border)}
+.tround{position:relative;margin-bottom:10px}
+.tround::before{content:"";position:absolute;left:-22px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--ok);border:2px solid var(--bg)}
+.tround.warn::before{background:var(--warn)}
+.tround .t{font-size:11px;color:var(--txt3);font-variant-numeric:tabular-nums}
+.tround .d{font-size:12.5px;color:var(--txt2)}
+.tround .d b{color:var(--txt);font-weight:600}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:6px;margin:4px 0 12px;border-bottom:1px solid var(--border)}
+.tab{padding:8px 16px;cursor:pointer;color:var(--txt2);border-bottom:2px solid transparent;font-size:13.5px}
+.tab:hover{color:var(--txt)}
+.tab.on{color:var(--txt);border-bottom-color:var(--brand)}
+
+/* ── 活动（生命周期） ── */
+.abar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.vt{padding:5px 14px;border-radius:8px;border:1px solid var(--border2);background:var(--layer1);color:var(--txt2);cursor:pointer;font-size:12.5px}
+.vt.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.fchips{display:flex;gap:6px;flex-wrap:wrap}
+.fchip{padding:4px 12px;border-radius:99px;border:1px solid var(--border2);background:var(--layer1);color:var(--txt2);cursor:pointer;font-size:12px}
+.fchip.on{background:var(--layer2);color:var(--txt);border-color:var(--brand2)}
+.astats{font-size:12px;color:var(--txt3);margin-left:auto}
+.life{background:var(--layer1);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.lhead{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+.lthumb{width:52px;height:34px;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px;
+  background:linear-gradient(135deg,var(--bili),var(--bili2))}
+.ltitle{flex:1;min-width:0}
+.ltitle b{font-size:13.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ltitle span{font-size:11.5px;color:var(--txt3)}
+.b2{font-size:11px;padding:3px 10px;border-radius:99px;border:1px solid;white-space:nowrap}
+.b2.ok{color:var(--ok);border-color:var(--ok)}
+.b2.warn{color:var(--warn);border-color:var(--warn)}
+.b2.idle{color:var(--txt3);border-color:var(--border2)}
+.chain{display:flex;flex-wrap:wrap;gap:6px;align-items:center;row-gap:8px}
+.chain .ar{color:var(--txt3);font-size:12px}
+.ev{background:var(--layer2);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;display:inline-flex;gap:6px;align-items:center;color:var(--txt2)}
+.ev b{color:var(--txt);font-weight:600}
+.ev.in{border-color:var(--bili)}
+.ev.okk{border-color:var(--ok)}
+.ev .muted{font-size:11px}
+details.more{background:var(--layer1);border:1px dashed var(--border2);border-radius:12px;padding:10px 14px;margin-bottom:10px}
+details.more summary{cursor:pointer;color:var(--txt2);font-size:12.5px;user-select:none}
+details.more summary:hover{color:var(--txt)}
+.mrow{display:flex;gap:10px;align-items:center;padding:7px 2px;border-bottom:1px solid var(--border);font-size:12.5px;color:var(--txt2)}
+.mrow:last-child{border-bottom:0}
+.mrow .t{color:var(--txt3);font-size:11px;width:44px;flex-shrink:0}
+.frow{display:flex;gap:12px;align-items:flex-start;background:var(--layer1);border:1px solid var(--border);border-radius:10px;padding:9px 14px;margin-bottom:8px;font-size:12.5px;color:var(--txt2)}
+.frow .ft{color:var(--txt3);font-size:11px;width:52px;flex-shrink:0;padding-top:2px;font-variant-numeric:tabular-nums}
+.frow .fic{font-size:16px;flex-shrink:0}
+.frow b{color:var(--txt)}
+.fday{font-size:12px;color:var(--txt3);margin:14px 0 8px;font-weight:600}
+
+/* ── 控制台卡片组 ── */
+.cbar{display:none;align-items:center;gap:12px;background:var(--layer2);border:1px solid var(--brand2);border-radius:10px;padding:8px 14px;margin-bottom:12px;font-size:12.5px}
+.cbar.show{display:flex}
+.cbar .dot{width:8px;height:8px;border-radius:50%;background:var(--warn)}
+.cgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:1250px){.cgrid{grid-template-columns:1fr}}
+.cgrid .wide{grid-column:1/-1}
+.row{display:flex;align-items:center;gap:10px;margin:10px 0;flex-wrap:wrap}
+.row .rl{width:110px;color:var(--txt2);font-size:13px}
+.row .hint{font-size:11.5px;color:var(--txt3)}
+select,input[type=text],textarea{background:var(--layer2);border:1px solid var(--border2);color:var(--txt);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px}
+textarea{width:100%;min-height:84px;resize:vertical}
+.sw{position:relative;width:40px;height:22px;flex-shrink:0;cursor:pointer}
+.sw input{opacity:0;width:0;height:0;position:absolute}
+.sw em{position:absolute;inset:0;background:var(--idle);border-radius:99px;transition:.18s}
+.sw em::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.18s}
+.sw input:checked+em{background:var(--brand)}
+.sw input:checked+em::after{transform:translateX(18px)}
+.sw.lock{opacity:.55;cursor:not-allowed}
+.stp{display:inline-flex;align-items:center;border:1px solid var(--border2);border-radius:8px;overflow:hidden}
+.stp button{background:var(--layer2);color:var(--txt);border:0;width:28px;height:28px;cursor:pointer;font-size:15px}
+.stp button:hover{background:var(--border2)}
+.stp button:disabled{opacity:.4;cursor:default}
+.stp input{border:0;border-radius:0;width:44px;text-align:center;padding:6px 0;font-weight:600;font-variant-numeric:tabular-nums}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.kchip{background:var(--layer2);border:1px solid var(--border2);border-radius:99px;padding:3px 10px;font-size:12.5px;display:inline-flex;gap:6px;align-items:center}
+.kchip u{color:var(--txt3);cursor:pointer;text-decoration:none}
+.kchip u:hover{color:var(--err)}
+.kadd{background:transparent;border:1px dashed var(--border2);border-radius:99px;color:var(--txt3);padding:3px 10px;cursor:pointer;font-size:12.5px}
+.cfoot{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)}
+.cfoot .dot{width:8px;height:8px;border-radius:50%;background:var(--warn);opacity:0;transition:.2s}
+.cfoot .stxt{font-size:12px;color:var(--txt3)}
+.cfoot.dirty .dot{opacity:1}
+.cfoot.dirty .stxt{color:var(--warn)}
+.cfoot .rs{margin-left:auto;display:flex;gap:8px}
+
+/* 日报/判重/日志 */
+pre{background:var(--layer2);border:1px solid var(--border);border-radius:10px;padding:14px;font:12px/1.7 "Cascadia Code",Consolas,monospace;color:var(--txt2);white-space:pre-wrap;max-height:420px;overflow:auto}
+pre .h{color:var(--brand2)} pre .g{color:var(--ok)} pre .y{color:var(--warn)}
+.mono{font:12px/1.7 "Cascadia Code",Consolas,monospace}
+.daypick{display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:12.5px;color:var(--txt2)}
+.foot{margin-top:18px;font-size:11.5px;color:var(--txt3);border-top:1px dashed var(--border);padding-top:10px}
+#toast{position:fixed;right:20px;bottom:20px;background:var(--layer2);border:1px solid var(--border2);border-radius:10px;padding:10px 16px;font-size:13px;color:var(--txt);opacity:0;transform:translateY(8px);transition:.25s;pointer-events:none;box-shadow:0 6px 24px rgba(0,0,0,.4);z-index:9}
+#toast.show{opacity:1;transform:none}
+</style>
+</head>
+<body>
+<div class="app">
+
+<aside class="side">
+  <div class="brand">🐋 <b>DeepSeek</b> Harness</div>
+  <nav>
+    <a class="sitem">💬 会话</a>
+    <a class="sitem active">📺 B站分身<span class="dot"></span></a>
+    <a class="sitem">🧩 插件</a>
+    <a class="sitem">⏱ 自动化任务</a>
+    <a class="sitem">📁 工作区</a>
+  </nav>
+  <div class="demo">演示稿 V2<br>静态数据 · 2026-10-22</div>
+  <div class="foot"><a class="sitem">⚙️ 设置</a></div>
+</aside>
+
+<main class="main">
+  <div class="top">
+    <h1><span class="tv">📺</span> B站分身 · 控制台</h1>
+    <span class="chip">🐟 不吃鱼的豆腐 <span class="muted">Lv6 · 33 粉</span></span>
+    <span class="chip"><span class="st ok"></span> 凭证有效（真实校验）</span>
+    <span class="chip"><span class="st idle"></span> 值班空闲 · 下一轮：明 12:00 窗口</span>
+    <span class="spacer"></span>
+    <span class="badge">挂载：sidebar.panellist + main</span>
+    <button class="btn" id="runBtn">▶ 现在跑一轮</button>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>今日配额 <span class="r">账本 = 日报解析（修复后）</span></h3>
+      <div class="qrow"><span class="lb">挑中</span><span class="bar"><i class="over" style="width:100%"></i></span><span class="val over">10 / 5</span></div>
+      <div class="qrow"><span class="lb">评论</span><span class="bar"><i style="width:80%"></i></span><span class="val">4 / 5</span></div>
+      <div class="qrow"><span class="lb">点赞</span><span class="bar"><i style="width:90%"></i></span><span class="val">9 / 10</span></div>
+      <div class="qrow"><span class="lb">动态</span><span class="bar"><i class="full" style="width:100%"></i></span><span class="val">1 / 1</span></div>
+      <div class="qrow"><span class="lb">跟进</span><span class="bar"><i style="width:50%"></i></span><span class="val">1 / 2</span></div>
+      <div class="qnote">⚠️ 挑中超额 10/5：10-22 账本修复前的历史事故样张（修复后已如实计数并约束后续轮次）</div>
+    </div>
+
+    <div class="card">
+      <h3>存在感仪表 <span class="r"><span style="color:var(--bili)">■</span> 收到的赞 <span style="color:var(--bili2)">■</span> 被回复</span></h3>
+      <div class="pres">
+        <div class="day"><b style="height:2%"></b><i style="height:2%"></i></div>
+        <div class="day"><b style="height:2%"></b><i style="height:2%"></i></div>
+        <div class="day"><b style="height:2%"></b><i style="height:2%"></i></div>
+        <div class="day"><b style="height:2%"></b><i style="height:2%"></i></div>
+        <div class="day"><b style="height:2%"></b><i style="height:2%"></i></div>
+        <div class="day"><b style="height:2%"></b><i style="height:2%"></i></div>
+        <div class="day"><b style="height:64%"></b><i style="height:32%"></i></div>
+      </div>
+      <div class="days"><span>10-16</span><span>10-17</span><span>10-18</span><span>10-19</span><span>10-20</span><span>10-21</span><span>10-22</span></div>
+      <div class="pchips">
+        <span class="pchip">累计收赞 <b>2</b></span>
+        <span class="pchip">收到回复 <b>1</b>（已跟进 ✓）</span>
+        <span class="pchip">新粉 <b>+0</b> · 33</span>
+      </div>
+      <div class="hot">🔥 最热评论（日食记·东北大席）：<b>「最后那句"把心里的空缺填满"，一下把满院子的热闹说透了。血肠、酸菜、黄蚬子，看着就有点想家。」</b> · 2 赞 · rpid 317850009329</div>
+    </div>
+
+    <div class="card">
+      <h3>今日值班流水 <span class="r">rounds.json</span></h3>
+      <div class="tl">
+        <div class="tround warn"><div class="t">21:55 · web</div><div class="d"><b>第一轮 · 未登录白跑</b> — 凭证过期且无起轮预检（待修项 P0）</div></div>
+        <div class="tround"><div class="t">21:58 · web</div><div class="d"><b>第二轮 ✓</b> — 5 挑中 · 5 赞 · 2 评 · 1 动态（rpid 未返回：当时缺陷）</div></div>
+        <div class="tround"><div class="t">22:17 · manual-test</div><div class="d"><b>第三轮 ✓</b> — 5 挑中 · 4 新赞 · 2 评（rpid 已记录）· 0 动态</div></div>
+        <div class="tround"><div class="t">23:02 · 复测</div><div class="d"><b>第四轮 ✓</b> — 0/0/0/0 · <b>1 跟进回复</b>（闭环首胜）</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab on" data-t="activity">🧬 活动 · 生命周期</div>
+    <div class="tab" data-t="console">🎛 控制台</div>
+    <div class="tab" data-t="report">📄 日报</div>
+    <div class="tab" data-t="seen">📚 判重表</div>
+    <div class="tab" data-t="log">🧾 日志</div>
+  </div>
+
+  <!-- ═══ Tab: 活动（生命周期）═══ -->
+  <section id="t-activity">
+    <div class="abar">
+      <button class="vt on" data-v="video">按视频</button>
+      <button class="vt" data-v="time">按时间线</button>
+      <span class="fchips">
+        <span class="fchip on" data-f="all">全部 27</span>
+        <span class="fchip" data-f="watch">👀 看过 10</span>
+        <span class="fchip" data-f="like">👍 点赞 9</span>
+        <span class="fchip" data-f="comment">💬 评论 4</span>
+        <span class="fchip" data-f="reply-in">📥 收到的回复 1</span>
+        <span class="fchip" data-f="like-in">❤️ 评论收赞 2</span>
+        <span class="fchip" data-f="follow">↩️ 跟进回复 1</span>
+        <span class="fchip" data-f="share">📣 分享 1</span>
+      </span>
+      <span class="astats">ledger.jsonl · 27 事件 · 入站收件箱 1 条未读 ✓</span>
+    </div>
+
+    <!-- 视图一：按视频的生命周期链 -->
+    <div id="viewVideo">
+
+      <div class="life" data-types="watch like comment reply-in follow">
+        <div class="lhead">
+          <span class="lthumb">🎬</span>
+          <div class="ltitle"><b>爆！亚当·重锤怒喷《边缘行者2》："烂完了一个人没似！"</b><span>徐Toso · BV192n66dEDQ · 36.9 万播放</span></div>
+          <span class="b2 ok">✓ 闭环 · 评论→收到回复→已跟进</span>
+        </div>
+        <div class="chain">
+          <span class="ev">👀 22:17 看过</span><span class="ar">→</span>
+          <span class="ev">👍 22:18 点赞</span><span class="ar">→</span>
+          <span class="ev">💬 22:19 评论 <span class="muted">rpid 317851964705 · 正文未存档</span></span><span class="ar">→</span>
+          <span class="ev in">📥 ≈22:30 <b>究极无敌路由器</b>：「发挥主观能动性自己去街上补仓[doge_金箍]」</span><span class="ar">→</span>
+          <span class="ev okk">↩️ 23:02 已跟进：「补仓补到康陶总部去了，这波是自己上门送钱[doge]」 <span class="muted">rpid 317856268497</span></span>
+        </div>
+      </div>
+
+      <div class="life" data-types="watch like comment like-in">
+        <div class="lhead">
+          <span class="lthumb">🍲</span>
+          <div class="ltitle"><b>救命，东北农村婚礼大席吃这么豪吗？</b><span>日食记 · BV1Mwn16wECL · 11.5 万播放</span></div>
+          <span class="b2 ok">💬 已评论 · 获赞 2</span>
+        </div>
+        <div class="chain">
+          <span class="ev">👀 21:58 看过</span><span class="ar">→</span>
+          <span class="ev">👍 21:59 点赞</span><span class="ar">→</span>
+          <span class="ev">💬 21:59 评论 <span class="muted">rpid 317850009329 · 经点赞流回溯定位（发帖时未取到）</span></span><span class="ar">→</span>
+          <span class="ev in">❤️ ≈22:45 收赞 ×2 <span class="muted">中山中SY、伍淳</span></span>
+        </div>
+      </div>
+
+      <div class="life" data-types="watch like comment">
+        <div class="lhead">
+          <span class="lthumb">🏀</span>
+          <div class="ltitle"><b>远赴青海，帮高原小学修整操场…</b><span>李维刚的日常 · BV14enq6TERu · 10.2 万播放</span></div>
+          <span class="b2 warn">⚠ 断链 · rpid 未取到（修复前缺陷）</span>
+        </div>
+        <div class="chain">
+          <span class="ev">👀 21:58 看过</span><span class="ar">→</span>
+          <span class="ev">👍 21:59 点赞</span><span class="ar">→</span>
+          <span class="ev">💬 21:59 评论 <span class="muted">rpid 未取到 → 无法跟进 / 无法复核</span></span>
+        </div>
+      </div>
+
+      <div class="life" data-types="watch like comment">
+        <div class="lhead">
+          <span class="lthumb">📱</span>
+          <div class="ltitle"><b>折1万次，会坏吗？iPhone Duo深度评测</b><span>影视飓风 · BV1xrnz6gEVD · 438.4 万播放</span></div>
+          <span class="b2 ok">💬 已评论</span>
+        </div>
+        <div class="chain">
+          <span class="ev">👀 22:17 补看 <span class="muted">（第一轮因未登录跳过）</span></span><span class="ar">→</span>
+          <span class="ev">👍 点赞 <span class="muted">此前已赞 · 65006 重复点赞</span></span><span class="ar">→</span>
+          <span class="ev">💬 22:19 评论 <span class="muted">rpid 317852084545 · 正文未存档</span></span>
+        </div>
+      </div>
+
+      <div class="life" data-types="watch like share">
+        <div class="lhead">
+          <span class="lthumb">🌫</span>
+          <div class="ltitle"><b>用寂静岭的画风打开《周处除三害》【AI MV大赛】</b><span>ByeByeBlueBerry · BV1Cdni6AEQB · 49.1 万播放</span></div>
+          <span class="b2 idle">📣 已分享成动态</span>
+        </div>
+        <div class="chain">
+          <span class="ev">👀 21:58 看过</span><span class="ar">→</span>
+          <span class="ev">👍 21:59 点赞</span><span class="ar">→</span>
+          <span class="ev">📣 22:00 分享动态 <span class="muted">dyn_id 1262029445090246676</span></span>
+        </div>
+      </div>
+
+      <details class="more">
+        <summary>⋯ 还有 5 条仅「看过 + 点赞」的视频（点开查看）</summary>
+        <div class="mrow"><span class="t">21:58</span><b>【何同学】能折！但代价呢？iPhone Duo首发体验</b><span>· 老师好我叫何同学 · BV1XynB6EEiM · 89.1 万播放</span></div>
+        <div class="mrow"><span class="t">21:59</span><b>【逗鱼时刻】第500期 我还要再更500期！</b><span>· 天天卡牌 · BV1dRn26CEcK</span></div>
+        <div class="mrow"><span class="t">22:18</span><b>今年最佳悬疑喜剧，一上来四条人命，一唠嗑全是梗</b><span>· 东倾电影 · BV1nsnw64EFL · 33.7 万播放</span></div>
+        <div class="mrow"><span class="t">22:18</span><b>鼻塞疏通教程</b><span>· 农民老杨_Shandong · BV1rFnc69EFU · 148.6 万播放</span></div>
+        <div class="mrow"><span class="t">22:18</span><b>日本人为了让你吃蛋包饭的时候也不要忘了吃碗拉面有多拼</b><span>· 在日本摸鱼的小超人 · BV1monB6gEnQ · 49.1 万播放</span></div>
+      </details>
+    </div>
+
+    <!-- 视图二：按时间线的活动流 -->
+    <div id="viewTime" hidden>
+      <div class="fday">今天 · 10-22（27 个事件）</div>
+      <div class="frow" data-type="follow"><span class="ft">23:02</span><span class="fic">↩️</span><div><b>跟进回复</b> · BV192n66dEDQ「补仓补到康陶总部去了，这波是自己上门送钱[doge]」 → @究极无敌路由器 <span class="muted">rpid 317856268497 · 第四轮 · 第四轮闭环</span></div></div>
+      <div class="frow" data-type="reply-in"><span class="ft">≈22:30</span><span class="fic">📥</span><div><b>收到回复</b> · @究极无敌路由器：「发挥主观能动性自己去街上补仓[doge_金箍]」 <span class="muted">→ 我的评论 rpid 317851964705 · 已处理 ✓</span></div></div>
+      <div class="frow" data-type="like-in"><span class="ft">≈22:45</span><span class="fic">❤️</span><div><b>评论收赞 ×2</b> · BV1Mwn16wECL（日食记·东北大席） <span class="muted">中山中SY、伍淳 → 评论 rpid 317850009329</span></div></div>
+      <div class="frow" data-type="comment"><span class="ft">22:19</span><span class="fic">💬</span><div><b>评论 ×2</b> · BV1xrnz6gEVD（rpid 317852084545）、BV192n66dEDQ（rpid 317851964705） <span class="muted">第三轮</span></div></div>
+      <div class="frow" data-type="like"><span class="ft">22:17-19</span><span class="fic">👍</span><div><b>点赞 ×4</b> · 东倾电影 / 农民老杨 / 在日本摸鱼的小超人 / 徐Toso <span class="muted">第三轮（影视飓风那条为重复点赞，未计）</span></div></div>
+      <div class="frow" data-type="watch"><span class="ft">22:17-19</span><span class="fic">👀</span><div><b>看过 ×5</b> · iPhone Duo评测 / 悬疑喜剧解说 / 鼻塞教程 / 边缘行者2 / 蛋包饭拉面 <span class="muted">第三轮挑中</span></div></div>
+      <div class="frow" data-type="share"><span class="ft">22:00</span><span class="fic">📣</span><div><b>分享动态</b> · BV1Cdni6AEQB「用寂静岭的画风打开周处除三害」 <span class="muted">dyn 1262029445090246676 · 第二轮</span></div></div>
+      <div class="frow" data-type="comment"><span class="ft">21:59</span><span class="fic">💬</span><div><b>评论 ×2</b> · BV14enq6TERu（rpid 未取到 ⚠ 断链）、BV1Mwn16wECL（rpid 317850009329） <span class="muted">第二轮</span></div></div>
+      <div class="frow" data-type="like"><span class="ft">21:58-59</span><span class="fic">👍</span><div><b>点赞 ×5</b> · 何同学 / AI MV / 李维刚 / 日食记 / 逗鱼时刻 <span class="muted">第二轮</span></div></div>
+      <div class="frow" data-type="watch"><span class="ft">21:58-59</span><span class="fic">👀</span><div><b>看过 ×5</b> · 何同学 iPhone Duo / AI MV / 青海修操场 / 东北大席 / 逗鱼时刻500 <span class="muted">第二轮挑中</span></div></div>
+      <div class="frow" data-type="watch"><span class="ft">21:55</span><span class="fic">⚠️</span><div><b>第一轮白跑</b> · 未登录：BV1xrnz6gEVD、BV1mfn662EHb 记「跳过·读不到」 <span class="muted">凭证过期 · 无起轮预检</span></div></div>
+    </div>
+  </section>
+
+  <!-- ═══ Tab: 控制台 ═══ -->
+  <section id="t-console" hidden>
+    <div class="cbar" id="globalbar"><span class="dot"></span><span id="gbtext">有未保存的修改</span><span class="spacer"></span><button class="btn ghost small" id="saveAll">全部保存</button></div>
+    <div class="cgrid">
+
+      <div class="card" data-cfg data-confirm-save="1">
+        <h3>⏱ 值班调度</h3>
+        <div class="row"><span class="rl">自动值班</span><label class="sw"><input type="checkbox"></label><span class="hint">关闭时仅可手动「现在跑一轮」</span></div>
+        <div class="row"><span class="rl">午间窗 12–14</span><label class="sw"><input type="checkbox" checked></label><span class="rl" style="width:96px">窗口内轮次</span><span class="stp"><button>−</button><input value="1"><button>＋</button></span></div>
+        <div class="row"><span class="rl">晚间窗 18–09</span><label class="sw"><input type="checkbox" checked></label><span class="rl" style="width:96px">轮间隔 ≥</span><span class="stp"><button>−</button><input value="120"><button>＋</button></span><span class="hint">分钟</span></div>
+        <div class="row"><span class="rl">值班模型</span>
+          <select><option>跟随当前模型（不推荐）</option><option selected>GLM-5.3-Flash（huoshan）</option><option>DeepSeek-V4-Flash</option><option>MiMo-V2.6-Flash</option></select>
+          <span class="hint">防贵模型值班烧钱</span></div>
+        <div class="cfoot"><span class="dot"></span><span class="stxt">修改后点保存生效</span><span class="rs"><button class="btn ghost small reset">重置</button><button class="btn small save">💾 保存</button></span></div>
+      </div>
+
+      <div class="card" data-cfg data-confirm-save="1">
+        <h3>📦 配额（每天 / 每轮）</h3>
+        <div class="row"><span class="rl">挑中 / 天</span><span class="stp"><button>−</button><input value="5"><button>＋</button></span><span class="rl" style="width:80px">评论 / 天</span><span class="stp"><button>−</button><input value="5"><button>＋</button></span></div>
+        <div class="row"><span class="rl">评论 / 轮</span><span class="stp"><button>−</button><input value="2"><button>＋</button></span><span class="rl" style="width:80px">点赞 / 天</span><span class="stp"><button>−</button><input value="10"><button>＋</button></span></div>
+        <div class="row"><span class="rl">动态 / 天</span><span class="stp"><button>−</button><input value="1"><button>＋</button></span><span class="rl" style="width:80px">跟进 / 轮</span><span class="stp"><button>−</button><input value="2"><button>＋</button></span></div>
+        <div class="qnote">今日消耗见上方「今日配额」卡 · 所有调大操作保存时二次确认</div>
+        <div class="cfoot"><span class="dot"></span><span class="stxt">修改后点保存生效</span><span class="rs"><button class="btn ghost small reset">重置</button><button class="btn small save">💾 保存</button></span></div>
+      </div>
+
+      <div class="card" data-cfg data-confirm-save="1">
+        <h3>🧲 内容源</h3>
+        <div class="row"><span class="rl">关键词</span>
+          <span class="chips">
+            <span class="kchip">AI Agent<u>×</u></span><span class="kchip">大模型<u>×</u></span><span class="kchip">数码评测<u>×</u></span>
+            <button class="kadd">＋ 添加</button>
+          </span></div>
+        <div class="row"><span class="rl">订阅 UP 主</span><span class="hint">（空）— 添加 UID 后显示昵称</span></div>
+        <div class="row"><span class="rl">热门榜</span><label class="sw lock"><input type="checkbox" checked disabled></label><span class="hint">固定启用</span></div>
+        <div class="row"><span class="rl">每周必看</span><label class="sw"><input type="checkbox" checked></label><span class="rl" style="width:96px">排行榜</span><label class="sw"><input type="checkbox"></label></div>
+        <div class="row"><span class="rl">热搜词选题</span><label class="sw"><input type="checkbox"></label><span class="rl" style="width:96px">收藏夹池</span><label class="sw"><input type="checkbox"></label>
+          <select style="margin-left:8px"><option>选择收藏夹…</option><option>默认收藏夹（1725）</option><option>python（12）</option></select></div>
+        <div class="qnote">关键词为空时：<select><option>Agent 自选主题词（当前）</option><option>只用热门 + 每周必看</option></select></div>
+        <div class="cfoot"><span class="dot"></span><span class="stxt">修改后点保存生效</span><span class="rs"><button class="btn ghost small reset">重置</button><button class="btn small save">💾 保存</button></span></div>
+      </div>
+
+      <div class="card" data-cfg data-confirm-save="1">
+        <h3>💬 互动能力 <span class="r">新功能开关</span></h3>
+        <div class="row"><span class="rl">弹幕互动</span><label class="sw"><input type="checkbox" id="dmSw"></label>
+          <span class="rl" style="width:80px">弹幕 / 天</span><span class="stp" id="dmStp"><button>−</button><input value="3"><button>＋</button></span></div>
+        <div class="row"><span class="rl"></span><span class="hint">≤20 字 · 不剧透 · 同视频最多 1 条；压审复核 V1 不覆盖弹幕，靠频控保守</span></div>
+        <div class="row"><span class="rl">删除工具</span><label class="sw"><input type="checkbox" checked></label><span class="hint">bili_delete_comment / _dynamic · 白名单默认不含，仅会话内可用</span></div>
+        <div class="row"><span class="rl">通知瘦身</span><label class="sw"><input type="checkbox" checked></label><span class="hint">五字段 + num/since 过滤（省 flash 上下文）</span></div>
+        <div class="row"><span class="rl">跟进提醒</span><label class="sw"><input type="checkbox" checked></label><span class="hint">收件箱有新回复未跟进时侧栏红点</span></div>
+        <div class="cfoot"><span class="dot"></span><span class="stxt">修改后点保存生效</span><span class="rs"><button class="btn ghost small reset">重置</button><button class="btn small save">💾 保存</button></span></div>
+      </div>
+
+      <div class="card wide" data-cfg data-confirm-save="1">
+        <h3>🎭 人设 <span class="r">下轮值班生效</span></h3>
+        <textarea>性格：安静的数码党，偶尔看美食纪录；口吻：像弹幕朋友随口一句，不夸大、不站队；兴趣：数码评测、AI 应用、美食纪录；红线：不碰争议话题，不冒充真人，不透露账号主人信息。</textarea>
+        <div class="row"><span class="hint">78 / 6000 字 · 支持填文件路径（如 ~/AGENTS.md）</span></div>
+        <div class="cfoot"><span class="dot"></span><span class="stxt">修改后点保存生效</span><span class="rs"><button class="btn ghost small reset">重置</button><button class="btn small save">💾 保存</button></span></div>
+      </div>
+
+      <div class="card wide" data-cfg>
+        <h3>🛠 运维与安全 <span class="r">高级</span></h3>
+        <div class="row"><span class="rl">seen.md 轮转</span><label class="sw"><input type="checkbox" checked></label>
+          <span class="rl" style="width:120px">保留策略</span><select><option>按月归档（seen-2026-10.md）</option><option>仅保留 3 个月</option></select>
+          <span class="hint">主索引 seen-bvs.txt 永不清 · 归档仅审计</span></div>
+        <div class="row"><span class="rl">发后复核</span><label class="sw"><input type="checkbox" checked></label>
+          <span class="rl" style="width:120px">复核延迟</span><span class="stp"><button>−</button><input value="90"><button>＋</button></span><span class="hint">秒 · 按判重表 rpid 核对可见性，发现压审当日评论熔断（待实装）</span></div>
+        <div class="row"><span class="rl">凭证隔离</span><span class="hint">BILI_CRED_FILE 接线后：分身凭证独立于主号</span></div>
+        <div class="cfoot"><span class="dot"></span><span class="stxt">修改后点保存生效</span><span class="rs"><button class="btn ghost small reset">重置</button><button class="btn small save">💾 保存</button></span></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═══ Tab: 日报 ═══ -->
+  <section id="t-report" hidden>
+    <div class="daypick">日期 <select><option>2026-10-22（今天）</option><option>2026-10-21</option></select> <span class="muted">· /api/bili-fenshen/report?day= 已支持，前端补 UI</span></div>
+<pre><span class="h"># 第四轮值班（23:02 起）</span>
+- 23:02 检查凭证：logged_in: true（不吃鱼的豆腐，UID 312299788）。判重表可读。
+- 配额：参数写今日已挑 10 ⇒ 本轮最多再挑 0 条；评论剩 2、点赞剩 1、动态 0、跟进 2。
+  <span class="y">（账本修复后提示词如实给出已消耗量 —— 修复前这里会误报「已挑 0」）</span>
+
+<span class="h">## 本轮跟进（只处理别人对我评论的直接回复）</span>
+- 新回复只有一条：用户「究极无敌路由器」在 BV192n66dEDQ 下、直接回我 22:19 那条评论
+ （rpid 317851964705），内容是「发挥主观能动性自己去街上补仓[doge_金箍]」。
+- 回复已发：<span class="g">rpid 317856268497</span>，正文「补仓补到康陶总部去了，这波是自己上门送钱[doge]」（30 字）。
+
+<span class="h">## 总结</span>
+本轮 <span class="g">0 挑中 / 0 点赞 / 0 新评论 / 0 动态 / 1 条跟进回复</span>。
+存在感：收赞 2 / 被回复 1。      <span class="y">← 新增契约行，存在感仪表的数据源</span>
+
+<span class="h"># 前三轮（节选）</span>
+- 第一轮 21:55 · 未登录白跑（凭证过期，无预检）— 0/0/0/0
+- 第二轮 21:58 · 5 挑中 / 5 赞 / 2 评（rpid 未取到）/ 1 动态
+- 第三轮 22:17 · 5 挑中 / 4 新赞 / 2 评（rpid 317852084545、317851964705）/ 0 动态</pre>
+  </section>
+
+  <!-- ═══ Tab: 判重表 ═══ -->
+  <section id="t-seen" hidden>
+    <div class="daypick">seen.md · 尾部 / 共 19 行 · 2.1 KB · 轮转：按月归档 <span class="muted">· 主索引 seen-bvs.txt 19 个 BV</span></div>
+<pre>- 2026-10-22 · 22:19 · 第三轮值班开始（凭证有效；参数称今日挑中 0，但当日报告实有 5 条，差异已写进报告） · -
+- 2026-10-22 · BV1xrnz6gEVD · <span class="g">看过+赞过（此前已赞，重复点赞）+评论过（rpid 317852084545）</span> · 折1万次，会坏吗？iPhone Duo深度评测
+- 2026-10-22 · BV192n66dEDQ · <span class="g">看过+赞过+评论过（rpid 317851964705）</span> · 爆！亚当·重锤怒喷《边缘行者2》…
+- 2026-10-22 · 23:02 · 第四轮值班开始（凭证有效；本轮参数称今日已挑 10，本轮 0 新挑） · -
+- 2026-10-22 · BV192n66dEDQ · <span class="g">跟进回复过（被回复 317851964705 → 新回复 317856268497 · 用户 究极无敌路由器）</span>
+- 2026-10-22 · 跳过·旧回复·无对应本轮话题（goldenzihang / 谨unknown_sama 等 2～4 月旧帖） · -</pre>
+  </section>
+
+  <!-- ═══ Tab: 日志 ═══ -->
+  <section id="t-log" hidden>
+    <div class="daypick">duty.log · 尾部（15s 自动刷新）</div>
+<pre>[2026-10-22T14:17:33Z] 值班轮开跑（manual-test 复测修复效果）：profile=headless cli=…\@deepseek-ai\dsh\lib\bin.js
+[2026-10-22T14:19:42Z] <span class="g">值班轮结束（manual-test 复测修复效果，code=0）</span>
+[2026-10-22T15:02:19Z] 值班轮开跑（重启后配额约束验证）：profile=headless
+[2026-10-22T15:03:02Z] <span class="g">值班轮结束（重启后配额约束验证，code=0）</span>
+<span class="y">dsh: 本轮值班完成：0 新动作，1 跟进回复（rpid 317856268497）；报告已追加；判重表已补记录。</span></pre>
+  </section>
+
+  <div class="foot">
+    ⚠️ 本页为<b>静态演示稿 V2</b>：设置卡有显式「保存 / 重置」键（演示不落盘，实装写入 configEditor）；带 ≈ 的时间为区间估计，其余均为 2026-10-22 实测值。
+    最终实现：挂载 <span class="mono">sidebar.panellist + main</span>、绑定 <span class="mono">--dsw-*</span> 主题 token、活动数据来自 <span class="mono">ledger.jsonl（出站）+ inbox 同步（入站）</span>。方案详见 <span class="mono">dsh-plugin/CONSOLE-DESIGN.md</span>。
+  </div>
+</main>
+</div>
+<div id="toast"></div>
+
+<script>
+// —— Tabs ——
+const tabs = document.querySelectorAll('.tab');
+tabs.forEach(t => t.onclick = () => {
+  tabs.forEach(x => x.classList.toggle('on', x === t));
+  ['activity','console','report','seen','log'].forEach(id =>
+    document.getElementById('t-' + id).hidden = (id !== t.dataset.t));
+});
+
+// —— Toast ——
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// —— 活动视图切换 + 类型筛选 ——
+document.querySelectorAll('.vt').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.vt').forEach(x => x.classList.toggle('on', x === b));
+  document.getElementById('viewVideo').hidden = b.dataset.v !== 'video';
+  document.getElementById('viewTime').hidden  = b.dataset.v !== 'time';
+});
+let ftype = 'all';
+document.querySelectorAll('.fchip').forEach(c => c.onclick = () => {
+  document.querySelectorAll('.fchip').forEach(x => x.classList.toggle('on', x === c));
+  ftype = c.dataset.f;
+  document.querySelectorAll('#viewVideo .life').forEach(el =>
+    el.style.display = (ftype === 'all' || el.dataset.types.split(' ').includes(ftype)) ? '' : 'none');
+  document.querySelectorAll('#viewTime .frow').forEach(el =>
+    el.style.display = (ftype === 'all' || el.dataset.type === ftype) ? '' : 'none');
+});
+
+// —— 显式保存：卡片级 脏标记 / 保存 / 重置 + 全局未保存条 ——
+document.querySelectorAll('.card[data-cfg]').forEach(card => {
+  const ctrls = [...card.querySelectorAll('input,select,textarea')];
+  const foot = card.querySelector('.cfoot');
+  const snap = () => ctrls.map(c => String(c.type === 'checkbox' ? c.checked : c.value));
+  let saved = snap();
+  const sync = () => {
+    const dirty = JSON.stringify(snap()) !== JSON.stringify(saved);
+    foot.classList.toggle('dirty', dirty);
+    updateGlobal();
+  };
+  ctrls.forEach(c => c.addEventListener('change', sync));
+  foot.querySelector('.save').onclick = () => {
+    if (card.dataset.confirmSave && !confirm('该卡的设置会影响分身的公开行为，确认保存？')) return;
+    saved = snap(); sync(); dmSync();
+    toast('已保存 ✓（演示稿不落盘 · 实装写入 configEditor 并即时生效）');
+  };
+  foot.querySelector('.reset').onclick = () => {
+    ctrls.forEach((c, i) => { if (c.type === 'checkbox') c.checked = saved[i] === 'true'; else c.value = saved[i]; });
+    sync(); dmSync(); toast('已重置');
+  };
+});
+function updateGlobal() {
+  const n = document.querySelectorAll('.cfoot.dirty').length;
+  const bar = document.getElementById('globalbar');
+  bar.classList.toggle('show', n > 0);
+  document.getElementById('gbtext').textContent = n + ' 张设置卡有未保存的修改';
+}
+document.getElementById('saveAll').onclick = () =>
+  document.querySelectorAll('.cfoot.dirty').forEach(f => f.querySelector('.save').click());
+
+// —— 步进器（写入隐藏值并触发 change → 计入脏标记） ——
+document.querySelectorAll('.stp').forEach(stp => {
+  const [minus, inp, plus] = [stp.querySelector('button'), stp.querySelector('input'), stp.querySelectorAll('button')[1]];
+  const bump = d => {
+    inp.value = Math.max(0, parseInt(inp.value || '0') + d);
+    inp.dispatchEvent(new Event('change'));
+  };
+  minus.onclick = () => bump(-1);
+  plus.onclick  = () => bump(1);
+});
+
+// —— 弹幕开关联动 ——
+const dmSw = document.getElementById('dmSw'), dmStp = document.getElementById('dmStp');
+function dmSync() {
+  dmStp.querySelectorAll('button').forEach(b => b.disabled = !dmSw.checked);
+  dmStp.style.opacity = dmSw.checked ? 1 : .45;
+}
+dmSw.addEventListener('change', dmSync); dmSync();
+
+// —— 关键词 chips（演示） ——
+document.querySelectorAll('.kchip u').forEach(u =>
+  u.onclick = () => { u.closest('.kchip').remove(); toast('演示：关键词已删除（保存后生效）'); });
+document.querySelector('.kadd').onclick = () => toast('演示：输入关键词回车添加');
+
+// —— 现在跑一轮（演示动画） ——
+document.getElementById('runBtn').onclick = () => {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true; btn.textContent = '⏳ 值班中…（演示）';
+  setTimeout(() => { btn.disabled = false; btn.textContent = '▶ 现在跑一轮';
+    toast('演示：值班已触发，实际由宿主 spawn headless 轮完成'); }, 2400);
+};
+</script>
+</body>
+</html>

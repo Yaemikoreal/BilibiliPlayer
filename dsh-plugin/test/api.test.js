@@ -1,12 +1,15 @@
 // dsh-plugin/test/api.test.js
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createApiHandler } from '../lib/api.js'
 
 const dir = () => mkdtempSync(join(tmpdir(), 'bf-api-'))
+// 真实 seen.md 的逐字副本（2026-10-25 快照：59 行文件 = 标题 + 空行 + 57 条账本行）
+const realSeen = () => readFileSync(fileURLToPath(new URL('./fixtures/seen-real-sample.md', import.meta.url)), 'utf8')
 
 function fakeRes() {
   return {
@@ -131,4 +134,70 @@ test('GET /seen 解析真实账本行（含时间与无 BV 行）', async () => 
   assert.equal(r.json.rows[0].bvid, '')
   assert.equal(r.json.rows[1].bvid, 'BV1xrnz6gEVD')
   assert.equal(r.json.rows[1].title, '折1万次，会坏吗？iPhone Duo深度评测')
+})
+
+test('GET /seen 解析真实 seen.md：57 行全部解析（markdown 列表前缀不再吃掉整行）', async () => {
+  const d = deps()
+  const seenFile = join(d.home, 'seen.md')
+  writeFileSync(seenFile, realSeen())
+  const r = await call(createApiHandler({ ...d, seenFile }), 'GET', '/api/bili-fenshen/seen')
+  assert.equal(r.status, 200)
+  assert.equal(r.json.rows.length, 57)
+  assert.equal(r.json.rows.filter((x) => x.bvid).length, 39)
+  assert.equal(r.json.rows.filter((x) => !x.bvid).length, 18)
+  // 标题行 / 空行不是账本行，不能算进去
+  assert.ok(r.json.rows.every((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.date)))
+  assert.ok(r.json.rows.every((x) => x.time === '' || /^\d{1,2}:\d{2}$/.test(x.time)))
+  // raw 原样回传，前端解析失败时能看原文
+  assert.equal(r.json.raw, realSeen())
+})
+
+test('GET /seen 真实行字段：日期 / 可选时间 / BV / 动作 / 标题', async () => {
+  const d = deps()
+  const seenFile = join(d.home, 'seen.md')
+  writeFileSync(seenFile, realSeen())
+  const r = await call(createApiHandler({ ...d, seenFile }), 'GET', '/api/bili-fenshen/seen')
+  // 首行是「值班开始」备注行：没有 BV，日期格没有时间，备注在 action、说明在 title
+  assert.deepEqual(r.json.rows[0], {
+    date: '2026-10-22', time: '', bvid: '', action: '值班开始', title: '初始化判重表（此前无记录）',
+  })
+  // 第二行是真实视频行：『- 日期 · BV 号 · 动作 · 标题』
+  assert.deepEqual(r.json.rows[1], {
+    date: '2026-10-22',
+    time: '',
+    bvid: 'BV1xrnz6gEVD',
+    action: '跳过·未登录读不到详情/字幕/评论',
+    title: '折1万次，会坏吗？iPhone Duo深度评测',
+  })
+  // 第二个字段是 HH:MM 时才算时间；不存在「时间拼进动作」的行
+  const timed = r.json.rows.filter((x) => x.time)
+  assert.equal(timed.length, 9)
+  // 时间被抽走，不再以 HH:MM 开头留在动作里（动作正文里出现时间戳是正常的）
+  assert.ok(timed.every((x) => !/^\d{1,2}:\d{2}/.test(x.action)))
+})
+
+test('GET /seen 备注行（无 BV）保留为 bvid 空 + action 原文，占位符 - / — 不落字段', async () => {
+  const d = deps()
+  const seenFile = join(d.home, 'seen.md')
+  writeFileSync(seenFile, realSeen())
+  const r = await call(createApiHandler({ ...d, seenFile }), 'GET', '/api/bili-fenshen/seen')
+  const notes = r.json.rows.filter((x) => !x.bvid)
+  assert.equal(notes.length, 18)
+  // 「第 N 轮值班开始（…）」：带时间的备注行，时间进 time，备注原样留在 action
+  assert.deepEqual(r.json.rows.find((x) => x.time === '21:58'), {
+    date: '2026-10-22', time: '21:58', bvid: '', action: '第二轮值班开始（已登录，凭证有效）', title: '',
+  })
+  // 动作文本内部「跳过·无字幕」用的是不带空格的 ·，不能被当分隔符切开
+  assert.deepEqual(notes.find((x) => x.action.startsWith('跳过·旧回复')), {
+    date: '2026-10-22',
+    time: '',
+    bvid: '',
+    action: '跳过·旧回复·无对应本轮话题（goldenzihang / 谨unknown_sama 等 2～4 月旧帖）',
+    title: '',
+  })
+  // 「本轮 0 动作…」这类配额说明同样保留为备注行
+  assert.ok(notes.some((x) => x.action.startsWith('本轮 0 新挑中')))
+  // 所有备注行都有内容，且不残留 list 分隔用的 - / — 占位符
+  assert.ok(notes.every((x) => x.action && x.action !== '-' && x.action !== '—'))
+  assert.ok(notes.every((x) => x.title !== '-' && x.title !== '—'))
 })

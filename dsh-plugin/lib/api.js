@@ -11,6 +11,48 @@ const HOST_LINE = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\]/
 const SSE_MAX_CLIENTS = 4
 const SSE_HEARTBEAT_MS = 15_000
 
+/* ───────── 判重表解析（seen.md） ─────────
+ * 真实账本是 markdown 列表，单元格分隔符是「空格 · 空格」（动作文本内部还有不带空格的 ·，不能一起切）：
+ *   - 2026-10-22 · BV1xrnz6gEVD · 看过+赞过 · 折1万次，会坏吗？iPhone Duo深度评测
+ *   - 2026-10-22 · 21:58 · 第二轮值班开始（已登录，凭证有效） · -
+ * 时间可选（第二格是 HH:MM 才算时间，否则并入动作所在格）。没有 BV 的是备注行
+ * （第 N 轮值班开始 / 本轮配额说明 / 搜索档跳过），按 console-demo-data.mjs 的口径保留：
+ * bvid 为 ''，备注原文放 action，其余段拼进 title；占位符 - / — 视为空单元格，不落进字段。
+ * 兼容旧账本格式「YYYY-MM-DD HH:MM · …」（时间写在日期格里），老文件和老测试不回归。
+ */
+const SEEN_CELL_SEP = /\s+·\s+/
+const SEEN_DATE = /^(\d{4}-\d{2}-\d{2})(?:\s+(\d{1,2}:\d{2}))?$/
+const SEEN_TIME = /^\d{1,2}:\d{2}$/
+const SEEN_BV = /BV[0-9A-Za-z]+/
+const SEEN_PLACEHOLDER = /^[—–-]$/
+
+function parseSeenRows(raw) {
+  const rows = []
+  for (const line of String(raw || '').split('\n')) {
+    const body = line.trim().replace(/^[-*]\s*/, '')
+    if (!body) continue
+    const parts = body.split(SEEN_CELL_SEP)
+    const dm = SEEN_DATE.exec(parts[0] || '')
+    if (!dm) continue
+    const date = dm[1]
+    let time = dm[2] || ''
+    let rest = parts.slice(1)
+    if (!time && rest[0] && SEEN_TIME.test(rest[0])) {
+      time = rest[0]
+      rest = rest.slice(1)
+    }
+    const bvAt = rest.findIndex((x) => SEEN_BV.test(x))
+    if (bvAt >= 0) {
+      const tail = rest.slice(bvAt + 1).filter((x) => x && !SEEN_PLACEHOLDER.test(x))
+      rows.push({ date, time, bvid: SEEN_BV.exec(rest[bvAt])[0], action: tail[0] || '', title: tail.slice(1).join(' · ') })
+    } else {
+      const cells = rest.filter((x) => x && !SEEN_PLACEHOLDER.test(x))
+      rows.push({ date, time, bvid: '', action: cells[0] || '', title: cells.slice(1).join(' · ') })
+    }
+  }
+  return rows
+}
+
 export function createApiHandler(deps) {
   const patchConfig = () => (typeof deps.patchConfig === 'function' ? deps.patchConfig() : deps.patchConfig)
   const sendJson = (res, status, data) => {
@@ -166,16 +208,7 @@ export function createApiHandler(deps) {
         try {
           if (existsSync(deps.seenFile)) raw = readFileSync(deps.seenFile, 'utf8')
         } catch { /* 同上 */ }
-        const rows = []
-        for (const line of raw.split('\n')) {
-          // 真实账本行形如：`2026-10-22 16:26 · BV1xrnz6gEVD · 赞过+评论过 · 标题`
-          // 无 BV 的行（如「—」）也要能解析出来，只是 bvid 为空
-          const m = /^(\d{4}-\d{2}-\d{2})(?:\s+(\d{1,2}:\d{2}))?\s*·\s*(.*?)\s*·\s*(.*?)\s*·\s*(.*)$/.exec(line.trim())
-          if (!m) continue
-          const bv = /BV[0-9A-Za-z]+/.exec(m[3])
-          rows.push({ date: m[1], time: m[2] || '', bvid: bv ? bv[0] : '', action: m[4], title: m[5] })
-        }
-        return sendJson(res, 200, { ok: true, rows, raw })
+        return sendJson(res, 200, { ok: true, rows: parseSeenRows(raw), raw })
       }
       if (method === 'GET' && path === `${PREFIX}/reports`) {
         const r = deps.listReports ? deps.listReports() : { days: [], digests: [], overlay: false }

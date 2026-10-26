@@ -124,24 +124,28 @@ pip install -r requirements.txt
 
 ## 🖥️ DSH 插件「B站分身」
 
-[dsh-plugin/](./dsh-plugin/) 是 DeepSeek Harness 插件：把上面 29 个工具挂载给 DSH 的 Agent，再配一套**值班章程**，让它按配额自动运营一个小号——刷到 → 看 → 赞 → 评 → 被回复 → 我回，全程可审计。
+[dsh-plugin/](./dsh-plugin/) 是 DeepSeek Harness 插件：把上面 29 个工具挂载给 DSH 的 Agent，再配一套**值班章程**，让它按配额自动运营一个小号——刷到 → 看 → 赞 → 评 → 被回复 → 我回，全程可审计。控制台按 **DSH UI 规范**重做为 7 页：概览 / 实时 / 活动 · 生命周期 / 日报 / 判重表 / 人设工作室 / 设置。
 
-<p align="center"><img src="docs/demo/shots/01-dashboard-light.png" alt="B站分身看板（浅色）：账号、值班状态、今日配额与每条视频的活动生命周期" width="100%"></p>
+<p align="center"><img src="docs/demo/shots/v3-overview-dark.png" alt="B站分身控制台 v3：概览（值班/账号/配额/存在感/最近活动/人设/本地检查）" width="100%"></p>
 
 <details>
-<summary><b>更多界面截图</b>：深色看板 / 操作台 / 判重表 / 产物</summary>
+<summary><b>更多界面截图</b>：实时 / 活动生命周期 / 判重表 / 人设工作室 / 日报 / 设置</summary>
 
-| 看板（深色） | 操作台 · 配置 |
+| 实时（阶段轨 + 事件流） | 活动生命周期 |
 |:---:|:---:|
-| <img src="docs/demo/shots/02-dashboard-dark.png" alt="B站分身看板（深色）"> | <img src="docs/demo/shots/03-console-config.png" alt="B站分身操作台：值班节奏、配额、内容源、人设"> |
+| <img src="docs/demo/shots/v3-live-dark.png" alt="实时页：4 阶段轨、工具/配额统计、按类别筛选的事件流"> | <img src="docs/demo/shots/v3-activity-dark.png" alt="活动页：按视频/时间线、类型筛选、生命周期卡"> |
 
-| 判重表 | 产物 |
+| 人设工作室（8 页签） | 设置（DSH 设置卡） |
 |:---:|:---:|
-| <img src="docs/demo/shots/04-console-seen.png" alt="B站分身判重表：已处理过哪些视频"> | <img src="docs/demo/shots/05-console-artifacts.png" alt="B站分身产物：每轮报告与运行覆盖配置"> |
+| <img src="docs/demo/shots/v3-persona-dark.png" alt="人设工作室：卡片/编译预览/质量/语料库/见闻库/状态/版本/沙盒"> | <img src="docs/demo/shots/v3-settings-dark.png" alt="设置：宿主设置卡、stacked 字段、显式保存条"> |
+
+| 判重表 | 日报 |
+|:---:|:---:|
+| <img src="docs/demo/shots/v3-seen-dark.png" alt="判重表：39 条视频、18 条值班备注折叠"> | <img src="docs/demo/shots/v3-reports-dark.png" alt="日报：列表 + Markdown 渲染"> |
 
 </details>
 
-<sub>控制台界面预览（数据取自真实值班轮）。看板看账号 / 值班 / 配额 / 活动生命周期，操作台调配额、内容源、人设，也看日志、判重表与产物。</sub>
+<sub>截图数据来自真实快照（账本 / 人设卡 / 日报 / seen.md），界面按 DSH 设计规范：960px 页面容器、宿主 <code>--dsw-*</code> token、深浅主题跟随宿主、focus-visible / reduced-motion 齐全。</sub>
 
 **它多出来的一件事**：除了全量 `mcp__bili-fenshen__bili_*` 工具，还注册两个宿主工具 `bili_fenshen_status`（状态与配额）、`bili_fenshen_run`（立刻跑一轮）。值班轮会拉起独立 headless 会话，**只暴露最小工具白名单**（`BILI_MCP_TOOLS`），上传、私信这类高权限工具在那一轮里根本不存在。
 

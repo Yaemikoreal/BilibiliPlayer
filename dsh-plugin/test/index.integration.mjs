@@ -13,14 +13,24 @@ writeFileSync(join(home, 'out', '2026-10-23.md'), '## 测试日报\n')
 writeFileSync(join(home, 'digest', '2026-10.md'), '# 归档\n')
 writeFileSync(join(home, 'seen.md'), '2026-10-23 16:26 · BV1xrnz6gEVD · 赞过+评论过 · 折1万次\n')
 writeFileSync(join(home, 'duty.log'), '[2026-10-23T01:00:00.000Z] host 已激活\n推理原文一行\n')
-// 账本 fixture（/activity + 今日配额计数的数据源）：用相对时间，保证「本地今天」判定永远成立
-const H = 3600_000
-const isoAgo = (h) => new Date(Date.now() - h * H).toISOString()
+// 账本 fixture（/activity + 今日配额计数的数据源）：固定在「本地今天 00:00–00:02」，
+// 避免用 Date.now()-2h（凌晨跑测试会跨到昨天，导致"今日配额"时间炸弹）。
+const todayAt = (minutes, seconds = 0) => {
+  const d = new Date()
+  d.setHours(0, minutes, seconds, 0)
+  return d.toISOString()
+}
+const nineDaysAgo = () => {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() - 9)
+  return d.toISOString()
+}
 writeFileSync(join(home, 'ledger.jsonl'), [
-  JSON.stringify({ t: isoAgo(2), round: 'r1', type: 'view', bvid: 'BV1', title: 'A', grade: 'worth', source: 'hot' }),
-  JSON.stringify({ t: isoAgo(2) , round: 'r1', type: 'comment', bvid: 'BV1', text: 'c', rpid: 1 }),
-  JSON.stringify({ t: isoAgo(1.5), round: 'r1', type: 'reply-in', bvid: 'BV1', parent: 1, rpid: 2, from: '张三', text: 'hi', notifId: 1 }),
-  JSON.stringify({ t: isoAgo(9 * 24), round: 'old', type: 'view', bvid: 'BVold', title: '九天前', source: 'hot' }),
+  JSON.stringify({ t: todayAt(0), round: 'r1', type: 'view', bvid: 'BV1', title: 'A', grade: 'worth', source: 'hot' }),
+  JSON.stringify({ t: todayAt(0, 30), round: 'r1', type: 'comment', bvid: 'BV1', text: 'c', rpid: 1 }),
+  JSON.stringify({ t: todayAt(1), round: 'r1', type: 'reply-in', bvid: 'BV1', parent: 1, rpid: 2, from: '张三', text: 'hi', notifId: 1 }),
+  JSON.stringify({ t: nineDaysAgo(), round: 'old', type: 'view', bvid: 'BVold', title: '九天前', source: 'hot' }),
   '',
 ].join('\n'))
 
@@ -170,6 +180,34 @@ check('/models 生效模型=插件配置', mdl2.json?.effective?.mode === 'confi
   && mdl2.json?.effective?.reasoningEffort === 'high', mdl2.json?.effective)
 // 还原成「跟随默认」，别把临时覆盖层带到后续断言
 await call('POST', '/api/bili-fenshen/config', { modelProvider: '', modelName: '', modelReasoningEffort: '' })
+
+
+// 人设工作室端点：卡片/语料/见闻/版本 + 保存/回滚（写临时 home）
+const p1 = await call('GET', '/api/bili-fenshen/persona')
+check('GET /persona 带 card + cardSource',
+  p1.json?.card?.id === 'whale' && p1.json?.cardSource?.source === 'preset', p1.json?.cardSource)
+const pe = await call('GET', '/api/bili-fenshen/persona/expression')
+check('GET /persona/expression 分桶',
+  pe.status === 200 && pe.json?.total > 0 && !!pe.json?.buckets?.question, { status: pe.status, total: pe.json?.total })
+const pl = await call('GET', '/api/bili-fenshen/persona/lore')
+check('GET /persona/lore 索引 + 正文',
+  pl.status === 200 && (pl.json?.entries || []).length >= 1 && (pl.json.entries[0].body || '').length > 0,
+  { status: pl.status, entries: pl.json?.entries?.length })
+const pv0 = await call('GET', '/api/bili-fenshen/persona/versions')
+check('GET /persona/versions 200', pv0.status === 200 && Array.isArray(pv0.json?.versions), pv0.json)
+const putBad = await call('PUT', '/api/bili-fenshen/persona', { card: { ...p1.json.card, spec: 'wrong-spec' } })
+check('PUT /persona 非法卡 400', putBad.status === 400 && (putBad.json?.errors || []).length > 0, { status: putBad.status })
+const putOk = await call('PUT', '/api/bili-fenshen/persona', { card: { ...p1.json.card, version: '2.0.1' } })
+check('PUT /persona 合法卡 200 + 快照', putOk.status === 200 && !!putOk.json?.snapshot, { status: putOk.status })
+const p2 = await call('GET', '/api/bili-fenshen/persona')
+check('/persona 保存后 source=file', p2.json?.cardSource?.source === 'file' && p2.json?.card?.version === '2.0.1', p2.json?.cardSource)
+const pv1 = await call('GET', '/api/bili-fenshen/persona/versions')
+check('版本快照出现', (pv1.json?.versions || []).length >= 1, { n: pv1.json?.versions?.length })
+const restoreBad = await call('POST', '/api/bili-fenshen/persona/versions/restore', { name: '../evil.json' })
+check('restore 拒绝路径穿越', restoreBad.status === 400, { status: restoreBad.status })
+const snapName = (pv1.json?.versions || [])[0]?.name
+const restore = await call('POST', '/api/bili-fenshen/persona/versions/restore', { name: snapName })
+check('POST /persona/versions/restore 200', restore.status === 200 && restore.json?.ok === true, { status: restore.status })
 
 // stop（无子进程 → stopped:false，不应抛）
 const sp = await call('POST', '/api/bili-fenshen/stop')

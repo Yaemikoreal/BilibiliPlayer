@@ -4,6 +4,7 @@ bili_credential.json.bak
 
 # 登录二维码（临时文件）
 qrcode_login.png
+bili-login-qr.png
 
 # Python
 __pycache__/
@@ -30,3 +31,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# 本地会话产物（截图 / 诊断脚本 / 临时报告 / 本机 MCP 工具）
+_session_export/
+_login_diag.*
+TEST-REPORT-*.md
+commandcode-mcp/
+dsh-session-*.zip

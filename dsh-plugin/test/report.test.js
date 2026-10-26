@@ -58,3 +58,52 @@ test('空报告返回空结果，不抛异常', () => {
   assert.deepEqual(r.views, [])
   assert.deepEqual(r.skips, [])
 })
+
+// ↓ 2026-10-25 真实报告格式（见 docs/analysis/2026-10-25-log-findings.md §4.3/§4.6）
+const REAL = `## 第三轮（round id 2026-10-25T11:07:49.738Z）
+
+### BV1mJHA6kEiF
+标题：新英雄遐思详细测试
+UP：布锅锅
+**档位**：值得看
+动作：评论（rpid 318151262257）：\`拿个爆能机还要说「这个归我了」，欠得很\`。点赞没做（今日点赞已超日配额，不再加）。
+
+### BV1sPHP6kE82
+标题：传奇历史人物志——特斯拉
+UP：抽象历史人物志
+**档位**：值得看
+动作：点赞 + 评论（rpid 318147743009）：\`摩根那句没电线装不上电表，一下就说死了\` + 分享成动态（动态 id 1263091599065219094）。
+`
+
+test('实际报告格式：评论取到正文与 rpid', () => {
+  const { views } = parseRoundReport(REAL, { round: 'r' })
+  const v = views.find((x) => x.bvid === 'BV1mJHA6kEiF')
+  const cmt = v.actions.find((a) => a.type === 'comment')
+  assert.equal(cmt.text, '拿个爆能机还要说「这个归我了」，欠得很')
+  assert.equal(cmt.rpid, 318151262257)
+})
+
+test('「点赞没做」不再回填成幽灵点赞（2026-10-25 真实事故）', () => {
+  const { views } = parseRoundReport(REAL, { round: 'r' })
+  const v = views.find((x) => x.bvid === 'BV1mJHA6kEiF')
+  assert.equal(v.actions.some((a) => a.type === 'like'), false, '写了"点赞没做"就不该有 like 事件')
+})
+
+test('「点赞 + 评论 + 分享成动态」三种动作都取到，动态带 id', () => {
+  const { views } = parseRoundReport(REAL, { round: 'r' })
+  const v = views.find((x) => x.bvid === 'BV1sPHP6kE82')
+  assert.deepEqual(v.actions.map((a) => a.type).sort(), ['comment', 'dynamic', 'like'])
+  assert.equal(v.actions.find((a) => a.type === 'dynamic').id, '1263091599065219094')
+})
+
+test('「评论没发」不产生 comment 事件', () => {
+  const text = `### BV1zzzzzzzzz
+标题：t
+UP：u
+**档位**：可以看
+动作：点赞（评论没发——评论区吵成一团，不掺和）。
+`
+  const { views } = parseRoundReport(text, { round: 'r' })
+  assert.deepEqual(views[0].actions.map((a) => a.type), ['like'])
+})
+

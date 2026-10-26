@@ -37,6 +37,29 @@ test('readEvents 文件不存在时返回空数组', () => {
   assert.deepEqual(readEvents(join(dir(), 'nope.jsonl')), [])
 })
 
+test('一行塞多个对象时逐个救回（旧实现整行丢弃 ⇒ 评论/动态被销账）', () => {
+  const file = join(dir(), 'ledger.jsonl')
+  // 2026-10-25 真实账本形态：模型把一个物理行写成多个对象
+  const a = { t: '2026-10-25T18:40:32+08:00', round: 'r', type: 'comment', bvid: 'BV1', text: '甲', rpid: 1 }
+  const b = { t: '2026-10-25T18:40:32+08:00', round: 'r', type: 'dynamic', bvid: 'BV1', text: '乙', id: '9' }
+  const c = { t: '2026-10-25T18:40:33+08:00', round: 'r', type: 'view', bvid: 'BV2', title: '丙' }
+  writeFileSync(file, [JSON.stringify(a) + ' ' + JSON.stringify(b) + ' ' + JSON.stringify(c), ''].join('\n'))
+  const events = readEvents(file)
+  assert.equal(events.length, 3)
+  assert.deepEqual(events.map((e) => e.type).sort(), ['comment', 'dynamic', 'view'])
+  assert.equal(events.find((e) => e.type === 'comment').text, '甲')
+})
+
+test('一行多对象里若有坏片段，只丢坏的那段，好的照样救回', () => {
+  const file = join(dir(), 'ledger.jsonl')
+  const ok1 = { t: '2026-10-25T08:00:00Z', type: 'like', bvid: 'BV1' }
+  const ok2 = { t: '2026-10-25T08:00:01Z', type: 'comment', bvid: 'BV1', text: '含"引号"和{括号}', rpid: 3 }
+  writeFileSync(file, [JSON.stringify(ok1) + ' {broken} ' + JSON.stringify(ok2), ''].join('\n'))
+  const events = readEvents(file)
+  assert.equal(events.length, 2)
+  assert.equal(events.find((e) => e.type === 'comment').text, '含"引号"和{括号}')
+})
+
 test('isDuplicate 对同 (bvid,type,text) 的兜底事件判重', () => {
   const existing = [{ bvid: 'BV1', type: 'comment', text: 'hi', source: 'agent' }]
   assert.equal(isDuplicate(existing, { bvid: 'BV1', type: 'comment', text: 'hi', source: 'report' }), true)

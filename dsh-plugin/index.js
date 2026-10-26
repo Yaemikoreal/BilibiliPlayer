@@ -29,6 +29,11 @@ import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort
 import { fetchAccount } from './lib/account.js'
 import { fetchReplyNotifs, toReplyIn } from './lib/replies.js'
 import { loadPersona } from './lib/persona.js'
+import {
+  resolvePersona, seedIfEmpty, guardPrompt, personaHealth, previewPersona,
+  listPresets, savePersonaCard, loadBank, bankStats, readActive, writeActive, l0Checks, SPEC,
+  loadCard, listVersions, readVersion, normalizeBank, resolveLoreIndex, lorePath, loadState,
+} from './lib/persona/index.js'
 import { toActivities, dayKeyOf } from './lib/activity.js'
 import { runDiagnose, formatDiagnoseText } from './lib/diagnose.js'
 import { createLiveStream } from './lib/live.js'
@@ -574,19 +579,19 @@ const buildOverlay = (cfg, em) => {
   try { writeFileSync(OVERLAY_FILE, yml.join('\n'), 'utf8'); return OVERLAY_FILE } catch (e) { log(`写 overlay 失败：${e?.message ?? e}`); return null }
 }
 
-const buildDutyPrompt = (cfg, roundId) => {
+export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   const charter = (() => {
     try { return readFileSync(join(PROMPTS_DIR, 'duty.md'), 'utf8').split('<家目录>').join(HOME) } catch { return '' }
   })()
-  // 人设：普通文字 / 文件路径（/…、~/…、Windows 盘符）；留空 = 中性
-  // 路径识别与读取在 lib/persona.js：读不到就降级为中性并记日志，绝不把路径字符串当人设。
-  const { text: persona, note: personaNote } = loadPersona(cfg?.personaPrompt)
-  if (!persona && personaNote) log(`人设加载失败：${personaNote}`)
-  const personaBlock = persona
-    ? `\n\n===== 人设${personaNote}（**按这个来说话**）=====\n${persona}\n===== 人设结束 =====\n`
-    : personaNote
-      ? `\n\n⚠️ ${personaNote}\n`
-      : '\n\n⭐ 本轮没有拿到人设 ⇒ 按一个独立、有自己判断的普通网友说话，别编人格。\n'
+  // 人设：唯一入口是 lib/persona/index.js 的 resolvePersona。
+  //   - 配置里有 personaPrompt（正文/文件路径）⇒ **legacy 直通**，行为与升级前完全一致；
+  //   - 否则读 <家目录>/persona/active.json（默认 preset:whale），编译成
+  //     「前段（身份 + 见闻索引）」与「后段（今日状态 + 语料样本 + 最后一公里）」两部分：
+  //     前段放章程之前（事实），后段放整轮 prompt 最末尾（行为贴生成点）。
+  const personaRes = resolvePersona({ cfg, events: ledgerEvents, roundId, modeMax: 100 })
+  if (personaRes.notes?.length) log(`人设：${personaRes.notes.join('；')}`)
+  const personaBlock = personaRes.before
+  const personaAfter = personaRes.after || ''
 
   const q = quotaFromLedger()
   const picked = q.picked
@@ -632,7 +637,7 @@ const buildDutyPrompt = (cfg, roundId) => {
       + '\n  命中规则：BV 号完全相同 / UP 主名或 UID 命中 / 标题包含该词（不区分大小写）。'
     : '不看清单：（空）'
 
-  return `你是这个账号的用户本人——一个独立、有自己判断的普通网友。现在按自己的兴趣刷一轮B站，看到值得的留下点痕迹。`
+  const prompt = `你是这个账号的用户本人——一个独立、有自己判断的普通网友。现在按自己的兴趣刷一轮B站，看到值得的留下点痕迹。`
     + personaBlock
     + (charter
       ? `\n===== 值班章程（<家目录> 已替换为真实路径）—— 严格按它执行 =====\n\n${charter}\n===== 章程结束 =====\n\n`
@@ -648,15 +653,30 @@ const buildDutyPrompt = (cfg, roundId) => {
     + `- 内容源（按这个优先级拉；上一档挑够或没有可看的，再看下一档）：\n${sourceLines.join('\n')}\n`
     + `- ${avoidBlock}\n`
     + `- 本轮开关（与章程/人设冲突时以本节为准）：\n${switchLines.map((x) => '  ' + x).join('\n')}\n`
-    + `- 评论口吻：像普通观众随口一句——短、口语、只抓一个点，**不写观后感/测评、不总结视频、不必把话说完**；长度双峰（多数 10–30 字，至少一条 ≤15 字，别写 40–60 字的中评）；不要提「小号 / 分身 / 值班 / 运营 / 账号主人」。\n`
+    + `- 评论口吻：像普通观众随口一句——短、口语、只抓一个点。**收在情绪/问题/梗上，不要收在判断上**（「…欠得很」「…一下就说死了」这种判断句没人能接）；「原来 A 是 B」改写成「我以为 A，结果 B」；复述视频里的点必须再创作一层（场景复现/类比/追问），写不出就不发；别为「像人」而扩写。不要提「小号 / 分身 / 值班 / 运营 / 账号主人」。\n`
     + `- 你的 MCP 工具带 bili- 前缀（如 bili_search / bili_subtitle / bili_reply / bili_like / bili_send_dynamic）。\n`
     + `- 判重表 = ${join(HOME, 'seen.md')}（绝对路径，别写错地方）；归档 = ${join(DIGEST_DIR, dayKey().slice(0, 7) + '.md')}。\n`
     + `- 完成后：报告（按章程契约）+ 判重表，最后用一句话汇报本轮做了什么。现在几点了自己看一眼系统时间。`
+    + personaAfter
+
+  // 预算守卫：prompt 走 argv（Windows 命令行上限 32,767 字符），超硬线直接丢弃人设后段
+  const g = guardPrompt(prompt)
+  if (g.level !== 'ok') log(`值班 prompt ${g.len} 字符（${g.level}；软线 ${g.softMax} / 硬线 ${g.hardMax}）`)
+  if (g.level === 'over' && personaAfter) {
+    log('值班 prompt 超硬线：本轮丢弃人设后段（今日状态/语料/最后一公里），保留身份与章程')
+    return prompt.slice(0, prompt.length - personaAfter.length)
+  }
+  return prompt
 }
 
 const runDuty = async (why = 'manual') => {
   try {
     const cfg = effCfg()
+    // ⭐ 首次运行播种：没有 active.json / 没有用户卡 / 也没配旧 personaPrompt ⇒ 默认鲸鱼娘
+    try {
+      const seeded = seedIfEmpty({ legacyPrompt: cfg?.personaPrompt })
+      if (seeded.seeded) log('首次运行：已播种默认人设 whale（开箱即用）')
+    } catch (e) { log(`人设播种失败：${e?.message ?? e}`) }
     if (running || starting) return { started: false, why, error: '上一轮还没结束' }
     const cli = dshCliCached(cfg)
     if (!cli) {
@@ -677,7 +697,7 @@ const runDuty = async (why = 'manual') => {
     const profile = String(cfg?.headlessProfile || 'headless').trim() || 'headless'
     const args = ['--profile', profile]
     if (overlay) args.push('--patch', overlay)
-    args.push(buildDutyPrompt(cfg, roundId))
+    args.push(buildDutyPrompt(cfg, roundId, readEvents(LEDGER_FILE)))
     log(`值班轮开跑（${why}）：profile=${profile} cli=${cli}`)
     log(`值班轮 spawn 调试：execPath=${process.execPath} resourcesPath=${process.resourcesPath || '（无）'}`)
     const child = spawn(process.execPath, [cli, ...args], {
@@ -1304,6 +1324,88 @@ export function apply(ctx, config) {
           try { return sendJson(res, 200, { exists: existsSync(BILI_CRED_FILE) }) }
           catch { return sendJson(res, 200, { exists: false }) }
         }
+        // ── 人设工作室：只读数据 + 预设切换 + 卡保存/版本回滚（编辑写入口见 PUT /persona） ──
+        if (req.method === 'GET' && path === '/api/bili-fenshen/persona') {
+          try {
+            const cfg = effCfg()
+            const active = readActive()
+            const bank = loadBank(active)
+            const loaded = loadCard(active)
+            return sendJson(res, 200, {
+              ok: true,
+              active,
+              card: loaded.card || null,
+              cardSource: { source: loaded.source, path: loaded.path, error: loaded.error || null },
+              health: personaHealth({ cfg }),
+              presets: listPresets(),
+              bank: bankStats(bank || {}),
+              versions: listVersions().slice(0, 20).map((v) => ({ name: v.name, mtime: v.mtime })),
+              budget: { blocks: { core: 1500, lore: 300, state: 500, samples: 450, tail: 250 }, totalMax: 3000 },
+            })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'GET' && path === '/api/bili-fenshen/persona/preview') {
+          try { return sendJson(res, 200, previewPersona({ events: readEvents(LEDGER_FILE) })) }
+          catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'GET' && path === '/api/bili-fenshen/persona/expression') {
+          try {
+            const bank = loadBank(readActive())
+            const norm = normalizeBank(bank || {})
+            return sendJson(res, 200, { ok: true, total: norm.total, buckets: norm.buckets, updatedAt: norm.updatedAt })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'GET' && path === '/api/bili-fenshen/persona/lore') {
+          try {
+            const active = readActive()
+            const loaded = loadCard(active)
+            if (!loaded.card) return sendJson(res, 404, { ok: false, error: loaded.error || '人设卡读不到' })
+            const entries = resolveLoreIndex(loaded.card, loadState()).map((e) => {
+              const p = lorePath(e.id, active)
+              let body = ''
+              try { body = readFileSync(p, 'utf8') } catch { /* 正文可缺，索引仍可用 */ }
+              return { ...e, path: p, chars: body.length, body }
+            })
+            return sendJson(res, 200, { ok: true, entries })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'GET' && path === '/api/bili-fenshen/persona/versions') {
+          try {
+            return sendJson(res, 200, { ok: true, versions: listVersions().map((v) => ({ name: v.name, mtime: v.mtime })) })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'PUT' && path === '/api/bili-fenshen/persona') {
+          try {
+            const body = await readBody(req)
+            const card = body?.card || body
+            const out = savePersonaCard(card)
+            if (!out.ok) return sendJson(res, 400, { ok: false, errors: out.errors || [], warnings: out.warnings || [] })
+            log('人设卡已保存（控制台）')
+            return sendJson(res, 200, { ok: true, warnings: out.warnings || [], snapshot: out.snapshot || '', active: readActive() })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'POST' && path === '/api/bili-fenshen/persona/versions/restore') {
+          try {
+            const body = await readBody(req)
+            const snap = readVersion(body?.name)
+            if (!snap) return sendJson(res, 400, { ok: false, error: '找不到这个版本快照' })
+            const out = savePersonaCard(snap)
+            if (!out.ok) return sendJson(res, 400, { ok: false, errors: out.errors || [] })
+            log('人设版本已回滚：' + String(body?.name || ''))
+            return sendJson(res, 200, { ok: true, snapshot: out.snapshot || '', active: readActive() })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'POST' && path === '/api/bili-fenshen/persona/preset') {
+          try {
+            const id = String(url.searchParams.get('id') || '').trim()
+            if (!listPresets().some((p) => p.id === id)) {
+              return sendJson(res, 400, { ok: false, error: `没有这个预设：${id}` })
+            }
+            writeActive({ mode: 'preset', presetId: id })
+            log(`人设已切换为预设 ${id}（操作台）`)
+            return sendJson(res, 200, { ok: true, active: readActive(), health: personaHealth({ cfg: effCfg() }) })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
         return sendJson(res, 404, { ok: false, error: `unknown ${req.method} ${path}` })
       }
 
@@ -1326,6 +1428,10 @@ export function apply(ctx, config) {
         '/api/bili-fenshen/status', '/api/bili-fenshen/report',
         '/api/bili-fenshen/login/start', '/api/bili-fenshen/login/poll', '/api/bili-fenshen/login/qr.png',
         '/api/bili-fenshen/cred',
+        // 人设模块（P1）
+        '/api/bili-fenshen/persona', '/api/bili-fenshen/persona/preview', '/api/bili-fenshen/persona/preset',
+        '/api/bili-fenshen/persona/expression', '/api/bili-fenshen/persona/lore',
+        '/api/bili-fenshen/persona/versions', '/api/bili-fenshen/persona/versions/restore',
       ]
       const mountRoutes = () => {
         if (!web?.register) { log('webServer 不可用：HTTP 路由未挂'); return () => {} }

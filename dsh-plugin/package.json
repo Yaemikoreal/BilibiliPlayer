@@ -1,13 +1,17 @@
 {
     "name":  "dsh-bili-fenshen",
-    "version":  "0.5.0",
+    "version":  "0.6.0",
     "description":  "B站分身：让 Agent 稳定、高效地运营你的B站小号——混迹视频与评论区",
     "license":  "MIT",
     "private":  true,
     "type":  "module",
     "main":  "index.js",
     "scripts":  {
-                    "test":  "node --test test/*.test.js"
+                    "test":  "node --test test/*.test.js",
+                    "demo:persona":  "node scripts/inject-persona-demo.mjs",
+                    "demo:persona:verify":  "node scripts/verify-persona-demo.mjs",
+                    "demo:console":  "node scripts/inject-console-demo.mjs",
+                    "demo:console:verify":  "node scripts/verify-console-demo.mjs"
                 },
     "exports":  {
                     ".":  "./index.js",
@@ -19,8 +23,11 @@
                   "index.js",
                   "client.js",
                   "lib/*.js",
+                  "lib/persona/*.js",
                   "cordis.patch.yml",
                   "prompts/*.md",
+                  "prompts/persona/*.json",
+                  "prompts/persona/lore/*.md",
                   "locale/*.json",
                   "icon.svg"
               ],

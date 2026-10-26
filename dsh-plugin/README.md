@@ -9,7 +9,7 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂�
 | `cordis.patch.yml` | bundle 挂载声明：原生 MCP connection（stdio → 项目 venv 的 `mcp_server.py`）+ Host 插件行 |
 | `index.js` | Host 半部：值班调度（手动 + 谷时窗口）、dsh CLI 探测、headless 值班轮（overlay 动态生成）、轮次生命周期（`round-end`/报告兜底回填/中止/心跳自愈）、回复通知轮询、配额账本、`/api/bili-fenshen/*` 路由、JS 侧扫码登录 |
 | `lib/*.js` | 纯逻辑模块（`node --test` 覆盖）：账本 JSONL、报告兜底解析、活动聚合、配置覆盖层、回复通知映射、账号拉取、路由工厂、一键诊断（`diagnose.js`）、实时运行流（`live.js`） |
-| `client.js` | Client 半部：左侧栏「B站分身」控制台（看板：账号/值班/配额/活动生命周期流 + 运行中实时卡；操作台：配置/实时/日志/判重表/产物）+ 设置页「安装自检」入口 |
+| `client.js` | Client 半部：左侧栏「B站分身」控制台 —— DSH 原生风格 7 页（概览 / 实时 / 活动 · 生命周期 / 日报 / 判重表 / 人设工作室 / 设置）；设置页另含「安装自检」入口 |
 | `prompts/duty.md` | 值班章程：内容判据、评论/点赞/动态纪律、提示注入防御红线、`### BV号` 报告契约、账本记账契约 |
 | `test/*.test.js` | `npm test`（`node --test`）纯函数单测 |
 | `templates/` | DSH 官方模板拷贝（decoration / mcp），仅作开发参考 |
@@ -32,18 +32,20 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂�
 
 装好后左侧栏出现「B站分身」图标（插件 / 自动化任务 旁边）：
 
-- **看板**：账号简况、自动值班开关、今日配额、**每条视频的活动生命周期**（刷到→看→赞→评→被回复→我回）；跑值班轮时顶部会出现**本轮实时卡**（耗时/阶段/工具与动作统计/最近输出）。
-- **操作台**：
-  - **配置**：模型（值班轮用哪个 provider/model/推理强度，或跟随当前默认）、值班节奏、配额、**内容源**（指定 UP 主 / **自动拉关注** / 每轮抽查数 / 关键词 / **不看清单**）、**禁令开关**（隐私、冒充、争议、重复/刷屏、敏感请求、纯文本感想动态）、人设、运行环境（含**一键诊断**）。
-  - **实时**：值班轮运行中的实时流（阶段、秒表、工具调用、按类别着色的输出、配额），空闲时可回看上一轮尾部。
-  - **日志**、**判重表**、**产物**。
+- **概览**：值班状态、账号、5 项今日配额、近 7 天存在感（只统计可验证的 inbound）、最近 3 轮、当前人设（legacy 明示）、本地检查。
+- **实时**：空闲/运行双态；4 阶段轨（思考 / 找内容 / 看内容 / 发言）、秒表、工具与动作统计、本轮配额；事件流可按类别筛选 + 自动滚动。
+- **活动 · 生命周期**：按视频 / 时间线双视图、类型筛选、搜索；每条视频展开看「刷到 → 看 → 赞 → 评 → 被回复 → 我回」。
+- **日报**：日报 / 月度归档 / overlay 列表 + Markdown 渲染。
+- **判重表**：真实 `seen.md` 视频行 + 动作 chips + 搜索；值班备注折叠计数。
+- **人设工作室（8 页签）**：卡片（字段折叠 + 五块预算 + 高级 JSON 编辑/保存/校验）、编译预览、质量/L0、语料库、见闻库、今日状态、版本对比（快照/回滚）、试写沙盒（标注未接）。
+- **设置**：配置（模型 / 值班节奏 / 配额 / 内容源 / 禁令 / 人设 / 运行环境 + 一键诊断）+ 宿主日志；显式保存条。
 - **设置 → B站分身**：顶部「安装自检」卡片，一键诊断依赖/MCP 连接/登录/模型是否就绪（安装后先点这个）。
 
 扫码登录在控制台右上角「重新扫码」。
 
 ## 一键诊断
 
-两个入口：设置页「安装自检」卡片、操作台「配置 → 运行环境 → 一键诊断」；Agent 也可调用 `bili_fenshen_diagnose`。
+两个入口：设置页「安装自检」卡片、控制台「设置 → 配置 → 运行环境 → 一键诊断」；Agent 也可调用 `bili_fenshen_diagnose`。
 
 并行检查 10 项，每项返回 `pass / warn / fail` + 人话说明 + 修复建议：
 
@@ -94,7 +96,7 @@ dsh plugin --profile desktop add link:<项目路径>/dsh-plugin
 
 ## 配置
 
-默认值走 Loader patch 的 `config`（`id: bili-fenshen` 行）；控制台「操作台 → 配置」保存到 `<家目录>/config.json` 覆盖层（逐字段覆盖 patch，不改用户的 patch 文件），保存即热生效。关键字段：
+默认值走 Loader patch 的 `config`（`id: bili-fenshen` 行）；控制台「设置 → 配置」保存到 `<家目录>/config.json` 覆盖层（逐字段覆盖 patch，不改用户的 patch 文件），保存即热生效。关键字段：
 
 `autoDuty`（自动值班总开关，默认关）、`noon`/`night`（谷时窗口）、`perDay` / `commentsPerDay` / `commentsPerRound` / `likesPerDay` / `dynamicsPerDay` / `repliesPerRound`（配额）、`followUids`（指定 UP 主 UID，可选、优先）、`followAuto`（**自动按「最常访问」拉取常看的 UP 主**，默认开）、`followPerRound`（每轮按「最常访问」取前几个常看 UP 主，默认 8；都看过就顺延）、`keywords`（搜索关键词，其次）、`avoidList`（**不看清单**：BV号 / UP主（名或UID）/ 标题关键词，命中整条跳过）、`banPrivacy` / `banImpersonation` / `banControversy` / `banRepeat` / `banReplyRefusal`（**默认禁令开关**，默认全开）、`dynamicPureText`（**是否允许纯文本感想动态**）、`personaPrompt`（人设：普通文字，或一个文件路径——`/绝对路径`、`~/…`、Windows 盘符都行；填目录则读其中的 `AGENTS.md`；读不到会降级为中性并把原因写进值班日志。仓库内置样例 `prompts/persona-whale.md` / `prompts/persona-elaina.md`）、`reportLevel`（full/brief/off）、`dutyTools`（值班轮白名单）、`dshBin`（CLI 路径，留空自动探测）、`headlessProfile`（默认 `headless`）、`modelProvider` / `modelName` / `modelReasoningEffort`（值班轮模型，**三个都留空 = 跟随当前会话默认模型**）。
 

@@ -17,6 +17,52 @@ const toDuration = (s) => {
   return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : undefined
 }
 
+/**
+ * 「点赞」是否真的发生了。
+ *
+ * 旧实现只要动作行里出现"点赞"两字就记一条 like —— Agent 写「点赞没做（今日点赞已超日配额）」
+ * 时会被回填成一条**幽灵点赞**（2026-10-25 实测：报告 L166 明写没点赞，ledger 仍多出一条 like，
+ * 见 docs/analysis/2026-10-25-log-findings.md §4.3）。这里先排除否定说法。
+ */
+const NEGATED_LIKE = /点赞没做|没点赞|不点赞|未点赞|没再点赞|点赞\s*0|没做点赞/
+const didLike = (act) => /点赞|赞过/.test(act) && !NEGATED_LIKE.test(act)
+
+/** 从动作行里取出被引用的一段正文：反引号 / 「」 / 成对双引号 / 单引号，取第一种能对上的。 */
+const quotedText = (s) => {
+  const pats = [/`([\s\S]*?)`/, /「([\s\S]*?)」/, /“([\s\S]*?)”/, /"([\s\S]*?)"/]
+  for (const p of pats) {
+    const m = p.exec(s)
+    if (m && m[1].trim()) return m[1].trim()
+  }
+  return ''
+}
+
+/**
+ * 解析评论动作。Agent 实际写法（2026-10-25 报告原文）：
+ *   `评论（rpid 318143807425）：`正文``
+ *   `评论（「正文」）`（旧格式，测试夹具用）
+ * 都取不到 rpid 时 rpid 记 null —— 章程明禁自己编数字。
+ */
+const parseCommentAction = (act) => {
+  if (!/评论/.test(act)) return null
+  if (/评论没发|没评论|不评论|未评论|评论\s*0/.test(act)) return null
+  const tail = act.slice(act.indexOf('评论'))
+  const rpidRaw = (/rpid\s*[：:]?\s*(\d+)/.exec(tail) || [])[1]
+  const text = quotedText(tail)
+  if (!text) return null
+  return { type: 'comment', text, rpid: rpidRaw ? Number(rpidRaw) : null }
+}
+
+/** 解析动态动作：`分享成动态（动态 id 1263081450085810181）：`正文`` / `+ 发动态分享`。 */
+const parseDynamicAction = (act) => {
+  if (!/动态/.test(act)) return null
+  if (/动态没发|没发动态|不发动态|未发动态|动态\s*0/.test(act)) return null
+  if (!/分享成动态|发动态|动态分享/.test(act)) return null
+  const tail = act.slice(act.indexOf('动态'))
+  const id = (/动态\s*id\s*(\d+)/.exec(act) || [])[1]
+  return { type: 'dynamic', text: quotedText(tail), ...(id ? { id } : {}) }
+}
+
 export function parseRoundReport(text, opts = {}) {
   const round = opts.round ?? null
   const views = []
@@ -39,13 +85,11 @@ export function parseRoundReport(text, opts = {}) {
     const actLine = (/动作[：:]\s*(.+)/.exec(body) || [])[1]?.trim() || ''
 
     const actions = []
-    if (/点赞|赞过/.test(actLine)) actions.push({ type: 'like' })
-    const cmt = /评论（「([\s\S]*?)」）/.exec(actLine)
-    if (cmt) actions.push({ type: 'comment', text: cmt[1].trim(), rpid: null })
-    const dyn = /动态(?:分享|（「([\s\S]*?)」）)?/.exec(actLine)
-    if (dyn && /发动态|动态分享/.test(actLine)) {
-      actions.push({ type: 'dynamic', text: (dyn[1] || '').trim() })
-    }
+    if (didLike(actLine)) actions.push({ type: 'like' })
+    const cmt = parseCommentAction(actLine)
+    if (cmt) actions.push(cmt)
+    const dyn = parseDynamicAction(actLine)
+    if (dyn) actions.push(dyn)
 
     views.push({
       bvid,

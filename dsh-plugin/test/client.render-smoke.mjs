@@ -84,6 +84,80 @@ const FIX = {
     stats: { events: 0, tools: {}, actions: { like: 0, comment: 0, dynamic: 0, reply: 0 }, errors: 0 },
     quota: { picked: 1, comments: 0, likes: 0, dynamics: 0, limits: { perDay: 5, commentsPerDay: 5, likesPerDay: 10, dynamicsPerDay: 1, repliesPerRound: 2 } },
   },
+  // 人设：生效卡健康度 + 内置预设 + 语料库统计（GET /persona）
+  '/api/bili-fenshen/persona': {
+    ok: true,
+    active: { mode: 'preset', presetId: 'whale' },
+    health: {
+      mode: 'card', ok: true, detail: 'whale@2.0.0（preset，1733 字符）',
+      path: 'D:/x/prompts/persona/whale.card.json', source: 'preset',
+    },
+    presets: [
+      { id: 'whale', name: '蓝色大肥鱼', version: '2.0.0', oneLiner: 'DeepSeek 的民间拟人形象', license: 'CC BY-NC-SA 4.0', file: 'D:/x/whale.card.json' },
+      { id: 'elaina', name: '灰之魔女', version: '2.0.0', oneLiner: '会飞的灰之魔女', license: 'CC BY-NC-SA 4.0', file: 'D:/x/elaina.card.json' },
+      { id: 'generic', name: '普通网友', version: '2.0.0', oneLiner: '没有 IP 的普通网友', license: 'CC BY-NC-SA 4.0', file: 'D:/x/generic.card.json' },
+    ],
+    card: {
+      spec: 'bili-fenshen.persona/v2', id: 'whale', version: '2.0.0', name: '蓝色大肥鱼', license: 'CC BY-NC-SA 4.0',
+      identity: { oneLiner: 'DeepSeek 的民间拟人形象', background: '蓝白、圆滚滚、端着一碗白饭。' },
+      voice: { register: ['逗句', '口语'], moves: ['纯情绪', '反问', '玩梗'] },
+      mindset: { contradictions: ['摸鱼 vs 怕被认出来'] },
+      taste: { watch: ['游戏实测'], avoid: ['引战'] },
+      stance: [{ topic: 'AI 拉踩', attitude: '不站队', how: '只聊作品' }],
+      redlines: [], canon: [], loreIndex: [], samples: { good: [] },
+    },
+    cardSource: { source: 'preset', path: 'D:/x/prompts/persona/whale.card.json', error: null },
+    versions: [{ name: 'whale-2.0.0-2026-10-26.json', mtime: 1761400000000 }],
+    bank: {
+      total: 23, updatedAt: '2026-10-26T00:00:00Z',
+      byBucket: {
+        reaction: { total: 2, active: 2 }, question: { total: 5, active: 5 }, experience: { total: 3, active: 3 },
+        meme: { total: 5, active: 5 }, detail: { total: 2, active: 2 }, rant: { total: 6, active: 6 },
+      },
+    },
+    budget: { blocks: { core: 1500, lore: 300, state: 500, samples: 450, tail: 250 }, totalMax: 3000 },
+  },
+  // 人设编译预览（GET /persona/preview）：五块预算 / L0 六条 / 今日状态
+  '/api/bili-fenshen/persona/preview': {
+    ok: true,
+    tag: 'whale@2.0.0',
+    text: '===== 你是谁（按这个来）=====\nDeepSeek 的民间拟人形象\n===== 写之前，最后看三行 =====\n1) 别收在判断上。',
+    stats: {
+      total: 1733, totalMax: 3000, overTotal: false, over: [],
+      per: [
+        { name: 'core', len: 1052, max: 1500 }, { name: 'lore', len: 227, max: 300 },
+        { name: 'state', len: 208, max: 500 }, { name: 'samples', len: 129, max: 450 },
+        { name: 'tail', len: 117, max: 250 },
+      ],
+    },
+    notes: ['P4 用表达库（question，4 条）'],
+    errors: [], warnings: [],
+    l0: {
+      ok: true,
+      checks: [
+        { id: 'redline-triple', name: '红线三件套（不许+为什么+那要写成什么）', level: 'pass', pass: true, detail: '9 条全部有 instead' },
+        { id: 'negative-ratio', name: '禁止句占比（≤25%）', level: 'pass', pass: true, detail: '7/141 = 5%' },
+        { id: 'moves-table', name: '手段表（≥6 类可做的事）', level: 'pass', pass: true, detail: '6 类' },
+        { id: 'word-freq', name: '词频（签名词 ≤3 次）', level: 'pass', pass: true, detail: '无超限词' },
+        { id: 'contradiction', name: '矛盾写成 X vs Y', level: 'pass', pass: true, detail: '4 条，0 条是标签' },
+        { id: 'sample-dup', name: '示例不重复且带来源', level: 'pass', pass: true, detail: '9 条互不重复' },
+      ],
+    },
+    state: {
+      date: '2026-10-26',
+      mood: { label: '佛系', energy: 4, patience: 6 },
+      timeOfDay: { key: 'late', label: '凌晨', maxChars: 40, note: '话更短，别写长经历' },
+      skipStreak: 0, loreUsed: {}, canonUsed: {}, expressionUsed: {},
+      recent: {
+        comments: [
+          { text: '原来不是打码，是他自己秒切的屏', form: 'detail' },
+          { text: '拿个爆能机还要说「这个归我了」，欠得很', form: 'detail' },
+        ],
+        forms5: ['detail', 'detail', 'question'],
+        debt: { question: true, reaction: false, emoji: false, experience: false, judgeHeavy: true },
+      },
+    },
+  },
   // 一键诊断：9 pass / 1 warn / 0 fail
   '/api/bili-fenshen/diagnose': {
     ok: true, generatedAt: '2026-10-25T01:02:03.000Z', durationMs: 1234,
@@ -198,25 +272,120 @@ plugin.apply({ slots: fakeSlots2, get: () => null })
 const mainComp = collected.find((x) => x.name === 'main')?.component
 const settingsComp = collected.find((x) => x.name === 'settings.section')?.component
 
-const dashHtml = check('ConsolePage 静态壳（看板）', () => renderToString(React.createElement(mainComp)))
 const expectAll = (label, html, markers) => {
   for (const marker of markers) {
     if (!html.includes(marker)) { console.log(`✗ FAIL ${label}缺少「${marker}」`); bad++ }
   }
 }
-expectAll('看板', dashHtml, ['B站分身', '看板', '操作台', '自动值班', '今日配额', '还没有活动记录'])
 
-// 操作台（初始 pane=config；Tabs 里必须有新「实时」tab）
-const consoleHtml = check('ConsolePage 静态壳（操作台）', () => renderToString(React.createElement(mainComp, { initialView: 'console' })))
-expectAll('操作台', consoleHtml, ['配置', '实时', '日志', '判重表', '产物'])
+// v3 壳：默认「概览」页（SSR 不执行 effect，所以只断言静态结构；数据态由真实浏览器验收）
+const homeHtml = check('ConsolePage（v3 壳 · 概览）', () => renderToString(React.createElement(mainComp)))
+expectAll('v3 概览', homeHtml, [
+  'B站分身',
+  '概览', '实时', '活动 · 生命周期', '日报', '判重表', '人设工作室', '设置',
+  '值班状态', '当前账号', '存在感（近 7 天）', '最近活动', '当前人设', '本地检查',
+])
 
-// 看板运行中：LiveCard（fixtures running:true 通过 props.live 注入初始状态）
-const runningDashHtml = check('ConsolePage 静态壳（看板 · 运行中 LiveCard）', () => renderToString(React.createElement(mainComp, { live: RUNNING_LIVE })))
-expectAll('运行中看板', runningDashHtml, ['运行中', '看内容', '打开实时', 'bili_subtitle'])
+// 「实时」页：状态/秒表/统计/自动滚动/降级轮询/事件流（props.live 注入运行中快照）
+const liveHtml = check('ConsolePage（v3 · 实时页 · 运行中）', () => renderToString(React.createElement(mainComp, { initialTab: 'live', live: RUNNING_LIVE })))
+expectAll('v3 实时页', liveHtml, ['实时', '运行中', '看内容', '自动滚动', '降级轮询', '中止', '事件流', '当前阶段', '工具调用', 'bili_search'])
 
-// 操作台「实时」tab：状态/秒表/统计/自动滚动/降级轮询/事件流
-const liveHtml = check('ConsolePage 静态壳（操作台 · 实时 tab）', () => renderToString(React.createElement(mainComp, { initialView: 'console', initialPane: 'live', live: RUNNING_LIVE })))
-expectAll('实时 tab', liveHtml, ['实时', '运行中', '看内容', '自动滚动', '降级轮询', '跑一轮', '中止', 'bili_search'])
+// 实时页 · 空闲态：上一轮摘要 + 跑一轮入口
+const liveIdle = { data: { ...RUNNING_LIVE.data, running: false, events: [], lastCode: 0, lastDurationMs: 61234, lastRunAt: '2026-10-25T01:00:00.000Z' }, mode: 'poll', error: '' }
+const liveIdleHtml = check('ConsolePage（v3 · 实时页 · 空闲）', () => renderToString(React.createElement(mainComp, { initialTab: 'live', live: liveIdle })))
+expectAll('v3 实时页空闲', liveIdleHtml, ['当前空闲', '上一轮退出码', '上一轮耗时', '跑一轮'])
+
+// 「活动」页：按视频/时间线双视图 + 类型筛选 + 搜索（fixtures 通过 initialData.act 注入）
+const actHtml = check('ConsolePage（v3 · 活动页）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'activity',
+  initialData: { act: FIX['/api/bili-fenshen/activity'] },
+})))
+expectAll('v3 活动页', actHtml, ['按视频', '时间线', '全部 2', '折1万次', '跳过 1 条', '筛选后'])
+
+// 「人设工作室」页：生效卡/五块预算/L0 六条/今日状态/编译预览（fixtures 通过 props.persona 注入）
+const personaHtml = check('ConsolePage（v3 · 人设工作室）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'persona',
+  persona: {
+    persona: FIX['/api/bili-fenshen/persona'],
+    preview: FIX['/api/bili-fenshen/persona/preview'],
+  },
+})))
+expectAll('v3 人设页', personaHtml, [
+  '人设工作室', '卡（生效）', '蓝色大肥鱼（生效）', '人设卡', '高级编辑（JSON）',
+  '五块预算', 'P1 常驻核心', '1052/1500',
+  '卡片', '编译预览', '质量 / L0', '语料库', '见闻库', '今日状态', '版本对比', '试写沙盒',
+  'L0 6/6', '1733/3000',
+])
+const personaTabsHtml = check('ConsolePage（v3 · 人设工作室 · 质量页签）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'persona',
+  initialPersonaTab: 'quality',
+  initialData: { personaPage: { persona: FIX['/api/bili-fenshen/persona'], preview: FIX['/api/bili-fenshen/persona/preview'] } },
+})))
+expectAll('v3 人设页 · 质量', personaTabsHtml, ['L0 六条', '红线三件套', '试写沙盒'])
+
+const personaExtra = {
+  persona: FIX['/api/bili-fenshen/persona'],
+  preview: FIX['/api/bili-fenshen/persona/preview'],
+  expression: { ok: true, total: 23, buckets: { question: [{ text: '封面能不能好好做？', source: 'comment-reception', len: 9, status: 'active', heat: 1 }] } },
+  lore: { ok: true, entries: [{ id: 'wuchang-ranked', keys: ['无畏契约'], oneLine: '常年白银边缘', usedToday: false, chars: 12, body: '正文内容' }] },
+  versions: { ok: true, versions: [{ name: 'whale-2.0.0-2026-10-26.json', mtime: 1761400000000 }] },
+}
+const personaBankHtml = check('ConsolePage（v3 · 人设工作室 · 语料库）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'persona', initialPersonaTab: 'bank', initialData: { personaPage: personaExtra },
+})))
+expectAll('v3 人设页 · 语料库', personaBankHtml, ['语料库', '桶：question', '封面能不能好好做？'])
+const personaVersionHtml = check('ConsolePage（v3 · 人设工作室 · 版本）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'persona', initialPersonaTab: 'version', initialData: { personaPage: personaExtra },
+})))
+expectAll('v3 人设页 · 版本', personaVersionHtml, ['版本快照', 'whale-2.0.0-2026-10-26.json', '回滚'])
+const personaLoreHtml = check('ConsolePage（v3 · 人设工作室 · 见闻库）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'persona', initialPersonaTab: 'lore', initialData: { personaPage: personaExtra },
+})))
+expectAll('v3 人设页 · 见闻库', personaLoreHtml, ['见闻库', '索引（常驻 prompt）', 'wuchang-ranked', '正文内容'])
+
+// 人设页 · legacy：配置里的 personaPrompt 优先，卡明确标「未生效」
+const legacyFixture = {
+  ...FIX['/api/bili-fenshen/persona'],
+  health: { mode: 'legacy', ok: true, detail: '旧格式人设（legacy 直通）', source: 'legacy' },
+}
+const personaLegacyHtml = check('ConsolePage（v3 · 人设工作室 · legacy）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'persona',
+  persona: { persona: legacyFixture, preview: FIX['/api/bili-fenshen/persona/preview'] },
+})))
+expectAll('v3 人设页 · legacy', personaLegacyHtml, [
+  'legacy 直通', '人设卡（当前未生效）', '本轮走 legacy 直通', '不会覆盖配置',
+])
+
+// 「判重表」页：真实行（有 BV / 动作 chips）+ 搜索框
+const seenHtml = check('ConsolePage（v3 · 判重表）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'seen',
+  initialData: { seen: { rows: [
+    { date: '2026-10-23', time: '', bvid: 'BV1xrnz6gEVD', action: '看过+赞过+评论过', title: '测试视频标题' },
+    { date: '2026-10-23', time: '', bvid: '', action: '第二轮值班开始（已登录）', title: '-' },
+  ] } },
+})))
+expectAll('v3 判重表', seenHtml, ['判重表', '看过什么', 'BV1xrnz6gEVD', '测试视频标题', '看过', '评论', '已折叠 1 条值班备注'])
+
+// 「日报」页：列表 + Markdown 渲染（标题/粗体/正文）
+const reportsHtml = check('ConsolePage（v3 · 日报）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'reports',
+  initialData: { reports: {
+    list: { days: ['2026-10-23'], digests: [], overlay: false },
+    day: '2026-10-23',
+    text: '# 测试日报\n\n## 第一轮\n\n**粗体**与普通文字\n\n- 列表项一\n- 列表项二',
+  } },
+})))
+expectAll('v3 日报', reportsHtml, ['日报', '2026-10-23.md', '测试日报', '第一轮', '粗体', '列表项一'])
+
+// 「设置」页：配置 / 宿主日志 两个子页（SSR 下配置内容为加载态）
+const settingsTabHtml = check('ConsolePage（v3 · 设置页）', () => renderToString(React.createElement(mainComp, {
+  initialTab: 'settings',
+  initialData: { config: FIX['/api/bili-fenshen/config'] },
+})))
+expectAll('v3 设置页', settingsTabHtml, [
+  '配置', '宿主日志', '值班节奏', '配额', '内容源', '禁令', '人设', '运行环境',
+  '保存并生效', '与持久化配置一致',
+])
 
 const settingsHtml = check('SettingsEntry 静态壳', () => renderToString(React.createElement(settingsComp)))
 expectAll('设置页', settingsHtml, ['安装自检', '一键诊断', '打开控制台'])
