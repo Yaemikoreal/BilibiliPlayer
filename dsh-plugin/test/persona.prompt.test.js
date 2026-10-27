@@ -54,3 +54,22 @@ test('没有任何人设来源：降级为中性，不报错也不编人格', ()
   assert.match(p, /中性说话|没有拿到人设/)
   assert.match(p, /值班章程/)
 })
+
+test('本轮参数：主动接话配额行 + 空账本的已看过清单行（空态）', () => {
+  const p = buildDutyPrompt({ ...baseCfg, personaPrompt: '', replyOthersPerRound: 2 }, 'R-seen-empty')
+  assert.match(p, /主动接话本轮最多 2 条/, '接话配额要出现在本轮参数里')
+  assert.match(p, /已看过清单（宿主从账本算好，最近 14 天，命中 = 之前看过\/评过\/赞过\/跳过过）：（空/, '空账本要明说清单为空')
+  assert.match(p, /照常逐条判/, '空态要给出正常判重的指令')
+})
+
+test('本轮参数：账本里看过的 BV 注入清单，命中纪律完整', () => {
+  // buildDutyPrompt 的账本事件由调用方传入（runDuty 传 readEvents(...)）——
+  // 两条近 14 天、一条 20 天前（应被窗口滤掉）
+  const day = 86400_000
+  const ev = (type, bvid, daysAgo) => ({ t: new Date(Date.now() - daysAgo * day).toISOString(), round: 'r', type, bvid })
+  const events = [ev('view', 'BV1SeEnA0001', 1), ev('skip', 'BV1SeEnA0002', 3), ev('view', 'BV1SeEnA0003', 20)]
+  const p = buildDutyPrompt({ ...baseCfg, personaPrompt: '' }, 'R-seen-filled', events)
+  assert.match(p, /BV1SeEnA0001、BV1SeEnA0002/, '近 14 天的 BV 要按新→旧注入（跳过过的也算看过）')
+  assert.doesNotMatch(p, /BV1SeEnA0003/, '20 天前的不注入（窗口外）')
+  assert.match(p, /命中的候选\*\*直接丢\*\*：不读信息、不读字幕、不点赞不评论、不进报告、不记判重表/, '命中纪律要完整')
+})

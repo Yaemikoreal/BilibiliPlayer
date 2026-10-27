@@ -27,7 +27,8 @@ import { parseRoundReport } from './lib/report.js'
 import { createApiHandler } from './lib/api.js'
 import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort } from './lib/config.js'
 import { fetchAccount } from './lib/account.js'
-import { fetchReplyNotifs, toReplyIn } from './lib/replies.js'
+import { fetchReplyNotifs, toReplyIn, roundIdForReply } from './lib/replies.js'
+import { seenListFromLedger } from './lib/seen.js'
 import { loadPersona } from './lib/persona.js'
 import {
   resolvePersona, seedIfEmpty, guardPrompt, personaHealth, previewPersona,
@@ -171,6 +172,8 @@ export const Config = !z ? undefined : z.object({
   dynamicsPerDay: z.natural().default(1),
   /** 每轮最多跟进几条回复 */
   repliesPerRound: z.natural().default(2),
+  /** 每轮最多主动接几条别人的话（楼中楼回复别人的评论；0 = 关） */
+  replyOthersPerRound: z.natural().default(2),
   /** 关注关键词（空 = 用章程默认） */
   keywords: z.array(z.string()).default([]),
   /** 订阅 UP 主 UID 列表（指定优先，可留空） */
@@ -296,7 +299,7 @@ const effCfg = () => effectiveConfig(cfgSnapshot || {}, CONFIG_FILE).values
  */
 const quotaFromLedger = () => {
   const day = dayKey()
-  const acc = { picked: 0, comments: 0, likes: 0, dynamics: 0 }
+  const acc = { picked: 0, comments: 0, likes: 0, dynamics: 0, replies: 0, repliesProactive: 0 }
   try {
     for (const e of readEvents(LEDGER_FILE)) {
       if (dayKeyOf(e.t) !== day) continue
@@ -304,6 +307,10 @@ const quotaFromLedger = () => {
       else if (e.type === 'comment') acc.comments++
       else if (e.type === 'like') acc.likes++
       else if (e.type === 'dynamic') acc.dynamics++
+      else if (e.type === 'reply-out') {
+        acc.replies++
+        if (e.kind === 'proactive') acc.repliesProactive++
+      }
     }
   } catch { /* 账本读不到 ⇒ 全 0，不拖垮调用方 */ }
   return acc
@@ -610,6 +617,8 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   const kws = Array.isArray(cfg?.keywords) ? cfg.keywords.filter(Boolean) : []
   const uids = Array.isArray(cfg?.followUids) ? cfg.followUids.filter(Boolean) : []
   const avoid = Array.isArray(cfg?.avoidList) ? cfg.avoidList.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+  // ⭐ 已看过清单：宿主从账本算好的硬判重（设计文档 2026-10-27-proactive-reply-dedup §4）
+  const seenBvs = seenListFromLedger(ledgerEvents)
   const report = cfg?.reportLevel === 'off'
     ? '本轮不写日报文件，只把做过的动作记进判重表。'
     : cfg?.reportLevel === 'brief'
@@ -659,7 +668,12 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
     + `评论 ${Math.max(0, Number(cfg?.commentsPerDay) || 0)} 条/天（今天已 ${q.comments}），本轮最多 ${Math.max(0, Number(cfg?.commentsPerRound) || 0)} 条；`
     + `点赞 ${Math.max(0, Number(cfg?.likesPerDay) || 0)} 个/天（今天已 ${q.likes}）；`
     + `动态 ${Math.max(0, Number(cfg?.dynamicsPerDay) || 0)} 条/天（今天已 ${q.dynamics}）；`
-    + `跟进回复本轮最多 ${Math.max(0, Number(cfg?.repliesPerRound) || 0)} 条。\n`
+    + `跟进回复本轮最多 ${Math.max(0, Number(cfg?.repliesPerRound) || 0)} 条；`
+    + `主动接话本轮最多 ${Math.max(0, Number(cfg?.replyOthersPerRound ?? 2))} 条（0 = 本轮不接）。\n`
+    + `- 已看过清单（宿主从账本算好，最近 14 天，命中 = 之前看过/评过/赞过/跳过过）：`
+    + (seenBvs.length ? `${seenBvs.join('、')}。\n`
+        + `  命中的候选**直接丢**：不读信息、不读字幕、不点赞不评论、不进报告、不记判重表（账本里本来就有，别再花任何调用）。\n`
+      : '（空——账本里还没有看过的记录，照常逐条判。）\n')
     + `- 内容源（按这个优先级拉；上一档挑够或没有可看的，再看下一档）：\n${sourceLines.join('\n')}\n`
     + `- ${avoidBlock}\n`
     + `- 本轮开关（与章程/人设冲突时以本节为准）：\n${switchLines.map((x) => '  ' + x).join('\n')}\n`
@@ -787,28 +801,17 @@ const readCred = () => {
   }
 }
 
-// 归属轮次：parent === 某条 comment.rpid → 该轮；否则 bvid + source_content === comment.text → 该轮；否则 null
-const roundIdForReply = (notif, comments) => {
-  const parent = Number(notif?.item?.source_id) || null
-  if (parent) {
-    const hit = comments.find((c) => c.rpid === parent)
-    if (hit) return hit.round ?? null
-  }
-  const text = String(notif?.item?.source_content || '').trim()
-  if (text) {
-    const hit = comments.find((c) => c.text === text)
-    if (hit) return hit.round ?? null
-  }
-  return null
-}
+// 归属轮次：roundIdForReply 已收口进 lib/replies.js（comment + reply-out 的 rpid 都能归属，
+// 见设计文档 2026-10-27-proactive-reply-dedup §5）
 
 const replyTick = async () => {
   try {
     const cred = readCred()
     if (!cred) return
     const events = readEvents(LEDGER_FILE)
-    const recentComments = events.filter((e) => e.type === 'comment' && Date.now() - Date.parse(e.t) < 7 * 86400_000)
-    if (!recentComments.length) return
+    // 「我的话」= 近 7 天的评论 + 接话/回复；一样都没有就省掉这次 API 轮询
+    const recentMine = events.filter((e) => (e.type === 'comment' || e.type === 'reply-out') && e.rpid && Date.now() - Date.parse(e.t) < 7 * 86400_000)
+    if (!recentMine.length) return
     const cookie = `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct || ''}; buvid3=${cred.buvid3 || ''}; DedeUserID=${cred.dedeuserid || ''}`
     const notifs = await fetchReplyNotifs(cookie)
     const st = readJson(STATE_FILE, {})
@@ -816,7 +819,7 @@ const replyTick = async () => {
     const fresh = []
     for (const n of notifs) {
       if (seen.has(Number(n.id))) continue
-      const ev = toReplyIn(n, { round: roundIdForReply(n, recentComments) })
+      const ev = toReplyIn(n, { round: roundIdForReply(n, events) })
       if (!ev) continue
       fresh.push(ev)
       seen.add(Number(n.id))
@@ -919,10 +922,13 @@ const buildOverview = () => {
       comments: q.comments,
       likes: q.likes,
       dynamics: q.dynamics,
+      replies: q.replies,
+      repliesProactive: q.repliesProactive,
       limits: {
         perDay: cfg.perDay, commentsPerDay: cfg.commentsPerDay,
         likesPerDay: cfg.likesPerDay, dynamicsPerDay: cfg.dynamicsPerDay,
         repliesPerRound: cfg.repliesPerRound,
+        replyOthersPerRound: cfg.replyOthersPerRound,
       },
     },
     round: {
@@ -1140,10 +1146,12 @@ const liveSnapshot = (after = 0) => {
     ...snap,
     quota: {
       picked: q.picked, comments: q.comments, likes: q.likes, dynamics: q.dynamics,
+      replies: q.replies, repliesProactive: q.repliesProactive,
       limits: {
         perDay: cfg.perDay, commentsPerDay: cfg.commentsPerDay,
         likesPerDay: cfg.likesPerDay, dynamicsPerDay: cfg.dynamicsPerDay,
         repliesPerRound: cfg.repliesPerRound,
+        replyOthersPerRound: cfg.replyOthersPerRound,
       },
     },
   }
@@ -1276,7 +1284,7 @@ export function apply(ctx, config) {
           return sendJson(res, 200, {
             ok: true, home: HOME, running,
             autoDuty: !!cfg?.autoDuty,
-            quota: { perDay: cfg?.perDay, comments: cfg?.commentsPerDay, likes: cfg?.likesPerDay, dynamics: cfg?.dynamicsPerDay, replies: cfg?.repliesPerRound },
+            quota: { perDay: cfg?.perDay, comments: cfg?.commentsPerDay, likes: cfg?.likesPerDay, dynamics: cfg?.dynamicsPerDay, replies: cfg?.repliesPerRound, replyOthers: cfg?.replyOthersPerRound },
             today: { picked: q.picked, comments: q.comments, likes: q.likes, dynamics: q.dynamics },
             lastRunAt: st.lastRunAt || '', lastWhy: st.lastWhy || '',
             dutyCli: cli || '',

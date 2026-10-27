@@ -14,6 +14,8 @@ export const FIELDS = {
   likesPerDay: 'number',
   dynamicsPerDay: 'number',
   repliesPerRound: 'number',
+  // 每轮主动接话（楼中楼回复别人的评论）；0 = 关
+  replyOthersPerRound: 'number',
   keywords: 'array',
   followUids: 'array',
   // 自动拉取「我关注的 UP 主」列表（bili_followings），免手填 UID

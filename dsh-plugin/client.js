@@ -1325,7 +1325,8 @@ window.__ModuleLoader__.load({
         ['评论', quota.comments, limits.commentsPerDay, '公开文字，最重'],
         ['点赞', quota.likes, limits.likesPerDay, '最低成本的存在感'],
         ['动态', quota.dynamics, limits.dynamicsPerDay, '分享 + 短评'],
-        ['跟进回复', quota.replies, limits.repliesPerRound, '每轮上限（收到回复后）'],
+        ['跟进回复', (quota.replies || 0) - (quota.repliesProactive || 0), limits.repliesPerRound, '每轮上限（收到回复后）'],
+        ['主动接话', quota.repliesProactive, limits.replyOthersPerRound, '每轮上限（接别人的话）'],
       ]
 
       const dutyCard = h(Card, null,
@@ -1672,7 +1673,7 @@ window.__ModuleLoader__.load({
           const day = String(e.t || '').slice(0, 10)
           const sep = day !== lastDay ? h('div', { className: 'bf-daysep', key: 'd-' + day + '-' + i }, day) : null
           lastDay = day
-          const label = EVENT_LABEL[e.type] || e.type
+          const label = e.type === 'reply-out' && e.kind === 'proactive' ? '主动接话' : (EVENT_LABEL[e.type] || e.type)
           const detail = e.type === 'reply-in'
             ? (e.from ? e.from + '：' : '') + (e.text || '')
             : e.type === 'reply-out'
@@ -1825,7 +1826,8 @@ window.__ModuleLoader__.load({
         ),
         h(Group, { title: '配额' },
           [['perDay', '每天挑中', '全天总量上限'], ['commentsPerDay', '每天评论', ''], ['commentsPerRound', '每轮评论', ''],
-           ['likesPerDay', '每天点赞', '成本最低的存在感'], ['dynamicsPerDay', '每天动态', ''], ['repliesPerRound', '每轮跟进回复', '']]
+           ['likesPerDay', '每天点赞', '成本最低的存在感'], ['dynamicsPerDay', '每天动态', ''], ['repliesPerRound', '每轮跟进回复', ''],
+           ['replyOthersPerRound', '每轮主动接话', '楼中楼回复别人的评论；0 = 关']]
             .map(([k, label, note]) => h(Row, { key: k, label },
               h(Num, { value: Number(draft[k] ?? 0), onChange: (v) => set(k, v) }),
               note ? h('span', { className: 'bf-note' }, note) : null))),
