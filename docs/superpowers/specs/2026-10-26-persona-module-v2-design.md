@@ -1133,3 +1133,19 @@ dsh-plugin/test/fixtures/persona/*.txt
 
 **验证**：`index.integration.mjs` 新增 11 条断言（卡片/语料/见闻/版本/非法卡 400/保存成功/回滚/路径穿越拒绝）；render smoke 新增 5 组人设页签断言（卡片、质量、语料库、版本、见闻库）。
 
+---
+
+## 附录 · 2026-10-27 增量决策（账号主人拍板，Windows 机实施）
+
+1. **语料库 / 见闻库开放人工编辑**（原来两页签只读）：
+   - `POST /persona/expression`：语料条目 `add / edit / remove / status`（单桶 ≤200 条；写 `<home>/persona/expression-bank.json`）；
+   - `POST /persona/lore`：见闻索引 `add / edit / remove`（索引住在卡里 → 走 `savePersonaCard`，自动出版本快照；id 白名单 `[\w-]{1,64}`）；
+   - `PUT /persona/lore`：见闻正文写盘（`<home>/persona/lore/<id>.md`，同名路径白名单防穿越）；
+   - 首次编辑自动**物化用户副本**（`materializeUserCopy`：preset → file 模式，卡 + 语料库 + 见闻正文整体拷到家目录）——因为 `assetDir` 按 active.mode 整体切换，preset 模式下写家目录的资产根本不会被读到；
+   - UI：语料库页签每条 [停用/启用] [改] [删] + 桶级 [＋新增]；见闻库页签索引 [＋新增] [删]、正文 [编辑]（keys/oneLine/正文一并保存）。
+   - 验证：`persona.assets.test.js` 9 条（物化幂等 / 语料四操作回读 / 见闻索引走快照 / 路径穿越拒绝 / 正文回环）；render smoke 14 组全绿。
+2. **活动范围放开**：whale 卡删除 `taste.avoid`（"绕开"清单），兴趣不再人为圈定——爱看什么看什么；初始口味 `taste.watch` 保留（是人格不是限制），后续由状态层自由演化。`compile.js` 对空 avoid 已是可缺省渲染，无需改动。
+3. **红线收窄为一条**：whale 卡 `redlines` 只留 `no-politics`（不碰政治内容；三件套 rule/why/instead + `lexicon: policy:politics`），version → 2.1.0。其余保护不上卡、各归其位：后台身份与隐私由章程「边界」与 `banPrivacy` / `banImpersonation` 开关兜底；刷屏由 `banRepeat` 与判重表兜底；非商业由 `identity.boundaries`（CC BY-NC-SA）承载。elaina / generic 卡不变（本决策针对大肥鱼）。
+
+> 遗留：宿主层 `banControversy` 开关（立场/性别/地域/引战）默认仍开——按"只有一条红线"的字面意思若也要放开，控制台「设置 → 禁令」可随时关；本增量不动宿主默认值。
+

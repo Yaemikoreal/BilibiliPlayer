@@ -33,6 +33,7 @@ import {
   resolvePersona, seedIfEmpty, guardPrompt, personaHealth, previewPersona,
   listPresets, savePersonaCard, loadBank, bankStats, readActive, writeActive, l0Checks, SPEC,
   loadCard, listVersions, readVersion, normalizeBank, resolveLoreIndex, lorePath, loadState,
+  editExpressionBank, editLoreIndex, writeLoreBody,
 } from './lib/persona/index.js'
 import { toActivities, dayKeyOf } from './lib/activity.js'
 import { runDiagnose, formatDiagnoseText } from './lib/diagnose.js'
@@ -1324,7 +1325,9 @@ export function apply(ctx, config) {
           try { return sendJson(res, 200, { exists: existsSync(BILI_CRED_FILE) }) }
           catch { return sendJson(res, 200, { exists: false }) }
         }
-        // ── 人设工作室：只读数据 + 预设切换 + 卡保存/版本回滚（编辑写入口见 PUT /persona） ──
+        // ── 人设工作室：读数据 + 预设切换 + 卡保存/版本回滚 + 语料库/见闻库人工编辑 ──
+        //   （语料库编辑 = POST /persona/expression；见闻索引编辑 = POST /persona/lore（走整卡快照）；
+        //     见闻正文写盘 = PUT /persona/lore。首次编辑自动物化用户副本：preset → file 模式。）
         if (req.method === 'GET' && path === '/api/bili-fenshen/persona') {
           try {
             const cfg = effCfg()
@@ -1367,6 +1370,37 @@ export function apply(ctx, config) {
               return { ...e, path: p, chars: body.length, body }
             })
             return sendJson(res, 200, { ok: true, entries })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'POST' && path === '/api/bili-fenshen/persona/expression') {
+          try {
+            const body = await readBody(req)
+            const out = editExpressionBank(body || {})
+            if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error || '语料库更新失败' })
+            log(`语料库已更新（${out.action} / ${out.form}）：共 ${out.total} 条`)
+            return sendJson(res, 200, {
+              ok: true, action: out.action, form: out.form,
+              total: out.total, buckets: out.buckets, updatedAt: out.updatedAt,
+              materialized: out.materialized, active: out.active,
+            })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'POST' && path === '/api/bili-fenshen/persona/lore') {
+          try {
+            const body = await readBody(req)
+            const out = editLoreIndex(body || {})
+            if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error || '见闻索引更新失败' })
+            log(`见闻索引已更新（${out.action}）：共 ${out.count} 条`)
+            return sendJson(res, 200, { ok: true, action: out.action, count: out.count, snapshot: out.snapshot || '', materialized: out.materialized })
+          } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        if (req.method === 'PUT' && path === '/api/bili-fenshen/persona/lore') {
+          try {
+            const body = await readBody(req)
+            const out = writeLoreBody(String(body?.id || ''), body?.body ?? '')
+            if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error })
+            log(`见闻正文已保存：${String(body?.id || '')}`)
+            return sendJson(res, 200, { ok: true, file: out.file, materialized: out.materialized })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
         if (req.method === 'GET' && path === '/api/bili-fenshen/persona/versions') {

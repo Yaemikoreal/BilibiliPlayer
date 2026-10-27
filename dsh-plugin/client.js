@@ -2243,6 +2243,12 @@ window.__ModuleLoader__.load({
       const [msg, setMsg] = React.useState('')
       const [jsonDraft, setJsonDraft] = React.useState(null)
       const [jsonErr, setJsonErr] = React.useState('')
+      // 语料库 / 见闻库编辑态：''=非编辑；'new'=新增；否则=正在编辑的条目 id
+      const [bankEditId, setBankEditId] = React.useState('')
+      const [bankDraft, setBankDraft] = React.useState(null)
+      // 见闻：loreDraft=编辑现有条目（keys/oneLine/body）；loreNew=新增表单
+      const [loreDraft, setLoreDraft] = React.useState(null)
+      const [loreNew, setLoreNew] = React.useState(null)
 
       const d = (persona && persona.data) || (initial && initial.persona) || {}
       const health = d.health || {}
@@ -2312,6 +2318,75 @@ window.__ModuleLoader__.load({
           setMsg(r.ok ? '已回滚到 ' + name : '回滚失败：' + (r.error || '未知'))
           if (r.ok) refreshAll()
         } catch (e) { setMsg('回滚失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+
+      /* ── 语料库编辑（写路径：POST /persona/expression；首次编辑自动物化用户副本） ── */
+      const bankStartAdd = () => { setBankEditId('new'); setBankDraft({ text: '', source: '', heat: 0, status: 'active' }) }
+      const bankStartEdit = (e0) => { setBankEditId(e0.id); setBankDraft({ text: e0.text, source: e0.source || '', heat: e0.heat || 0 }) }
+      const bankSave = async () => {
+        setBusy('bankSave'); setMsg('')
+        try {
+          const p = bankEditId === 'new'
+            ? { action: 'add', form: curBucket, text: bankDraft.text, source: bankDraft.source, heat: Number(bankDraft.heat) || 0, status: bankDraft.status || 'active' }
+            : { action: 'edit', form: curBucket, id: bankEditId, text: bankDraft.text, source: bankDraft.source, heat: Number(bankDraft.heat) || 0 }
+          const r = await apiPost('/persona/expression', p)
+          if (!r.ok) setMsg('语料保存失败：' + (r.error || '未知'))
+          else { setMsg('语料库已更新'); setBankEditId(''); setBankDraft(null); refreshAll() }
+        } catch (e) { setMsg('语料保存失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const bankToggle = async (e0) => {
+        setBusy('bt-' + e0.id); setMsg('')
+        try {
+          const r = await apiPost('/persona/expression', { action: 'status', form: curBucket, id: e0.id, status: e0.status === 'active' ? 'candidate' : 'active' })
+          if (!r.ok) setMsg('切换失败：' + (r.error || '未知'))
+          else refreshAll()
+        } catch (e) { setMsg('切换失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const bankRemove = async (e0) => {
+        if (typeof window !== 'undefined' && window.confirm && !window.confirm('删除这条语料？')) return
+        setBusy('br-' + e0.id); setMsg('')
+        try {
+          const r = await apiPost('/persona/expression', { action: 'remove', form: curBucket, id: e0.id })
+          if (!r.ok) setMsg('删除失败：' + (r.error || '未知'))
+          else { setMsg('已删除'); refreshAll() }
+        } catch (e) { setMsg('删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+
+      /* ── 见闻库编辑（索引：POST /persona/lore 走整卡快照；正文：PUT /persona/lore） ── */
+      const loreStartEdit = () => {
+        if (!curLore) return
+        setLoreNew(null)
+        setLoreDraft({ keys: (curLore.keys || []).join(', '), oneLine: curLore.oneLine || '', body: curLore.body || '' })
+      }
+      const loreStartAdd = () => { setLoreDraft(null); setLoreNew({ id: '', keys: '', oneLine: '', body: '' }) }
+      const loreSave = async () => {
+        setBusy('loreSave'); setMsg('')
+        try {
+          if (loreNew) {
+            const r = await apiPost('/persona/lore', { action: 'add', id: loreNew.id, keys: loreNew.keys, oneLine: loreNew.oneLine })
+            if (!r.ok) { setMsg('新增失败：' + (r.error || '未知')); return }
+            if (String(loreNew.body || '').trim()) {
+              const r2 = await apiPut('/persona/lore', { id: String(loreNew.id).trim(), body: loreNew.body })
+              if (!r2.ok) { setMsg('索引已建，但正文保存失败：' + (r2.error || '未知')); refreshAll(); return }
+            }
+            setMsg('见闻已新增'); setLoreNew(null); refreshAll(); return
+          }
+          if (!curLore || !loreDraft) return
+          const r = await apiPost('/persona/lore', { action: 'edit', id: curLore.id, keys: loreDraft.keys, oneLine: loreDraft.oneLine })
+          if (!r.ok) { setMsg('索引保存失败：' + (r.error || '未知')); return }
+          const r2 = await apiPut('/persona/lore', { id: curLore.id, body: loreDraft.body })
+          if (!r2.ok) { setMsg('索引已存，但正文保存失败：' + (r2.error || '未知')); refreshAll(); return }
+          setMsg('见闻已保存'); setLoreDraft(null); refreshAll()
+        } catch (e) { setMsg('保存失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const loreRemove = async (id) => {
+        if (typeof window !== 'undefined' && window.confirm && !window.confirm('删除见闻「' + id + '」？（索引删掉；已落盘的正文文件保留）')) return
+        setBusy('lr-' + id); setMsg('')
+        try {
+          const r = await apiPost('/persona/lore', { action: 'remove', id })
+          if (!r.ok) setMsg('删除失败：' + (r.error || '未知'))
+          else { setMsg('已删除'); setLoreId(''); setLoreDraft(null); refreshAll() }
+        } catch (e) { setMsg('删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
 
       const header = h('div', null,
@@ -2455,11 +2530,39 @@ window.__ModuleLoader__.load({
           h('div', { className: 'bf-card-head' },
             h('span', { className: 'bf-card-title' }, '桶：' + curBucket),
             h('span', { className: 'bf-card-note' }, bankEntries.length + ' 条 · 逐字真实、带 source'),
+            h('span', { style: { marginLeft: 'auto' } },
+              h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: bankStartAdd }, '＋ 新增')),
           ),
+          bankEditId === 'new' && bankDraft ? h('div', { style: { padding: '9px 0', borderBottom: '.5px solid var(--border-l2)' } },
+            h('textarea', { className: 'bf-textarea', style: { minHeight: 60 }, value: bankDraft.text, placeholder: '逐字语料（它是素材库：录入真人说的话，注入时只学手感）', onChange: (e) => setBankDraft({ ...bankDraft, text: e.target.value }) }),
+            h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+              h('input', { className: 'bf-search', style: { flex: 1 }, value: bankDraft.source, placeholder: '来源（可选）', onChange: (e) => setBankDraft({ ...bankDraft, source: e.target.value }) }),
+              h('input', { className: 'bf-search', style: { width: 76 }, value: String(bankDraft.heat ?? 0), title: 'heat 越大被抽中概率越低', onChange: (e) => setBankDraft({ ...bankDraft, heat: Number(e.target.value) || 0 }) }),
+              h(Btn, { small: true, disabled: !!busy || !String(bankDraft.text || '').trim(), onClick: bankSave }, '保存'),
+              h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => { setBankEditId(''); setBankDraft(null) } }, '取消'),
+            ),
+          ) : null,
           bankEntries.length
             ? bankEntries.map((e, i) => h('div', { key: e.id || i, style: { padding: '9px 0', borderBottom: '.5px solid var(--border-l2)' } },
-                h('div', { style: { fontSize: 13, lineHeight: '20px' } }, e.text),
-                h('div', { className: 'bf-note' }, (e.source || '') + ' · len ' + (e.len || 0) + ' · ' + (e.status || '') + ' · heat ' + (e.heat || 0)),
+                bankEditId === e.id && bankDraft ? h('div', null,
+                  h('textarea', { className: 'bf-textarea', style: { minHeight: 60 }, value: bankDraft.text, onChange: (ev) => setBankDraft({ ...bankDraft, text: ev.target.value }) }),
+                  h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+                    h('input', { className: 'bf-search', style: { flex: 1 }, value: bankDraft.source, placeholder: '来源', onChange: (ev) => setBankDraft({ ...bankDraft, source: ev.target.value }) }),
+                    h('input', { className: 'bf-search', style: { width: 76 }, value: String(bankDraft.heat ?? 0), onChange: (ev) => setBankDraft({ ...bankDraft, heat: Number(ev.target.value) || 0 }) }),
+                    h(Btn, { small: true, disabled: !!busy, onClick: bankSave }, '保存'),
+                    h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => { setBankEditId(''); setBankDraft(null) } }, '取消'),
+                  ),
+                ) : h('div', null,
+                  h('div', { style: { fontSize: 13, lineHeight: '20px' } }, e.text),
+                  h('div', { style: { display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 } },
+                    h('span', { className: 'bf-note' }, (e.source || '') + ' · len ' + (e.len || 0) + ' · ' + (e.status || '') + ' · heat ' + (e.heat || 0)),
+                    h('span', { style: { marginLeft: 'auto', display: 'flex', gap: 4 } },
+                      h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => bankToggle(e) }, e.status === 'active' ? '停用' : '启用'),
+                      h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => bankStartEdit(e) }, '改'),
+                      h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => bankRemove(e) }, '删'),
+                    ),
+                  ),
+                ),
               ))
             : h('div', { className: 'bf-note' }, '这个桶还是空的。'),
         )),
@@ -2470,19 +2573,44 @@ window.__ModuleLoader__.load({
           h('div', { className: 'bf-card-head' },
             h('span', { className: 'bf-card-title' }, '索引（常驻 prompt）'),
             h('span', { className: 'bf-card-note' }, loreEntries.length + ' 条'),
+            h('span', { style: { marginLeft: 'auto' } },
+              h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: loreStartAdd }, '＋ 新增')),
           ),
+          loreNew ? h('div', { style: { padding: '9px 0', borderBottom: '.5px solid var(--border-l2)' } },
+            h('input', { className: 'bf-search', style: { width: '100%' }, value: loreNew.id, placeholder: 'id（字母数字-连字符，如 night-market）', onChange: (e) => setLoreNew({ ...loreNew, id: e.target.value }) }),
+            h('input', { className: 'bf-search', style: { width: '100%', marginTop: 6 }, value: loreNew.keys, placeholder: '触发词，逗号分隔（命中才读正文）', onChange: (e) => setLoreNew({ ...loreNew, keys: e.target.value }) }),
+            h('input', { className: 'bf-search', style: { width: '100%', marginTop: 6 }, value: loreNew.oneLine, placeholder: '一行摘要（会注入 prompt，≤40 字）', onChange: (e) => setLoreNew({ ...loreNew, oneLine: e.target.value }) }),
+            h('textarea', { className: 'bf-textarea', style: { minHeight: 80, marginTop: 6 }, value: loreNew.body, placeholder: '正文（可选；不注入，agent 命中后自己来读）', onChange: (e) => setLoreNew({ ...loreNew, body: e.target.value }) }),
+            h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+              h(Btn, { small: true, disabled: !!busy || !String(loreNew.id || '').trim(), onClick: loreSave }, '创建'),
+              h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => setLoreNew(null) }, '取消'),
+            ),
+          ) : null,
           loreEntries.length
-            ? loreEntries.map((e) => h('button', {
-                key: e.id, className: 'bf-list-btn', 'aria-current': String((curLore || {}).id === e.id), onClick: () => setLoreId(e.id),
-              }, h('span', { className: 'l' }, e.id), h('span', { className: 'm' }, e.usedToday ? '今天用过' : '可用')))
+            ? loreEntries.map((e) => h('div', { key: e.id, style: { display: 'flex', alignItems: 'center', gap: 6, padding: '7px 0', borderBottom: '.5px solid var(--border-l2)' } },
+                h('button', {
+                  className: 'bf-list-btn', style: { flex: 1, minWidth: 0 }, 'aria-current': String((curLore || {}).id === e.id), onClick: () => { setLoreId(e.id); setLoreDraft(null) },
+                }, h('span', { className: 'l' }, e.id), h('span', { className: 'm' }, e.usedToday ? '今天用过' : '可用')),
+                h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => loreRemove(e.id) }, '删'),
+              ))
             : h('div', { className: 'bf-note' }, '卡里还没有 loreIndex。'),
         ),
         h(Card, null,
           h('div', { className: 'bf-card-head' },
             h('span', { className: 'bf-card-title' }, '正文（不注入，命中才读）'),
             h('span', { className: 'bf-card-note' }, curLore ? curLore.chars + ' 字符' : ''),
+            curLore && !loreDraft && !loreNew ? h('span', { style: { marginLeft: 'auto' } },
+              h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: loreStartEdit }, '编辑')) : null,
           ),
-          curLore ? h('div', null,
+          curLore && loreDraft ? h('div', null,
+            h('input', { className: 'bf-search', style: { width: '100%' }, value: loreDraft.keys, placeholder: '触发词，逗号分隔', onChange: (e) => setLoreDraft({ ...loreDraft, keys: e.target.value }) }),
+            h('input', { className: 'bf-search', style: { width: '100%', marginTop: 6 }, value: loreDraft.oneLine, placeholder: '一行摘要（≤40 字，会注入 prompt）', onChange: (e) => setLoreDraft({ ...loreDraft, oneLine: e.target.value }) }),
+            h('textarea', { className: 'bf-textarea', style: { minHeight: 220, marginTop: 6 }, value: loreDraft.body, onChange: (e) => setLoreDraft({ ...loreDraft, body: e.target.value }) }),
+            h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+              h(Btn, { small: true, disabled: !!busy, onClick: loreSave }, '保存'),
+              h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => setLoreDraft(null) }, '取消'),
+            ),
+          ) : curLore ? h('div', null,
             h('div', { className: 'bf-note', style: { marginBottom: 6 } }, '键：' + (curLore.keys || []).join(' / ')),
             h('div', { className: 'bf-pf-sub', style: { marginBottom: 8 } }, curLore.oneLine),
             h('pre', { className: 'bf-doc', style: { maxHeight: 360 } }, curLore.body || '（正文文件缺失）'),

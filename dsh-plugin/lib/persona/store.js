@@ -201,3 +201,67 @@ export const readAssetText = (relPath, active = readActive()) => {
 }
 
 export const assertSpec = (card) => (card?.spec === SPEC ? null : `不是 ${SPEC} 格式`)
+
+/* ───────────────────────── 用户资产写路径（语料库 / 见闻正文） ───────────────────────── */
+
+const writeTextAtomic = (file, text) => {
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    const tmp = `${file}.${process.pid}.tmp`
+    writeFileSync(tmp, String(text ?? ''), 'utf8')
+    renameSync(tmp, file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 把当前生效卡与资产从预设落到家目录（preset → file 模式）。
+ * 为什么用户改资产前必须先做这一步：assetDir 按 active.mode 整体切换
+ * （preset = 插件包只读，file = 家目录可写）——preset 模式下写进家目录的
+ * 语料/见闻根本不会被读到。物化之后的改动都落在用户自己的文件上，升级不覆盖。
+ * @returns {{materialized:boolean, card:object|null, error?:string}}
+ */
+export const materializeUserCopy = () => {
+  const act = readActive()
+  if (act.mode === 'file') return { materialized: false, card: loadCard(act).card }
+  const loaded = loadCard(act)
+  if (!loaded.card) return { materialized: false, card: null, error: loaded.error || '预设卡读不到，无法落成用户副本' }
+  try {
+    writeJsonAtomic(cardFile(), loaded.card)
+    const bank = readAssetJson('expression-bank.json', act) || readAssetJson('expression-bank.seed.json', act)
+    if (bank) writeJsonAtomic(join(personaDir(), 'expression-bank.json'), bank)
+    try {
+      const srcLore = join(assetDir(act), 'lore')
+      for (const f of readdirSync(srcLore)) {
+        if (f.endsWith('.md')) writeTextAtomic(join(personaDir(), 'lore', f), readFileSync(join(srcLore, f), 'utf8'))
+      }
+    } catch { /* 预设没有 lore 目录就跳过 */ }
+    writeActive({ mode: 'file', path: cardFile() })
+    return { materialized: true, card: loaded.card }
+  } catch (e) {
+    return { materialized: false, card: loaded.card, error: `落用户副本失败：${e?.message ?? e}` }
+  }
+}
+
+/** 保存语料库（写 <家目录>/persona/expression-bank.json；preset 模式先物化用户副本）。 */
+export const saveBank = (bank) => {
+  const mat = materializeUserCopy()
+  if (mat.error) return { ok: false, error: mat.error }
+  if (!writeJsonAtomic(join(personaDir(), 'expression-bank.json'), bank)) {
+    return { ok: false, error: '语料库写盘失败' }
+  }
+  return { ok: true, materialized: mat.materialized, active: readActive() }
+}
+
+/** 见闻正文写盘（<家目录>/persona/lore/<id>.md；id 白名单防路径穿越；preset 模式先物化）。 */
+export const writeLoreBody = (id, body) => {
+  const safe = String(id || '').trim()
+  if (!/^[\w-]{1,64}$/.test(safe)) return { ok: false, error: 'id 只允许字母、数字、下划线、连字符（≤64）' }
+  const mat = materializeUserCopy()
+  if (mat.error) return { ok: false, error: mat.error }
+  const file = join(personaDir(), 'lore', `${safe}.md`)
+  if (!writeTextAtomic(file, String(body ?? ''))) return { ok: false, error: '见闻正文写盘失败' }
+  return { ok: true, file, materialized: mat.materialized, active: readActive() }
+}

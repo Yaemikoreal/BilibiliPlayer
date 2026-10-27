@@ -12,13 +12,14 @@
  *   这样"事实"在前、"行为"贴生成点，符合酒馆 depth 注入的结论。
  */
 import { join } from 'node:path'
-import { loadCard, readActive, writeActive, readAssetJson, assetDir, homeDir, listPresets, saveCard, seedIfEmpty, listVersions, readVersion } from './store.js'
+import { loadCard, readActive, writeActive, readAssetJson, assetDir, homeDir, listPresets, saveCard, seedIfEmpty, listVersions, readVersion, materializeUserCopy, saveBank, writeLoreBody } from './store.js'
 import { compilePersona, buildCore } from './compile.js'
 import { deriveState, loadState, saveState, debtLine, formOf, timeOfDayOf, hasEmoji } from './state.js'
 import { loadLegacy, legacyBlock } from './legacy.js'
 import { validateCard, l0Checks, migrateLegacyMarkdown, injectedText, SPEC } from './card.js'
-import { normalizeBank, bankStats } from './expression.js'
-import { renderLoreIndex, resolveLoreIndex, lorePath } from './lore.js'
+import { normalizeBank, bankStats, BUCKETS } from './expression.js'
+import { renderLoreIndex, resolveLoreIndex, lorePath, validateLoreEntry } from './lore.js'
+import { charLen } from './text.js'
 import { guardPrompt } from './budget.js'
 
 export {
@@ -26,6 +27,7 @@ export {
   listPresets, saveCard, listVersions, readVersion, seedIfEmpty, readActive, writeActive, loadCard,
   deriveState, loadState, saveState, compilePersona, buildCore, normalizeBank, bankStats,
   resolveLoreIndex, lorePath, guardPrompt, debtLine, formOf, timeOfDayOf, hasEmoji,
+  materializeUserCopy, saveBank, writeLoreBody,
 }
 
 /** 表达库：file 模式读用户库，preset 模式读内置种子；都没有则 null。 */
@@ -128,6 +130,109 @@ export const previewPersona = ({ card = null, events = [], roundId = 'preview', 
 
 /** 保存卡（校验 + 版本快照 + 切 active 到 file）。 */
 export const savePersonaCard = (card) => saveCard(card)
+
+/** 语料库条目的键（normalizeBank 的同一份桶表）。 */
+const BANK_FORMS = BUCKETS
+
+/**
+ * 语料库编辑入口（控制台「语料库」页签的写路径）。
+ * action：add（text 必填）/ edit（id + 可改 text/source/heat）/ remove（id）/ status（id + active|candidate）。
+ * 写盘走 store.saveBank：preset 模式会先物化用户副本（卡+资产整体落家目录并切 file）。
+ */
+export const editExpressionBank = ({ action, form, id, text, source, heat, status } = {}) => {
+  const act = readActive()
+  const bank = normalizeBank(loadBank(act) || {})
+  const f = String(form || '')
+  if (!BANK_FORMS.includes(f)) return { ok: false, error: `form 必须是：${BANK_FORMS.join(' / ')}` }
+  const list = bank.buckets[f] || []
+  const sid = String(id || '').trim()
+  const t = String(text ?? '').trim()
+
+  if (action === 'add') {
+    if (!t) return { ok: false, error: 'text 不能为空' }
+    if (list.length >= 200) return { ok: false, error: `这个桶已满（200 条）：先删再加` }
+    const entry = {
+      id: sid || `${f}#${Date.now().toString(36)}`,
+      text: t, form: f,
+      source: String(source || ''),
+      status: ['active', 'candidate'].includes(String(status)) ? String(status) : 'active',
+      len: charLen(t),
+      heat: Number(heat) || 0,
+    }
+    if (list.some((e) => e.id === entry.id)) entry.id = `${entry.id}#${Date.now().toString(36)}`
+    bank.buckets[f] = [...list, entry]
+  } else if (action === 'edit') {
+    const i = list.findIndex((e) => e.id === sid)
+    if (i < 0) return { ok: false, error: `找不到条目：${sid || '（空 id）'}` }
+    const next = { ...list[i] }
+    if (t) { next.text = t; next.len = charLen(t) }
+    if (source !== undefined) next.source = String(source)
+    if (heat !== undefined) next.heat = Number(heat) || 0
+    bank.buckets[f] = list.map((e, j) => (j === i ? next : e))
+  } else if (action === 'remove') {
+    if (!list.some((e) => e.id === sid)) return { ok: false, error: `找不到条目：${sid || '（空 id）'}` }
+    bank.buckets[f] = list.filter((e) => e.id !== sid)
+  } else if (action === 'status') {
+    const i = list.findIndex((e) => e.id === sid)
+    if (i < 0) return { ok: false, error: `找不到条目：${sid || '（空 id）'}` }
+    if (!['active', 'candidate'].includes(String(status))) return { ok: false, error: 'status 必须是 active 或 candidate' }
+    bank.buckets[f] = list.map((e, j) => (j === i ? { ...e, status: String(status) } : e))
+  } else {
+    return { ok: false, error: 'action 必须是 add / edit / remove / status' }
+  }
+
+  const saved = saveBank(bank)
+  if (!saved.ok) return { ok: false, error: saved.error || '语料库保存失败' }
+  const norm = normalizeBank(bank)
+  return {
+    ok: true, action, form: f,
+    total: norm.total, buckets: norm.buckets, updatedAt: norm.updatedAt,
+    materialized: saved.materialized, active: saved.active,
+  }
+}
+
+/**
+ * 见闻索引编辑入口（控制台「见闻库」页签的写路径；索引住在卡里 → 走整卡保存，自动出版本快照）。
+ * action：add（id/keys/oneLine）/ edit（id + 可改 keys/oneLine）/ remove（id）。
+ */
+export const editLoreIndex = ({ action, id, keys, oneLine } = {}) => {
+  const mat = materializeUserCopy()
+  if (mat.error) return { ok: false, error: mat.error }
+  const { card, error } = loadCard(readActive())
+  if (!card) return { ok: false, error: error || '人设卡读不到' }
+  const list = Array.isArray(card.loreIndex) ? card.loreIndex : []
+  const sid = String(id || '').trim()
+  const toKeys = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[,，\s]+/)).map((x) => String(x).trim()).filter(Boolean)
+
+  if (action === 'add') {
+    if (!/^[\w-]{1,64}$/.test(sid)) return { ok: false, error: 'id 只允许字母、数字、下划线、连字符（≤64）' }
+    if (list.some((l) => l.id === sid)) return { ok: false, error: `id 已存在：${sid}` }
+    const entry = { id: sid, keys: toKeys(keys), oneLine: String(oneLine || '').trim() }
+    const v = validateLoreEntry(entry)
+    if (!v.ok) return { ok: false, error: v.errors.join('；') }
+    card.loreIndex = [...list, entry]
+  } else if (action === 'edit') {
+    const i = list.findIndex((l) => l.id === sid)
+    if (i < 0) return { ok: false, error: `找不到见闻：${sid || '（空 id）'}` }
+    const next = { ...list[i] }
+    if (keys !== undefined) next.keys = toKeys(keys)
+    if (oneLine !== undefined) next.oneLine = String(oneLine).trim()
+    const v = validateLoreEntry(next)
+    if (!v.ok) return { ok: false, error: v.errors.join('；') }
+    card.loreIndex = list.map((l, j) => (j === i ? next : l))
+  } else if (action === 'remove') {
+    if (!list.some((l) => l.id === sid)) return { ok: false, error: `找不到见闻：${sid || '（空 id）'}` }
+    card.loreIndex = list.filter((l) => l.id !== sid)
+  } else {
+    return { ok: false, error: 'action 必须是 add / edit / remove' }
+  }
+
+  const saved = savePersonaCard(card)
+  if (!saved.ok) {
+    return { ok: false, error: (saved.errors || []).map((x) => (x.path ? x.path + '：' : '') + x.msg).join('；') || '卡片保存失败' }
+  }
+  return { ok: true, action, count: (card.loreIndex || []).length, snapshot: saved.snapshot || '', materialized: mat.materialized }
+}
 
 /** 人设健康状况：给诊断/控制台用的一行摘要。 */
 export const personaHealth = ({ cfg = {} } = {}) => {
