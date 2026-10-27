@@ -9,15 +9,20 @@ export function dayKeyOf(iso) {
 export function stageOf(events) {
   const types = new Set(events.map((e) => e.type))
   const repliesIn = events.filter((e) => e.type === 'reply-in')
-  const repliedBack = types.has('reply-out')
-  const answered = new Set(events.filter((e) => e.type === 'reply-out').map((e) => e.parent))
+  const replyOuts = events.filter((e) => e.type === 'reply-out')
+  // ⭐ 接话（kind=proactive）不是「跟进了别人对我的回复」：两件事分开统计（设计定稿 §3.4）
+  const followUps = replyOuts.filter((e) => e.kind !== 'proactive')
+  const proactive = replyOuts.filter((e) => e.kind === 'proactive')
+  const answered = new Set(replyOuts.map((e) => e.parent))
   const pendingReply = repliesIn.filter((e) => !answered.has(e.rpid)).length
   return {
     viewed: types.has('view') || types.has('skip'),
     liked: types.has('like'),
     commented: types.has('comment'),
     replies: repliesIn.length,
-    repliedBack,
+    repliedBack: followUps.length > 0,
+    proactive: proactive.length,
+    scanned: types.has('reply-scan'),
     dynamic: types.has('dynamic'),
     pendingReply,
   }
@@ -30,6 +35,8 @@ export function toActivities(events) {
   const skipped = new Map()
   for (const e of events) {
     if (!e || typeof e.bvid !== 'string' || !e.bvid) continue
+    // ⚠️ 账本里出现过 bvid:"-" 的跳过行：不能让它生成一张伪视频卡
+    if (e.bvid === '-' || e.bvid === '—') continue
     if (!byBvid.has(e.bvid)) byBvid.set(e.bvid, [])
     byBvid.get(e.bvid).push(e)
     if (e.type === 'skip') skipped.set(e.bvid, e)

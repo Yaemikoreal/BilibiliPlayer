@@ -12,13 +12,13 @@
       config:
         serverName: bili-fenshen
         transport: stdio
-        command: /Users/yaemiko/Projects/bilibiliplayer/.venv/bin/python
+        command: D:\projects\bilbili\.venv\Scripts\python.exe
         args:
-          - /Users/yaemiko/Projects/bilibiliplayer/mcp_server.py
+          - D:\projects\bilbili\mcp_server.py
         env:
           PYTHONUTF8: '1'
           PYTHONIOENCODING: 'utf-8'
-        cwd: /Users/yaemiko/Projects/bilibiliplayer
+        cwd: D:\projects\bilbili
         failOnStartupError: true
     - id: bili-fenshen
       name: 'dsh-bili-fenshen'

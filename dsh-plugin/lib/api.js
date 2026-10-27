@@ -142,6 +142,88 @@ export function createApiHandler(deps) {
     return undefined
   }
 
+  /* ───────── 概览实时流（SSE）：一封信封 + 运行中轻量 tick ─────────
+   * 设计定稿 2026-10-28 §2.2。与 /live/stream 分开：
+   *   /live/stream  = 一轮里的工具/输出事件流（给「运行详情」）
+   *   /stream       = 概览数字（配额/轮次/存在感/健康），文件一变就推
+   * 两者共用同一个连接上限与卸载清理口径。
+   */
+  const TICK_MS = 1500
+  const openStream = (req, res) => {
+    const hub = deps.overviewHub
+    if (!hub || typeof hub.view !== 'function' || typeof hub.subscribe !== 'function') {
+      return sendJson(res, 503, { ok: false, error: '实时流不可用（overviewHub 缺失）' })
+    }
+    if (sseClients.size >= SSE_MAX_CLIENTS) {
+      return sendJson(res, 503, { ok: false, error: `实时连接过多（上限 ${SSE_MAX_CLIENTS}），刷新页面后重试` })
+    }
+    let closed = false
+    let heartbeat = null
+    let tickTimer = null
+    let unsub = null
+    const cleanup = () => {
+      if (closed) return
+      closed = true
+      try { if (unsub) unsub() } catch { /* 兜住 */ }
+      try { if (heartbeat) clearInterval(heartbeat) } catch { /* 兜住 */ }
+      try { if (tickTimer) clearInterval(tickTimer) } catch { /* 兜住 */ }
+      sseClients.delete(cleanup)
+      try { res.end() } catch { /* 兜住 */ }
+    }
+    const write = (obj) => {
+      if (closed) return
+      try { res.write(`data: ${JSON.stringify(obj)}\n\n`) } catch { cleanup() }
+    }
+    try {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      })
+      res.flushHeaders?.()
+    } catch { return undefined }
+    sseClients.add(cleanup)
+    try { req.on?.('close', cleanup); req.on?.('error', cleanup) } catch { /* 兜住 */ }
+    try { res.on?.('close', cleanup); res.on?.('error', cleanup) } catch { /* 兜住 */ }
+
+    write({ type: 'hello', seq: hub.seq, serverTime: new Date().toISOString() })
+    let env = null
+    try { env = hub.view('stream-open') } catch { env = null }
+    if (env) write({ type: 'overview', data: env })
+    try { unsub = hub.subscribe((next) => write({ type: 'overview', data: next })) } catch { /* 至少保留首帧 */ }
+
+    // 运行中每 1.5s 一帧：秒表/阶段/工具计数必须连续，不能等文件变更
+    tickTimer = setInterval(() => {
+      if (closed) return
+      try {
+        const snap = deps.live?.snapshot ? deps.live.snapshot(0) : null
+        if (!snap?.running) return
+        write({
+          type: 'tick',
+          seq: hub.seq,
+          round: {
+            running: true,
+            roundId: snap.roundId ?? null,
+            startedAt: snap.startedAt ?? null,
+            elapsedMs: Number(snap.elapsedMs) || 0,
+            phase: snap.phase || null,
+            stats: snap.stats || null,
+          },
+          quota: { perRound: typeof deps.quotaPerRound === 'function' ? deps.quotaPerRound() : null },
+        })
+      } catch { /* 兜住 */ }
+    }, TICK_MS)
+    tickTimer.unref?.()
+
+    heartbeat = setInterval(() => {
+      if (closed) return
+      try { res.write(': ping\n\n') } catch { cleanup() }
+    }, SSE_HEARTBEAT_MS)
+    heartbeat.unref?.()
+    return undefined
+  }
+
   const handler = async function handler(req, res) {
     let url = null
     try {
@@ -155,6 +237,11 @@ export function createApiHandler(deps) {
       if (!path.startsWith(PREFIX)) return sendJson(res, 404, { ok: false, error: 'not found' })
 
       if (method === 'GET' && path === `${PREFIX}/overview`) {
+        // 优先走实时中枢（seq/新鲜度/运行中进度都在里面）；没有中枢（老测试）退回裸组装
+        const hub = deps.overviewHub
+        if (hub && typeof hub.view === 'function') {
+          try { return sendJson(res, 200, hub.view('http')) } catch { /* 落到下面兜底 */ }
+        }
         return sendJson(res, 200, { ok: true, ...deps.overview() })
       }
       if (method === 'GET' && path === `${PREFIX}/activity`) {
@@ -191,6 +278,8 @@ export function createApiHandler(deps) {
         if (!writeOverride(deps.configFile, next)) {
           return sendJson(res, 500, { ok: false, error: '写覆盖层失败' })
         }
+        // 配置一改，概览信封里的 limits/nextRunAt 就变了：立刻推一帧，别等 2s 轮询
+        try { deps.overviewHub?.publish?.('config') } catch { /* 兜住 */ }
         return sendJson(res, 200, { ok: true, ...effectiveConfig(patchConfig(), deps.configFile) })
       }
       if (method === 'GET' && path === `${PREFIX}/log`) {
@@ -237,6 +326,9 @@ export function createApiHandler(deps) {
       }
       if (method === 'GET' && path === `${PREFIX}/live/stream`) {
         return openSse(req, res)
+      }
+      if (method === 'GET' && path === `${PREFIX}/stream`) {
+        return openStream(req, res)
       }
 
       return sendJson(res, 404, { ok: false, error: `unknown ${method} ${path}` })

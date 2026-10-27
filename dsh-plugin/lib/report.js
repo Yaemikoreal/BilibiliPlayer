@@ -63,6 +63,86 @@ const parseDynamicAction = (act) => {
   return { type: 'dynamic', text: quotedText(tail), ...(id ? { id } : {}) }
 }
 
+/**
+ * 剥离动作行里的「接话」段（设计定稿 §3.3）。
+ * 报告动作行的两种写法：
+ *   `动作：点赞 + 评论（rpid 1）：`正文` + 接话（rpid 2）：`接话正文``
+ *   `动作：接话（rpid 2）：`接话正文``
+ * 旧实现直接 indexOf('评论') 后取第一个 rpid 与第一个引号段 —— 接话写在前面时会把
+ * 接话的 rpid/正文当成评论的回填，是随时会咬人的解析地雷。
+ */
+const cutProactive = (act) => {
+  const s = String(act || '')
+  const i = s.indexOf('接话')
+  if (i < 0) return s
+  return s.slice(0, i).replace(/\s*\+\s*$/, '').trim()
+}
+
+const NEGATED_PROACTIVE = /接话\s*0|没接话|不接话|未接话|接话没做/
+
+/** 从动作行里取出「接话」段：{ parent, text }（parent = 对方一级评论 rpid） */
+const parseProactiveInAction = (act) => {
+  const s = String(act || '')
+  const i = s.indexOf('接话')
+  if (i < 0) return null
+  const seg = s.slice(i)
+  if (NEGATED_PROACTIVE.test(seg)) return null
+  const rpidRaw = (/rpid\s*[：:]?\s*(\d+)/.exec(seg) || [])[1]
+  const text = quotedText(seg)
+  if (!text) return null
+  return { parent: rpidRaw ? Number(rpidRaw) : null, text }
+}
+
+/**
+ * 解析「接话扫描」机器行（设计定稿 §3.3）：
+ *   `接话扫描：候选 3 → 接 rpid 321560862800（666设计师）`
+ *   `接话扫描：候选 0（热评全在站队，不接）`
+ * 返回 { scans:[{bvid,candidates:[],candidateCount,decision,targetRpid,reason}], proactive:[{bvid,parent,text}] }
+ * 失败一律返回空数组，绝不抛。
+ */
+export function parseProactiveScan(text, opts = {}) {
+  const round = opts.round ?? null
+  const stamp = opts.t || new Date().toISOString()
+  const scans = []
+  const proactive = []
+  if (!text || typeof text !== 'string') return { scans, proactive }
+  const pushScan = (bvid, line) => {
+    if (!line) return
+    const target = (/接\s*rpid\s*(\d+)/.exec(line) || [])[1]
+    const candN = (/候选\s*(\d+)/.exec(line) || [])[1]
+    const decision = target ? 'posted' : 'skipped'
+    scans.push({
+      t: stamp,
+      round,
+      bvid: bvid || '',
+      candidateCount: candN ? Number(candN) : 0,
+      candidates: [],
+      decision,
+      ...(target ? { targetRpid: Number(target) } : {}),
+      ...(decision === 'skipped' ? { reason: line } : {}),
+      raw: line,
+    })
+  }
+  const parts = text.split(/^### /m)
+  for (const raw of parts.slice(1)) {
+    const lines = raw.split('\n')
+    const bvid = (/^(BV[0-9A-Za-z]+)/.exec((lines[0] || '').trim()) || [])[1]
+    if (!bvid) continue
+    const body = lines.slice(1).join('\n')
+    const scanLine = (/接话扫描[：:]\s*(.+)/.exec(body) || [])[1]?.trim()
+    const actLine = (/动作[：:]\s*(.+)/.exec(body) || [])[1]?.trim() || ''
+    const pa = parseProactiveInAction(actLine)
+    if (pa) proactive.push({ t: stamp, round, bvid, parent: pa.parent, text: pa.text, rpid: null })
+    pushScan(bvid, scanLine)
+  }
+  // 兜底：模型把扫描写成全局一行（没有挂在 ### BV 下）时也要收，否则证据丢失
+  if (!scans.length) {
+    const m = /接话扫描[：:]\s*(.+)/.exec(text)
+    if (m) pushScan(opts.bvid || '', m[1].trim())
+  }
+  return { scans, proactive }
+}
+
 export function parseRoundReport(text, opts = {}) {
   const round = opts.round ?? null
   const views = []
@@ -86,8 +166,11 @@ export function parseRoundReport(text, opts = {}) {
 
     const actions = []
     if (didLike(actLine)) actions.push({ type: 'like' })
-    const cmt = parseCommentAction(actLine)
+    // ⭐ 先剥掉接话段再解析评论：接话段自带 rpid 与正文，混在一起会把评论回填成错的那条
+    const cmt = parseCommentAction(cutProactive(actLine))
     if (cmt) actions.push(cmt)
+    const pa = parseProactiveInAction(actLine)
+    if (pa) actions.push({ type: 'reply-out', kind: 'proactive', parent: pa.parent, text: pa.text })
     const dyn = parseDynamicAction(actLine)
     if (dyn) actions.push(dyn)
 

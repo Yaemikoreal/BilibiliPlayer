@@ -23,12 +23,15 @@ import { fileURLToPath } from 'node:url'
 
 // ⭐ lib/* 是本插件的纯逻辑模块（package.json files 已带上）；任何加载失败都按可选依赖降级
 import { appendEvents, readEvents, isDuplicate } from './lib/ledger.js'
-import { parseRoundReport } from './lib/report.js'
+import { parseRoundReport, parseProactiveScan } from './lib/report.js'
 import { createApiHandler } from './lib/api.js'
 import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort } from './lib/config.js'
 import { fetchAccount } from './lib/account.js'
-import { fetchReplyNotifs, toReplyIn, roundIdForReply } from './lib/replies.js'
+import { fetchReplyNotifs, toReplyIn, roundIdForReply, proactiveTargetsFromLedger } from './lib/replies.js'
 import { seenListFromLedger } from './lib/seen.js'
+import { buildOverview as buildOverviewData } from './lib/overview.js'
+import { createOverviewHub } from './lib/realtime.js'
+import { roundAccounting, presenceFrom } from './lib/round.js'
 import { loadPersona } from './lib/persona.js'
 import {
   resolvePersona, seedIfEmpty, guardPrompt, personaHealth, previewPersona,
@@ -299,7 +302,7 @@ const effCfg = () => effectiveConfig(cfgSnapshot || {}, CONFIG_FILE).values
  */
 const quotaFromLedger = () => {
   const day = dayKey()
-  const acc = { picked: 0, comments: 0, likes: 0, dynamics: 0, replies: 0, repliesProactive: 0 }
+  const acc = { picked: 0, comments: 0, likes: 0, dynamics: 0, replies: 0, repliesProactive: 0, replyScans: 0, proactiveSkipped: 0 }
   try {
     for (const e of readEvents(LEDGER_FILE)) {
       if (dayKeyOf(e.t) !== day) continue
@@ -310,6 +313,10 @@ const quotaFromLedger = () => {
       else if (e.type === 'reply-out') {
         acc.replies++
         if (e.kind === 'proactive') acc.repliesProactive++
+      } else if (e.type === 'reply-scan') {
+        // ⭐ 接话扫描：每轮硬步骤（设计定稿 §3）。「扫描了但没接」与「压根没想」必须能分开统计
+        acc.replyScans++
+        if (e.decision === 'skipped') acc.proactiveSkipped++
       }
     }
   } catch { /* 账本读不到 ⇒ 全 0，不拖垮调用方 */ }
@@ -479,6 +486,22 @@ const backfillFromReport = (roundId) => {
       appendEvents(LEDGER_FILE, fresh)
       log(`报告兜底回填 ${fresh.length} 条事件（round=${roundId}）`)
     }
+    // ⭐ 接话扫描/接话也从报告回填（设计定稿 §3.3）：isDuplicate 的键不含 t，
+    //    同一 BV 的扫描事件不能走它，否则跨轮会被误判成重复而丢掉。
+    try {
+      const scans = parseProactiveScan(text, { round: roundId })
+      const scanEvents = scans.scans
+        .map((sc) => ({ ...sc, round: roundId, type: 'reply-scan', source: 'report' }))
+        .filter((e) => !existing.some((x) => x && x.type === 'reply-scan' && x.round === e.round && x.bvid === e.bvid && x.t === e.t))
+      const proactiveEvents = scans.proactive
+        .map((p) => ({ ...p, round: roundId, type: 'reply-out', kind: 'proactive', source: 'report' }))
+        .filter((e) => !existing.some((x) => x && x.type === 'reply-out' && x.parent === e.parent && x.bvid === e.bvid))
+      const extra = [...scanEvents, ...proactiveEvents]
+      if (extra.length) {
+        appendEvents(LEDGER_FILE, extra)
+        log(`报告兜底回填接话事件 ${extra.length} 条（round=${roundId}）`)
+      }
+    } catch (e) { log(`接话事件回填失败（不影响主流程）：${e?.message ?? e}`) }
   } catch (e) {
     log(`报告兜底回填失败：${e?.message ?? e}`)
   }
@@ -619,6 +642,8 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   const avoid = Array.isArray(cfg?.avoidList) ? cfg.avoidList.map((x) => String(x ?? '').trim()).filter(Boolean) : []
   // ⭐ 已看过清单：宿主从账本算好的硬判重（设计文档 2026-10-27-proactive-reply-dedup §4）
   const seenBvs = seenListFromLedger(ledgerEvents)
+  // ⭐ 已接话清单：宿主从账本算好，命中就别再重复接（章程「同一 target 永不重复」只能靠它落地）
+  const proactiveMine = proactiveTargetsFromLedger(ledgerEvents, { days: 14 })
   const report = cfg?.reportLevel === 'off'
     ? '本轮不写日报文件，只把做过的动作记进判重表。'
     : cfg?.reportLevel === 'brief'
@@ -668,12 +693,23 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
     + `评论 ${Math.max(0, Number(cfg?.commentsPerDay) || 0)} 条/天（今天已 ${q.comments}），本轮最多 ${Math.max(0, Number(cfg?.commentsPerRound) || 0)} 条；`
     + `点赞 ${Math.max(0, Number(cfg?.likesPerDay) || 0)} 个/天（今天已 ${q.likes}）；`
     + `动态 ${Math.max(0, Number(cfg?.dynamicsPerDay) || 0)} 条/天（今天已 ${q.dynamics}）；`
-    + `跟进回复本轮最多 ${Math.max(0, Number(cfg?.repliesPerRound) || 0)} 条；`
-    + `主动接话本轮最多 ${Math.max(0, Number(cfg?.replyOthersPerRound ?? 2))} 条（0 = 本轮不接）。\n`
+    + `跟进回复本轮最多 ${Math.max(0, Number(cfg?.repliesPerRound) || 0)} 条。\n`
+    + `- ⭐ 主动接话（**每轮硬步骤** + 可发 0..${Math.max(0, Number(cfg?.replyOthersPerRound ?? 2))} 条）：`
+    + `本轮**必须先做一次「接话扫描」**——从已拉到的热评里评估 ≥1 条能不能接，`
+    + `把结论写进报告的一行「接话扫描：…」，并向账本追加一条 reply-scan 事件；`
+    + `即使不接也要写（写「候选 0 / 全部不接 + 理由」），不写扫描 = 本轮不合规。`
+    + `扫描这一步**不占**「工具调用 ≤20」的预算；真接一条只多 1 次 bili_reply。`
+    + `可发上限 ${Math.max(0, Number(cfg?.replyOthersPerRound ?? 2))} 条（0 = 只扫描、不接）。\n`
     + `- 已看过清单（宿主从账本算好，最近 14 天，命中 = 之前看过/评过/赞过/跳过过）：`
     + (seenBvs.length ? `${seenBvs.join('、')}。\n`
         + `  命中的候选**直接丢**：不读信息、不读字幕、不点赞不评论、不进报告、不记判重表（账本里本来就有，别再花任何调用）。\n`
       : '（空——账本里还没有看过的记录，照常逐条判。）\n')
+    + `- 已接话清单（宿主从账本算好，近 14 天；命中 = 别再重复接同一条/同一个人）：`
+    + (proactiveMine.length
+      ? `${proactiveMine.map((x) => `${x.bvid}→对方 rpid ${x.parent}`).join('、')}。\n`
+      : '（空——还没接过，照常挑。）\n')
+    + `- 接话正确姿势：bili_comments 返回的每条热评都带 rpid；接话时 bili_reply 传 rpid=<对方一级评论 rpid>、root 留空`
+    + `（工具会自动把 root 置成 rpid、进楼中楼）；返回里的 rpid 是你自己的楼层，记进账本。\n`
     + `- 内容源（按这个优先级拉；上一档挑够或没有可看的，再看下一档）：\n${sourceLines.join('\n')}\n`
     + `- ${avoidBlock}\n`
     + `- 本轮开关（与章程/人设冲突时以本节为准）：\n${switchLines.map((x) => '  ' + x).join('\n')}\n`
@@ -765,17 +801,36 @@ const runDuty = async (why = 'manual') => {
       log(`值班轮结束（${why}，code=${code}）`)
       try { live.end({ code, durationMs }) } catch { /* 兜住 */ }
       try {
-        appendEvents(LEDGER_FILE, [{ t: new Date().toISOString(), round: currentRoundId, type: 'round-end', code, durationMs }])
-        backfillFromReport(currentRoundId)
+        const endedRound = currentRoundId
+        // 先按报告兜底回填（agent 忘写账本时，接话/评论仍能从报告里找回来），再盘点本轮
+        backfillFromReport(endedRound)
+        const stNow = readJson(STATE_FILE, {})
+        const acc = roundAccounting(readEvents(LEDGER_FILE), endedRound, { scanSince: Number(stNow.replyScanSince) || 0 })
+        appendEvents(LEDGER_FILE, [{
+          t: new Date().toISOString(), round: endedRound, type: 'round-end', code, durationMs,
+          replyScans: acc.counts.scans,
+          proactiveReplies: acc.counts.proactive,
+          proactiveSkipped: acc.counts.scanSkips,
+          proactiveMissing: acc.proactiveMissing,
+        }])
+        if (acc.proactiveMissing) {
+          // 「没接」可以是判断，「没扫描」不行：这一行让下一轮的模型与主人都能看见
+          log(`本轮未做接话扫描（不合规）round=${endedRound}`)
+          appendEvents(LEDGER_FILE, [{ t: new Date().toISOString(), round: endedRound, type: 'note', text: 'round incomplete: no reply-scan' }])
+        }
       } catch (e) { log(`写 round-end 失败：${e?.message ?? e}`) }
       stubReportIfMissing(code)
       rotateLogIfBig()
       bumpState({ lastRunAt: new Date().toISOString(), lastWhy: why, lastCode: code, lastDurationMs: durationMs })
+      try { overviewHub.publish('round-end') } catch { /* 兜住 */ }
       // ⭐ 90 秒后复核（评论区压审对策）；不拖住宿主退出
       const t = setTimeout(() => { verifyRecentSafe('round').catch(() => {}) }, 90_000)
       t.unref?.()
     })
-    bumpState({ lastRunAt: new Date().toISOString(), lastWhy: why })
+    // ⭐ 只记「本轮开始时间」；lastRunAt/lastCode/lastDurationMs 是**上一轮的结果**，轮末才写。
+    //    旧版两处都写 lastRunAt，于是运行中概览显示「本轮开始时间 + 上一轮退出码」。
+    bumpState({ lastRunStartedAt: new Date().toISOString(), lastWhy: why })
+    try { overviewHub.publish('round-start') } catch { /* 兜住 */ }
     return {
       started: true, why, roundId, profile, cli, cwd: HOME, log: LOG_FILE,
       model: { provider: em.provider, model: em.model, reasoningEffort: em.reasoningEffort },
@@ -828,7 +883,8 @@ const replyTick = async () => {
       appendEvents(LEDGER_FILE, fresh)
       log(`收到 ${fresh.length} 条新回复通知`)
     }
-    bumpState({ seenNotifs: [...seen].slice(-500), lastReplyPollAt: new Date().toISOString() })
+    bumpState({ seenNotifs: [...seen].slice(-500), lastReplyPollAt: new Date().toISOString(), lastReplyPollOk: true })
+    try { overviewHub.publish('reply-tick') } catch { /* 兜住 */ }
   } catch (e) {
     log(`回复轮询失败（下个周期重试）：${e?.message ?? e}`)
   }
@@ -887,65 +943,78 @@ const tick = () => {
   }
 }
 
-/* ───────────────────────── overview 组装（设计文档 §8） ───────────────────────── */
+/* ───────────────────────── overview 组装（设计定稿 2026-10-28 §2.1） ───────────────────────── */
+/* 纯计算搬进 lib/overview.js（可单测）；这里只负责「取真实输入」：
+ *   - live.snapshot() ⇒ 运行中的真实进度（解 A1：账本是轮末批量写的，不能当进度源）
+ *   - 账本按 roundId 聚合 ⇒ lastRound（解 A2：不再拼「新开始时间 + 上一轮退出码」）
+ *   - 账号 5 分钟缓存 ⇒ 网络抖动不把「已登录」翻成「未登录」（解 A3）
+ */
 
-const nextWindowLabel = () => {
+// 账号缓存：概览需要它，但 B站 nav 是网络请求 —— 5 分钟一次，失败保留上次 good 值
+let accountCache = { at: 0, value: null }
+const ACCOUNT_TTL = 5 * 60_000
+const accountForOverview = async ({ force = false } = {}) => {
+  const nowMs = Date.now()
+  if (!force && accountCache.value && nowMs - accountCache.at < ACCOUNT_TTL) return accountCache.value
   try {
-    const cfg = effCfg()
-    const now = new Date()
-    const m = now.getHours() * 60 + now.getMinutes()
-    const candidates = []
-    if (cfg.noon && !inWindow(now, WINDOWS.noon)) candidates.push(['中午 12:00', (12 * 60 - m + 1440) % 1440])
-    if (cfg.night && !inWindow(now, WINDOWS.night)) candidates.push(['晚间 18:00', (18 * 60 - m + 1440) % 1440])
-    if (!candidates.length) return '—'
-    candidates.sort((a, b) => a[1] - b[1])
-    return `${candidates[0][0]}（${Math.floor(candidates[0][1] / 60)}h${String(candidates[0][1] % 60).padStart(2, '0')}m 后）`
-  } catch {
-    return '—'
+    const acc = await fetchAccount(readCred())
+    accountCache = { at: nowMs, value: { ...(acc || { loggedIn: false }), checkedAt: new Date().toISOString(), stale: false } }
+  } catch (e) {
+    if (accountCache.value) accountCache = { ...accountCache, value: { ...accountCache.value, stale: true } }
+    log(`拉账号失败（保留上次结果）：${e?.message ?? e}`)
   }
+  return accountCache.value
 }
+
+// CLI 探测会扫目录；10 分钟内复用，避免概览每次轮询都重扫（旧版把 duty.log 写肥到 485 KB 的元凶之一）
+let cliHealthCache = { at: 0, value: '' }
+const cliForHealth = () => {
+  const nowMs = Date.now()
+  if (!cliHealthCache.value || nowMs - cliHealthCache.at > 10 * 60_000) {
+    try { cliHealthCache = { at: nowMs, value: dshCliCached(effCfg()) || '' } } catch { /* 兜住 */ }
+  }
+  return cliHealthCache.value
+}
+
+const overviewHealth = () => ({
+  cli: cliForHealth(),
+  cliCheckedAt: cliHealthCache.at ? new Date(cliHealthCache.at).toISOString() : '',
+  cred: existsSync(BILI_CRED_FILE),
+  routeOk: routeRegistered,
+})
 
 const buildOverview = () => {
   const cfg = effCfg()
   const st = readJson(STATE_FILE, {})
-  const cli = dshCliCached(cfg)
-  const q = quotaFromLedger()
-  return {
-    account: null,                       // 由 /account 单独提供（需要网络，不阻塞 overview）
-    duty: {
-      autoDuty: !!cfg.autoDuty,
-      windows: { noon: !!cfg.noon, night: !!cfg.night },
-      nextWindowLabel: nextWindowLabel(),
-    },
-    quota: {
-      picked: q.picked,
-      comments: q.comments,
-      likes: q.likes,
-      dynamics: q.dynamics,
-      replies: q.replies,
-      repliesProactive: q.repliesProactive,
-      limits: {
-        perDay: cfg.perDay, commentsPerDay: cfg.commentsPerDay,
-        likesPerDay: cfg.likesPerDay, dynamicsPerDay: cfg.dynamicsPerDay,
-        repliesPerRound: cfg.repliesPerRound,
-        replyOthersPerRound: cfg.replyOthersPerRound,
-      },
-    },
-    round: {
-      running,
-      startedAt: running ? new Date(currentRoundAt).toISOString() : '',
-      elapsedMs: running ? Date.now() - currentRoundAt : 0,
-      lastRunAt: st.lastRunAt || '',
-      lastWhy: st.lastWhy || '',
-      lastCode: st.lastCode ?? null,
-      lastDurationMs: st.lastDurationMs ?? null,
-    },
-    health: { cli: cli || '', cred: existsSync(BILI_CRED_FILE), routeOk: true },
-    model: effectiveModel(cfg),
-    lastReplyPollAt: st.lastReplyPollAt || '',
+  const events = readEvents(LEDGER_FILE)
+  let liveSnap = null
+  try { liveSnap = live.snapshot(0) } catch { liveSnap = null }
+  return buildOverviewData({
+    cfg,
+    state: st,
+    events,
+    liveSnap,
+    account: accountCache.value,
+    health: overviewHealth(),
+    presence: presenceFrom(events, { now: Date.now() }),
+    now: new Date(),
     home: HOME,
     ledgerFile: LEDGER_FILE,
-  }
+  })
+}
+
+// ⭐ 实时中枢：/overview 与 /stream 共用同一份信封（seq / 新鲜度 / 运行中进度）
+const overviewHub = createOverviewHub({ compute: () => buildOverview() })
+
+// tick 帧用：本轮动作计数（不重算整封信，只算一次账本）
+const quotaPerRound = () => {
+  try {
+    const rid = currentRoundId
+    if (!rid) return null
+    const st = readJson(STATE_FILE, {})
+    const acc = roundAccounting(readEvents(LEDGER_FILE), rid, { scanSince: Number(st.replyScanSince) || 0 })
+    return { roundId: rid, ...acc.counts }
+  } catch { return null }
 }
 
 const listReports = () => {
@@ -1476,7 +1545,7 @@ export function apply(ctx, config) {
         '/api/bili-fenshen/duty', '/api/bili-fenshen/run', '/api/bili-fenshen/stop',
         // 新增：模型目录 / 一键诊断 / 实时运行流
         '/api/bili-fenshen/models', '/api/bili-fenshen/diagnose',
-        '/api/bili-fenshen/live', '/api/bili-fenshen/live/stream',
+        '/api/bili-fenshen/live', '/api/bili-fenshen/live/stream', '/api/bili-fenshen/stream',
       ])
       // ⭐ HMR 实测：插件行 toggle off/on 后，旧模块实例可能留下一个无法注销的 prefix 路由
       //    （旧 handler 继续应答，新实例再 register 同名 prefix 会抛 duplicate）。
@@ -1505,10 +1574,13 @@ export function apply(ctx, config) {
           patchConfig: () => cfgSnapshot,
           readEvents: () => readEvents(LEDGER_FILE),
           overview: buildOverview,
+          overviewHub,
+          quotaPerRound,
           setDuty: (v) => {
             const cur = effectiveConfig(cfgSnapshot || {}, CONFIG_FILE)
             writeOverride(CONFIG_FILE, { ...cur.values, autoDuty: v })
             log(`自动值班 ${v ? '开启' : '关闭'}（操作台）`)
+            try { overviewHub.publish('duty') } catch { /* 兜住 */ }
             return { autoDuty: v }
           },
           runDuty: () => runDuty('web'),
@@ -1581,6 +1653,37 @@ export function apply(ctx, config) {
       log('webServer 服务不可用：HTTP 路由未挂（仅影响 V2 页面，不影响调度）')
     }
   } catch (e) { log(`注册 webServer 路由失败（已兜住）：${e?.message ?? e}`) }
+
+  // ── 概览实时中枢：2s 兜底轮询 + 账号 5 分钟预热（设计定稿 §2.2/§2.4）──
+  //    没有 fs.watch 也能在 2s 内反映账本/state 变化；publish 自身有 debounce+最小间隔，不会打爆重算。
+  try {
+    const st0 = readJson(STATE_FILE, {})
+    if (!st0.replyScanSince) bumpState({ replyScanSince: new Date().toISOString() })
+    overviewHub.publish('startup')
+    accountForOverview().catch(() => {})
+    // ⭐ 2s 兜底：先比 mtime/大小，变了才 publish —— 账本最大 5 MB，每 2s 全量重解析会白烧 CPU
+    let lastSig = ''
+    const fileSig = () => {
+      const one = (p) => { try { const s = statSync(p); return s.size + '@' + Math.floor(s.mtimeMs) } catch { return '-' } }
+      return [one(LEDGER_FILE), one(STATE_FILE), one(CONFIG_FILE)].join('|')
+    }
+    const hubPoll = setInterval(() => {
+      try {
+        const sig = fileSig()
+        if (sig === lastSig) return
+        lastSig = sig
+        overviewHub.publish('poll')
+      } catch { /* 兜住 */ }
+    }, 2000)
+    hubPoll.unref?.()
+    disposers.push(() => { try { clearInterval(hubPoll) } catch { /* 兜住 */ } })
+    const acctTimer = setInterval(() => {
+      accountForOverview({ force: true }).then(() => overviewHub.publish('account')).catch(() => {})
+    }, 5 * 60_000)
+    acctTimer.unref?.()
+    disposers.push(() => { try { clearInterval(acctTimer) } catch { /* 兜住 */ } })
+    disposers.push(() => { try { overviewHub.close() } catch { /* 兜住 */ } })
+  } catch (e) { log(`实时中枢启动失败（已兜住）：${e?.message ?? e}`) }
 
   // ── 调度器：60 秒巡窗 ──
   const timer = setInterval(tick, 60_000)

@@ -445,6 +445,7 @@ async def _fetch_comments(aid: int, cred: Credential, num: int) -> dict:
                 sub_replies = []
                 for sub in (r.get("replies") or [])[:2]:
                     sub_replies.append({
+                        "rpid": sub.get("rpid", 0),
                         "user": sub.get("member", {}).get("uname", ""),
                         "content": sub.get("content", {}).get("message", ""),
                         "like": sub.get("like", 0),
@@ -657,6 +658,10 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         text: 评论/回复的文本内容
         rpid: 要回复的目标评论ID（0表示发表新评论）
         root: 楼层根评论ID（回复一级评论时不用填，回复楼中楼时填根评论ID）
+
+    主动接话（回复别人的一级评论、进他的楼中楼）：**只传 rpid=对方一级评论的 rpid，root 留空**
+    （内部会把 root 置成 rpid）；返回里的 rpid 是你自己这条回复的楼层 id。
+    例：bili_reply(bvid="BV1xx", text="……", rpid=321560862800)
     
     Returns:
         发表结果

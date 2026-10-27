@@ -127,7 +127,11 @@ test('每日转正限额：4 条满分 candidate 只转 3（FIFO），跨天重�
   assert.equal(activeQ[0].id, 'fifo#0', 'FIFO：最老的先转正')
   const st = loadState()
   assert.equal(st.growthPromoted.count, 3)
-  assert.equal(st.growthPromoted.date, new Date().toISOString().slice(0, 10).replace(/^\d{4}-/, (y) => y)) // 本地日
+  // ⭐ 期望值必须用「本地日」算：实现走 dayKeyLocal，而在 UTC+8 的 00:00–08:00 之间
+  //    toISOString() 还是前一天（跨午夜必挂的历史时间炸弹）
+  const nowD = new Date()
+  const localDay = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}-${String(nowD.getDate()).padStart(2, '0')}`
+  assert.equal(st.growthPromoted.date, localDay, '本地日')
 
   // 当天再跑：额度已用完，不转
   const out2 = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 3 }, events: [] })

@@ -43,7 +43,7 @@ test('按轮次分组，轮次倒序，轮内有对话的排前面', () => {
 
 test('stageOf 对纯浏览给出最小阶段', () => {
   const s = stageOf([{ type: 'view' }])
-  assert.deepEqual(s, { viewed: true, liked: false, commented: false, replies: 0, repliedBack: false, dynamic: false, pendingReply: 0 })
+  assert.deepEqual(s, { viewed: true, liked: false, commented: false, replies: 0, repliedBack: false, proactive: 0, scanned: false, dynamic: false, pendingReply: 0 })
 })
 
 test('dayKeyOf 从 ISO 时间取本地日期', () => {
