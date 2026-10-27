@@ -202,6 +202,16 @@ export const readAssetText = (relPath, active = readActive()) => {
 
 export const assertSpec = (card) => (card?.spec === SPEC ? null : `不是 ${SPEC} 格式`)
 
+/**
+ * 读生效语料库：file 模式读用户库，preset 模式读内置种子；都没有则 null。
+ * （从门面下沉到存储层：growth 管道与门面都要用，放这里避免循环依赖。）
+ */
+export const loadBank = (active = readActive()) => {
+  const own = readAssetJson('expression-bank.json', active)
+  if (own) return own
+  return readAssetJson('expression-bank.seed.json', active)
+}
+
 /* ───────────────────────── 用户资产写路径（语料库 / 见闻正文） ───────────────────────── */
 
 const writeTextAtomic = (file, text) => {

@@ -30,6 +30,9 @@ export const FIELDS = {
   // 动态形式：是否允许「纯文本感想」动态（false = 只发「分享视频 + 短评」）
   dynamicPureText: 'boolean',
   personaPrompt: 'string',
+  // 人设自演化管道：值班轮沉淀候选（bili_persona_note）→ 宿主质检入库
+  growthEnable: 'boolean',
+  growthAutoPromote: 'number',
   reportLevel: 'string',
   dshBin: 'string',
   headlessProfile: 'string',

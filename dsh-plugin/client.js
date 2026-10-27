@@ -1857,6 +1857,12 @@ window.__ModuleLoader__.load({
             h('span', { className: 'bf-note' }, '关闭后动态只发「分享视频 + 短评」')),
           h('div', { className: 'bf-note' }, '提示注入防御与「先落报告/账本」等保底纪律始终生效，不在开关范围。'),
         ),
+        h(Group, { title: '自生长' },
+          h(Row, { label: '候选管道' }, h(Switch, { checked: draft.growthEnable !== false, onChange: (v) => set('growthEnable', v) }),
+            h('span', { className: 'bf-note' }, '值班轮可用 bili_persona_note 沉淀新梗/新见闻，宿主质检后进候选区')),
+          h(Row, { label: '每日自动转正' }, h(Num, { value: Number(draft.growthAutoPromote ?? 3), onChange: (v) => set('growthAutoPromote', v) }),
+            h('span', { className: 'bf-note' }, '0 = 只收候选，全部人工启用；转正的是最老的满分候选')),
+        ),
         h(Group, { title: '人设' },
           h(Row, { label: '人设提示词' },
             h('textarea', {

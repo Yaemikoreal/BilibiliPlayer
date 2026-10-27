@@ -12,7 +12,7 @@
  *   这样"事实"在前、"行为"贴生成点，符合酒馆 depth 注入的结论。
  */
 import { join } from 'node:path'
-import { loadCard, readActive, writeActive, readAssetJson, assetDir, homeDir, listPresets, saveCard, seedIfEmpty, listVersions, readVersion, materializeUserCopy, saveBank, writeLoreBody } from './store.js'
+import { loadCard, readActive, writeActive, readAssetJson, assetDir, homeDir, listPresets, saveCard, seedIfEmpty, listVersions, readVersion, materializeUserCopy, saveBank, writeLoreBody, loadBank } from './store.js'
 import { compilePersona, buildCore } from './compile.js'
 import { deriveState, loadState, saveState, debtLine, formOf, timeOfDayOf, hasEmoji } from './state.js'
 import { loadLegacy, legacyBlock } from './legacy.js'
@@ -21,20 +21,15 @@ import { normalizeBank, bankStats, BUCKETS } from './expression.js'
 import { renderLoreIndex, resolveLoreIndex, lorePath, validateLoreEntry } from './lore.js'
 import { charLen } from './text.js'
 import { guardPrompt } from './budget.js'
+import { processGrowth, appendPending, vetCorpus, vetLore, pruneBucket, GROWTH_LIMITS } from './growth.js'
 
 export {
   SPEC, validateCard, l0Checks, migrateLegacyMarkdown, injectedText,
   listPresets, saveCard, listVersions, readVersion, seedIfEmpty, readActive, writeActive, loadCard,
   deriveState, loadState, saveState, compilePersona, buildCore, normalizeBank, bankStats,
   resolveLoreIndex, lorePath, guardPrompt, debtLine, formOf, timeOfDayOf, hasEmoji,
-  materializeUserCopy, saveBank, writeLoreBody,
-}
-
-/** 表达库：file 模式读用户库，preset 模式读内置种子；都没有则 null。 */
-export const loadBank = (active = readActive()) => {
-  const own = readAssetJson('expression-bank.json', active)
-  if (own) return own
-  return readAssetJson('expression-bank.seed.json', active)
+  materializeUserCopy, saveBank, writeLoreBody, loadBank,
+  processGrowth, appendPending, vetCorpus, vetLore, pruneBucket, GROWTH_LIMITS,
 }
 
 const banner = (title) => `\n\n===== ${title} =====\n`
@@ -158,6 +153,7 @@ export const editExpressionBank = ({ action, form, id, text, source, heat, statu
       status: ['active', 'candidate'].includes(String(status)) ? String(status) : 'active',
       len: charLen(t),
       heat: Number(heat) || 0,
+      addedAt: new Date().toISOString(),
     }
     if (list.some((e) => e.id === entry.id)) entry.id = `${entry.id}#${Date.now().toString(36)}`
     bank.buckets[f] = [...list, entry]

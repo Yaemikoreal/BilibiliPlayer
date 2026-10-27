@@ -1641,6 +1641,122 @@ async def bili_followings(pn: int = 1, ps: int = 50, sort: str = "attention", ke
     })
 
 
+# ========== Tool: 人设沉淀候选（自演化管道；薄工具——只做结构预检 + 追加 pending，质检/入库在宿主 JS） ==========
+
+def _persona_pending_file() -> Path:
+    """growth-pending.jsonl 的路径：<家目录>/persona/。家目录解析与插件宿主同源（BILI_FENSHEN_HOME 优先）。"""
+    home = os.environ.get("BILI_FENSHEN_HOME") or os.path.join(
+        os.environ.get("HOME") or os.environ.get("USERPROFILE") or ".", ".dsh", "bili-fenshen")
+    return Path(home) / "persona" / "growth-pending.jsonl"
+
+_CORPUS_FORMS = {"reaction", "question", "experience", "meme", "detail", "rant"}
+
+
+@_gated_tool()
+async def bili_persona_note(
+    kind: str,
+    form: str = "",
+    text: str = "",
+    origin: str = "self",
+    source: str = "",
+    id: str = "",
+    keys: list[str] | None = None,
+    oneLine: str = "",
+    body: str = "",
+) -> str:
+    """
+    把值得沉淀的素材提交为「人设自演化候选」。提交后宿主会在下一轮值班启动前质检入库。
+
+    两种用法：
+    - kind="corpus"：沉淀一句语料（自己说过且想再用的话用 origin="self"；
+      社区都在用的公共梗用 origin="community" 并写明 source；**别人评论的原句绝对不许提交**）
+    - kind="lore"：沉淀一条见闻（这个号的生活碎片，如"照着做菜视频煮翻车了"；
+      只能编角色的生活细节，不许出现可被当真的现实事实）
+
+    Args:
+        kind: 'corpus'（语料）或 'lore'（见闻）
+        form: corpus 必填：reaction/question/experience/meme/detail/rant 六桶之一
+        text: corpus 必填：语料原文（≤100 字）
+        origin: corpus 用：'self'（自己发过的，宿主会跟账本对账）或 'community'（公共梗，≤30 字）
+        source: 来源说明（community 必填；self 可写互动情况，如"被赞 5 次"）
+        id: lore 可选：见闻 id（字母数字-连字符；缺了宿主生成）
+        keys: lore 必填：触发词列表（命中这些词时才读正文）
+        oneLine: lore 必填：一行摘要（≤40 字，会常驻 prompt）
+        body: lore 可选：正文（≤600 字，不注入，命中后才读）
+
+    Returns:
+        提交回执 JSON
+    """
+    pending = _persona_pending_file()
+    try:
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        existing = []
+        if pending.exists():
+            with open(pending, encoding="utf-8") as f:
+                existing = [ln for ln in f.read().split("\n") if ln.strip()]
+    except Exception as e:
+        return _err(f"候选文件读不了: {e}")
+
+    same_kind = 0
+    try:
+        for ln in existing:
+            obj = json.loads(ln)
+            if obj.get("kind") == kind:
+                same_kind += 1
+    except Exception:
+        same_kind = 0
+    if same_kind >= 5:
+        return _err(f"{kind} 候选已积压 {same_kind} 条（待宿主消化后再交）；沉淀是可选动作，这轮交够了")
+
+    entry: dict = {"kind": kind, "pendingAt": __import__("datetime").datetime.now().astimezone().isoformat()}
+
+    if kind == "corpus":
+        text = (text or "").strip()
+        if form not in _CORPUS_FORMS:
+            return _err(f"form 必须是 {'/'.join(sorted(_CORPUS_FORMS))} 之一，收到: {form or '空'}")
+        if not text:
+            return _err("text 不能为空")
+        if len(text) > 100:
+            return _err(f"text 超长（{len(text)} > 100 字）")
+        if origin not in ("self", "community"):
+            return _err(f"origin 只允许 self/community，收到: {origin}")
+        if origin == "community" and len(text) > 30:
+            return _err(f"公共梗应 ≤30 字（当前 {len(text)}），太长说明不是梗，是自己写的——用 origin=self 或别交")
+        if origin == "community" and not (source or "").strip():
+            return _err("公共梗必须写 source（出处性质）")
+        entry.update({"form": form, "text": text, "origin": origin, "source": (source or "").strip()})
+    elif kind == "lore":
+        kid = (id or "").strip()
+        if kid and not all(ch.isalnum() or ch in "-_" for ch in kid):
+            return _err(f"id 只允许字母数字下划线连字符: {kid}")
+        k = [str(x).strip() for x in (keys or []) if str(x).strip()]
+        if not k:
+            return _err("keys 不能为空（触发词，命中才读正文）")
+        oneLine = (oneLine or "").strip()
+        if not oneLine:
+            return _err("oneLine 不能为空（一行摘要，会常驻 prompt）")
+        if len(oneLine) > 40:
+            return _err(f"oneLine 超长（{len(oneLine)} > 40 字）")
+        if len((body or "").strip()) > 600:
+            return _err(f"正文超长（{len(body.strip())} > 600 字）")
+        entry.update({"id": kid, "keys": k, "oneLine": oneLine, "body": (body or "").strip()})
+    else:
+        return _err(f"kind 只允许 corpus/lore，收到: {kind or '空'}")
+
+    try:
+        with open(pending, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        return _err(f"候选写盘失败: {e}")
+
+    return _ok({
+        "success": True,
+        "message": "已提交候选，待宿主质检入库（过审先进候选区，每天限量自动转正）",
+        "kind": kind,
+        "pending_of_kind": same_kind + 1,
+    })
+
+
 # ========== 启动 ==========
 
 if __name__ == "__main__":

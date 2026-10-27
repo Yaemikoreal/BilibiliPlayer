@@ -34,6 +34,7 @@ import {
   listPresets, savePersonaCard, loadBank, bankStats, readActive, writeActive, l0Checks, SPEC,
   loadCard, listVersions, readVersion, normalizeBank, resolveLoreIndex, lorePath, loadState,
   editExpressionBank, editLoreIndex, writeLoreBody,
+  processGrowth,
 } from './lib/persona/index.js'
 import { toActivities, dayKeyOf } from './lib/activity.js'
 import { runDiagnose, formatDiagnoseText } from './lib/diagnose.js'
@@ -190,6 +191,10 @@ export const Config = !z ? undefined : z.object({
   dynamicPureText: z.boolean().default(true),
   /** 人设提示词（留空 = 中性说话；可填一段文字或一个文件路径） */
   personaPrompt: z.string().default(''),
+  /** 人设自演化：值班轮沉淀候选（bili_persona_note）→ 宿主质检入库 */
+  growthEnable: z.boolean().default(true),
+  /** 每天自动转正的候选上限（FIFO；0 = 只收候选不自动转正） */
+  growthAutoPromote: z.natural().default(3),
   /** 日报形态：full=完整 · brief=薄版 · off=不写 */
   reportLevel: z.string().default('full'),
   /** dsh 的 bin.js 路径（不填自动探测） */
@@ -208,6 +213,7 @@ export const Config = !z ? undefined : z.object({
     'bili_followings', 'bili_user_videos', 'bili_video_info', 'bili_subtitle', 'bili_comments',
     'bili_reply', 'bili_like', 'bili_send_dynamic', 'bili_check_credential',
     'bili_received_replies', 'bili_user_info',
+    'bili_persona_note', // 人设自演化：沉淀候选（growthEnable=false 时 overlay 自动剔除）
   ]),
 })
 
@@ -561,6 +567,8 @@ const buildOverlay = (cfg, em) => {
   const tools = Array.isArray(cfg?.dutyTools) && cfg.dutyTools.length ? cfg.dutyTools.slice() : ['bili_search', 'bili_video_info']
   // ⭐ 自动拉关注依赖 bili_followings：开了 followAuto 就确保白名单里有它（老配置的 dutyTools 是旧的冻结列表）
   if (cfg?.followAuto !== false && !tools.includes('bili_followings')) tools.push('bili_followings')
+  // ⭐ 人设自演化：开了 growth 管道才把沉淀工具给值班轮（老配置的冻结列表也要能拿到它）
+  if (cfg?.growthEnable !== false && !tools.includes('bili_persona_note')) tools.push('bili_persona_note')
   yml.push(
     '- insert:',
     '    - id: bili-fenshen-duty-mcp',
@@ -573,6 +581,7 @@ const buildOverlay = (cfg, em) => {
     `          - '${serverPy.replace(/'/g, "''")}'`,
     '        env:',
     `          BILI_MCP_TOOLS: '${tools.join(',')}'`,
+    `          BILI_FENSHEN_HOME: '${HOME.replace(/\\/g, "/")}'`,
     "          PYTHONUTF8: '1'",
     "          PYTHONIOENCODING: 'utf-8'",
     '',
@@ -678,6 +687,14 @@ const runDuty = async (why = 'manual') => {
       const seeded = seedIfEmpty({ legacyPrompt: cfg?.personaPrompt })
       if (seeded.seeded) log('首次运行：已播种默认人设 whale（开箱即用）')
     } catch (e) { log(`人设播种失败：${e?.message ?? e}`) }
+    // ⭐ 人设自演化：值班轮启动前先消化沉淀候选（质检→入库→限量转正）；失败绝不阻断值班
+    try {
+      const g = processGrowth({ cfg, events: readEvents(LEDGER_FILE) })
+      const s = g?.stats
+      if (s && (s.received || s.promoted || s.demoted)) {
+        log(`自生长：候选 ${s.received} · 语料+${s.acceptedCorpus} · 见闻+${s.acceptedLore} · 拒 ${s.rejected} · 转正 ${s.promoted} · 降级 ${s.demoted} · 清理 ${s.removed} · 过期 ${s.expired}`)
+      }
+    } catch (e) { log(`自生长管道失败（不阻断值班）：${e?.message ?? e}`) }
     if (running || starting) return { started: false, why, error: '上一轮还没结束' }
     const cli = dshCliCached(cfg)
     if (!cli) {
@@ -1573,6 +1590,13 @@ export function apply(ctx, config) {
   disposers.push(() => { try { clearInterval(hbTimer) } catch { /* 兜住 */ } })
 
   log(`dsh-bili-fenshen host 已激活（home=${HOME}，autoDuty=${!!effCfg().autoDuty}，profileRoot=${PROFILE_ROOT || '（无）'}）`)
+
+  // ── 启动即消化一次沉淀候选（停用自动值班也不让候选积压） ──
+  try {
+    const g = processGrowth({ cfg: effCfg(), events: readEvents(LEDGER_FILE) })
+    const s = g?.stats
+    if (s && s.received) log(`自生长（启动消化）：候选 ${s.received} · 语料+${s.acceptedCorpus} · 见闻+${s.acceptedLore} · 拒 ${s.rejected} · 转正 ${s.promoted}`)
+  } catch (e) { log(`自生长管道失败（不阻断启动）：${e?.message ?? e}`) }
 
   // ⭐ 正确的清理路径：Cordis 只保证 ctx.effect 的 disposer 在插件停止时执行；
   //    仅 return 一个函数在 HMR 重载/行 toggle 时实测不一定会被调用（旧路由/定时器会残留）。

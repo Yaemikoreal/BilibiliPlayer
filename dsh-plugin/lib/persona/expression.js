@@ -31,6 +31,7 @@ export const normalizeBank = (bank) => {
         status: e.status || 'candidate',
         len: typeof e.len === 'number' ? e.len : charLen(e.text),
         heat: Number(e.heat) || 0,
+        addedAt: e.addedAt || '', // 自演化管道用：转正 FIFO 与满额淘汰的排序键
       }))
     total += buckets[form].length
   }
