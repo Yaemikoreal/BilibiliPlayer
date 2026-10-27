@@ -267,19 +267,26 @@ test('credential fetchJson 立即 throw → warn、无 fix、不影响其余项'
 })
 
 test('credential fetchJson 挂起 → 内部短超时转 warn（不被单项总超时判 fail）', async () => {
-  const env = makeEnv({ fetchJson: () => new Promise(() => {}) }) // 永远不返回
-  const started = Date.now()
-  const report = await runDiagnose(env, { timeoutMs: 800 })
-  const elapsed = Date.now() - started
-  const it = item(report, 'credential')
-  assert.equal(it.status, 'warn')
-  assert.equal(it.detail, '连接 B站 失败/超时（网络或风控原因，稍后再试）')
-  assert.equal(it.fix, '')
-  assert.doesNotMatch(it.detail, /检查超时/)
-  // 内部预算 = min(5000, 800-200) = 600ms：应明显早于 800ms 单项总超时
-  assert.ok(it.durationMs >= 450 && it.durationMs < 800, `durationMs=${it.durationMs}`)
-  assert.ok(elapsed < 3000)
-  assert.equal(report.ok, true)
+  // withTimeout 的定时器是 unref 的，不持有事件循环；裸跑测试进程里若不保活，
+  // loop 会被抽干，node:test 直接取消本用例及之后所有用例。
+  const keepAlive = setTimeout(() => {}, 5_000)
+  try {
+    const env = makeEnv({ fetchJson: () => new Promise(() => {}) }) // 永远不返回
+    const started = Date.now()
+    const report = await runDiagnose(env, { timeoutMs: 800 })
+    const elapsed = Date.now() - started
+    const it = item(report, 'credential')
+    assert.equal(it.status, 'warn')
+    assert.equal(it.detail, '连接 B站 失败/超时（网络或风控原因，稍后再试）')
+    assert.equal(it.fix, '')
+    assert.doesNotMatch(it.detail, /检查超时/)
+    // 内部预算 = min(5000, 800-200) = 600ms：应明显早于 800ms 单项总超时
+    assert.ok(it.durationMs >= 450 && it.durationMs < 800, `durationMs=${it.durationMs}`)
+    assert.ok(elapsed < 3000)
+    assert.equal(report.ok, true)
+  } finally {
+    clearTimeout(keepAlive)
+  }
 })
 
 test('credential 风控 HTTP 非 2xx → warn 且无扫码 fix', async () => {
@@ -351,26 +358,32 @@ test('model：listModels 拉取失败 → warn 不 fail', async () => {
 /* ───────────────────────── 超时 / 抛异常 ───────────────────────── */
 
 test('单项超时 → 该 fail「超时」，其余项不受影响', async () => {
-  const env = makeEnv({
-    run: async (_cmd, args = []) => {
-      if (args[0] === '--version') return new Promise(() => {}) // 永不返回
-      if (args[0] === '-c') return { code: 0, stdout: '{"missing":[],"optionalMissing":[]}', stderr: '' }
-      return { code: 0, stdout: '', stderr: '' }
-    },
-  })
-  const started = Date.now()
-  const report = await runDiagnose(env, { timeoutMs: 40 })
-  const elapsed = Date.now() - started
-  const py = item(report, 'python')
-  assert.equal(py.status, 'fail')
-  assert.match(py.detail, /超时/)
-  assert.ok(py.fix)
-  assert.ok(py.durationMs >= 30, `durationMs=${py.durationMs}`)
-  assert.ok(elapsed < 2000)
-  // 一项超时不影响其余
-  assert.equal(item(report, 'deps').status, 'pass')
-  assert.equal(item(report, 'route').status, 'pass')
-  assert.equal(report.summary.fail, 1)
+  // 同上：unref 定时器不持有事件循环，裸跑时需要保活兜底
+  const keepAlive = setTimeout(() => {}, 5_000)
+  try {
+    const env = makeEnv({
+      run: async (_cmd, args = []) => {
+        if (args[0] === '--version') return new Promise(() => {}) // 永不返回
+        if (args[0] === '-c') return { code: 0, stdout: '{"missing":[],"optionalMissing":[]}', stderr: '' }
+        return { code: 0, stdout: '', stderr: '' }
+      },
+    })
+    const started = Date.now()
+    const report = await runDiagnose(env, { timeoutMs: 40 })
+    const elapsed = Date.now() - started
+    const py = item(report, 'python')
+    assert.equal(py.status, 'fail')
+    assert.match(py.detail, /超时/)
+    assert.ok(py.fix)
+    assert.ok(py.durationMs >= 30, `durationMs=${py.durationMs}`)
+    assert.ok(elapsed < 2000)
+    // 一项超时不影响其余
+    assert.equal(item(report, 'deps').status, 'pass')
+    assert.equal(item(report, 'route').status, 'pass')
+    assert.equal(report.summary.fail, 1)
+  } finally {
+    clearTimeout(keepAlive)
+  }
 })
 
 test('单项抛异常 → fail 并产出 item，不炸整轮', async () => {
