@@ -210,8 +210,14 @@ export const Config = !z ? undefined : z.object({
   /**
    * W7-2 发言门控档位：off=不门控（老行为）｜observe=只算只记不强制（默认）｜enforce=节奏太密时压上限。
    * 默认 observe：与质量门先 warn 三天同一个方法论 —— 先让数据跑出来，再谈拦。
+   *
+   * ⚠️ 这里必须用 `z.string()`，**不能用 `z.enum([...])`**：宿主注入的 `z` 是受限的 schema 构造器，
+   * 没有 `.enum()`。用了会在**导入期**抛 `TypeError: z.enum is not a function`，
+   * 后果是整个插件 entry 加载失败（fiberPhase=null，控制台显示"插件加载错误"），
+   * 而单测因为不走宿主的 schema 校验仍然全绿 —— 所以另加了 `test/plugin-load.test.js` 兜这条。
+   * 合法值由 `buildRoundGate` 在运行期收口（非法值回落 observe）。
    */
-  speakGateMode: z.enum(['off', 'observe', 'enforce']).default('observe'),
+  speakGateMode: z.string().default('observe'),
   /** 日报形态：full=完整 · brief=薄版 · off=不写 */
   reportLevel: z.string().default('full'),
   /** dsh 的 bin.js 路径（不填自动探测） */
