@@ -189,7 +189,10 @@ export function createApiHandler(deps) {
 
     write({ type: 'hello', seq: hub.seq, serverTime: new Date().toISOString() })
     let env = null
-    try { env = hub.view('stream-open') } catch { env = null }
+    // ⭐ 建连必须出一版**新**信封：首帧 seq 严格大于 hello 的 seq。
+    //    否则（数据已算过、不脏时 view() 返回同一个 seq）客户端的 seq 单调守卫
+    //    会把首帧丢掉，整份概览永远到不了页面。
+    try { env = typeof hub.bump === 'function' ? hub.bump('stream-open') : hub.view('stream-open') } catch { env = null }
     if (env) write({ type: 'overview', data: env })
     try { unsub = hub.subscribe((next) => write({ type: 'overview', data: next })) } catch { /* 至少保留首帧 */ }
 

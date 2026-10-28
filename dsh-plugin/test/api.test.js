@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createApiHandler } from '../lib/api.js'
+import { createOverviewHub } from '../lib/realtime.js'
 
 const dir = () => mkdtempSync(join(tmpdir(), 'bf-api-'))
 // 真实 seen.md 的逐字副本（2026-10-25 快照：59 行文件 = 标题 + 空行 + 57 条账本行）
@@ -200,4 +201,58 @@ test('GET /seen 备注行（无 BV）保留为 bvid 空 + action 原文，占位
   // 所有备注行都有内容，且不残留 list 分隔用的 - / — 占位符
   assert.ok(notes.every((x) => x.action && x.action !== '-' && x.action !== '—'))
   assert.ok(notes.every((x) => x.title !== '-' && x.title !== '—'))
+})
+
+/* ───────── SSE 建连顺序（2026-10-28 事故回归） ───────── */
+
+function fakeSseRes() {
+  return {
+    status: 0,
+    headers: {},
+    chunks: [],
+    ended: false,
+    writeHead(s, h) { this.status = s; this.headers = h || {} },
+    flushHeaders() {},
+    write(b) { this.chunks.push(String(b)); return true },
+    end() { this.ended = true },
+    on() {},
+  }
+}
+
+const framesOf = (res) => res.chunks.join('')
+  .split('\n\n')
+  .map((c) => c.replace(/^data: /, '').trim())
+  .filter((t) => t.startsWith('{'))
+  .map((t) => JSON.parse(t))
+
+test('GET /stream：hello 之后首帧 overview 的 seq 严格更大（否则客户端整份概览被吞）', async () => {
+  const hub = createOverviewHub({
+    compute: () => ({ quota: { picked: 3, limits: { perDay: 30 } }, health: { cli: '/x/bin.js' } }),
+    debounceMs: 0,
+    minIntervalMs: 0,
+  })
+  hub.view() // 先算一遍：数据已存在且不脏 —— 线上建连时就是这个状态（view 不会 +1）
+  const res = fakeSseRes()
+  const reqHandlers = {}
+  const req = {
+    method: 'GET',
+    url: '/api/bili-fenshen/stream',
+    on(ev, fn) { reqHandlers[ev] = fn },
+  }
+  const h = createApiHandler(deps({ overviewHub: hub }))
+  await h(req, res)
+
+  const frames = framesOf(res)
+  const hello = frames.find((f) => f.type === 'hello')
+  const first = frames.find((f) => f.type === 'overview')
+  assert.ok(hello, '应收到 hello 帧')
+  assert.ok(first, '应收到首帧 overview')
+  assert.ok(first.data.seq > hello.seq,
+    `首帧 seq 必须 > hello（hello=${hello.seq} first=${first.data.seq}）——相等就会被客户端 seq 守卫丢掉`)
+  assert.equal(first.data.quota.picked, 3)
+  assert.equal(first.data.ok, true)
+
+  // 收尾：触发 req close，让 SSE 定时器/订阅退掉，避免挂住测试进程
+  reqHandlers.close?.()
+  hub.close()
 })

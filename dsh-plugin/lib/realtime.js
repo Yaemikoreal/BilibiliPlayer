@@ -87,6 +87,17 @@ export function createOverviewHub(opts = {}) {
     },
     /** 标记有变更；按 debounce/最小间隔合并后重算并推送 */
     publish(reason = 'publish') { scheduleRun(reason) },
+    /**
+     * 强制重算并返回**新**信封（seq 一定 +1）。
+     * 用于新订阅者建连：hello 帧带 seq=N，首帧 overview 必须 seq>N，
+     * 否则客户端的「只接受更大 seq」守卫会把首帧当旧帧丢掉 —— 页面从此全空
+     * （2026-10-28 真机事故：概览配额/账号/健康/轮次整片空白）。
+     */
+    bump(reason = 'bump') {
+      if (closed) return envelope()
+      if (timer) { cancel(timer); timer = null }
+      return recompute(reason)
+    },
     /** 订阅（SSE 用）。返回退订函数。 */
     subscribe(fn) {
       if (typeof fn !== 'function') return () => {}

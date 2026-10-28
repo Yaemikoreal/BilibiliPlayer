@@ -156,6 +156,31 @@ test('hub：compute 抛错时保留上一次数据并置 degraded', () => {
   assert.ok(b.seq > a.seq)
 })
 
+test('hub：bump 强制 +1 —— 建连首帧的 seq 必须严格大于 hello 的 seq', () => {
+  const { hub } = mkHub(() => ({ v: 1 }))
+  const a = hub.view()                      // seq=1（线上建连时数据往往已经算过）
+  const helloSeq = hub.seq                  // hello 帧携带的 seq
+  const b = hub.bump('stream-open')
+  assert.equal(helloSeq, a.seq)
+  assert.ok(b.seq > helloSeq, '首帧 seq 必须严格大于 hello，否则客户端会丢掉整份概览')
+  assert.equal(b.v, 1)                      // 数据原样带上
+  const c = hub.bump()
+  assert.equal(c.seq, b.seq + 1)            // 继续单调 +1
+})
+
+test('hub：bump 吃掉待执行的重算（不重复算两次）', () => {
+  let calls = 0
+  const { hub, flush, hasPending } = mkHub(() => { calls += 1; return { n: calls } })
+  hub.view()                                // 1 次
+  hub.publish('x')
+  assert.equal(hasPending(), true)
+  const env = hub.bump('stream-open')
+  assert.equal(hasPending(), false, 'bump 之后不应还留着待执行的重算')
+  assert.equal(env.n, 2)
+  assert.equal(calls, 2)
+  assert.equal(flush(), null)
+})
+
 test('hub：subscribe 收到每帧，close 后不再推', () => {
   const seen = []
   const { hub, flush } = mkHub(() => ({ v: 1 }))

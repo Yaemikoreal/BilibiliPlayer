@@ -508,6 +508,12 @@ window.__ModuleLoader__.load({
       .bf-row-ctl .bf-select{min-width:180px}
       .bf-row-ctl .bf-input{width:280px;max-width:100%}
       .bf-row-ctl.wide{max-width:100%;width:100%;justify-content:flex-start}
+      /* wide 行（控件要占满整行的 textarea/chips）改上下布局：
+         否则 .bf-row-ctl 的 width:100% 会把 .bf-row-main（flex:1;min-width:0）
+         压成 0 宽，中文 label 就一字一行竖排了 */
+      .bf-row.wide{flex-direction:column;align-items:stretch;gap:8px}
+      .bf-row.wide .bf-row-main{flex:0 0 auto;min-width:0}
+      .bf-row.wide .bf-row-ctl{width:100%;max-width:100%;justify-content:flex-start;flex-wrap:wrap}
       .bf-savebar{position:sticky;bottom:12px;z-index:5;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
         padding:10px 14px;border:.5px solid var(--border-l2);border-radius:12px;background:var(--bg-layer-1);
         box-shadow:var(--dsw-elevation-soft,0 2px 8px rgba(0,0,0,.08))}
@@ -530,6 +536,8 @@ window.__ModuleLoader__.load({
       .bf-log-t{font-family:var(--font-code);font-size:11px;line-height:18px;color:var(--label-caption);
         flex:0 0 74px;font-variant-numeric:tabular-nums}
       .bf-log-msg{color:var(--label-secondary);min-width:0;word-break:break-word}
+      .bf-log-n{flex:0 0 auto;font-size:11px;line-height:18px;color:var(--label-caption);
+        font-variant-numeric:tabular-nums;padding:0 6px;border:.5px solid var(--border-l2);border-radius:6px}
       .bf-log-line.err .bf-log-msg{color:var(--error)}
       pre.bf-raw{margin:8px 0 0;padding:10px 12px;border-radius:8px;background:var(--bg-module-platform);
         border:.5px solid var(--border-l1);font-family:var(--font-code);font-size:11px;line-height:18px;
@@ -720,6 +728,7 @@ window.__ModuleLoader__.load({
       if (ref.current === null) {
         ref.current = {
           seq: initSeq, seenAt: 0, running: !!(initial && initial.round && initial.round.running),
+          hasData: !!(initial && typeof initial === 'object' && Object.keys(initial).length),
           alive: true, mode: useSse && typeof EventSource !== 'undefined' ? 'sse' : 'poll',
           es: null, timer: null, ac: null, reqId: 0,
         }
@@ -743,9 +752,13 @@ window.__ModuleLoader__.load({
           if (!payload || typeof payload !== 'object') return false
           const seq = Number(payload.seq)
           if (Number.isFinite(seq)) {
-            if (seq <= r.seq) return false          // ← seq 单调守卫：旧帧直接丢
-            r.seq = seq
+            // seq 守卫只挡「旧帧覆盖新帧」。第一帧无条件接受——建连时 hello 已把 r.seq
+            // 推到服务端当前值，而首帧 overview 常常就是同一个 seq（2026-10-28 事故：
+            // 整份概览因此永远空白，连「刷新」都救不回来）。
+            if (r.hasData && seq <= r.seq) return false
+            r.seq = Math.max(r.seq, seq)
           }
+          r.hasData = true
           r.running = !!(payload.round && payload.round.running)
           r.seenAt = Date.now()
           setState((p) => ({
@@ -762,10 +775,8 @@ window.__ModuleLoader__.load({
         /** tick 帧：只补运行中会变的三个字段，不做整包替换 */
         const applyTick = (frame) => {
           const seq = Number(frame && frame.seq)
-          if (Number.isFinite(seq)) {
-            if (seq <= r.seq) return
-            r.seq = seq
-          }
+          // tick 是同一版信封的增量（seq 与当前 seq 相等是常态），只挡「更旧」的帧
+          if (Number.isFinite(seq) && seq < r.seq) return
           r.seenAt = Date.now()
           setState((p) => {
             if (!p.data) return p
@@ -901,8 +912,9 @@ window.__ModuleLoader__.load({
               return
             }
             const seq = Number(payload.seq)
-            if (Number.isFinite(seq) && seq <= r.seq) return
-            if (Number.isFinite(seq)) r.seq = seq
+            if (Number.isFinite(seq) && r.hasData && seq <= r.seq) return
+            if (Number.isFinite(seq)) r.seq = Math.max(r.seq, seq)
+            r.hasData = true
             r.running = !!(payload.round && payload.round.running)
             r.seenAt = Date.now()
             setState((p) => ({
@@ -1227,7 +1239,7 @@ window.__ModuleLoader__.load({
 
     /** 行式字段：label+说明 左，控件 右（行高 60） */
     const Row = ({ label, help, children, wide }) =>
-      h('div', { className: 'bf-row' },
+      h('div', { className: 'bf-row' + (wide ? ' wide' : '') },
         h('div', { className: 'bf-row-main' },
           h('div', { className: 'bf-row-label' }, label),
           help ? h('div', { className: 'bf-row-help' }, help) : null,
@@ -1272,7 +1284,7 @@ window.__ModuleLoader__.load({
         items.push({ tone: 'warn', text: '未登录，点赞/评论/动态都会失败。', action: '扫码登录', onAction: onLogin })
       }
       if (health && !health.cli) {
-        items.push({ tone: 'error', text: '找不到 dsh CLI，值班轮跑不起来 —— 到「设置 → 运行环境」填写 dshBin。' })
+        items.push({ tone: 'error', text: '找不到 dsh CLI，值班轮跑不起来 —— 到「设置 → 运行环境」的「dsh CLI」填 bin.js 路径（一般留空即可自动探测）。' })
       }
       if (round && round.lastCode != null && round.lastCode !== 0) {
         items.push({ tone: 'error', text: `上一轮退出码 ${round.lastCode}（${round.lastWhy || '未知来源'}）—— 到「设置 → 运行环境」看宿主日志尾部。` })
@@ -2488,11 +2500,13 @@ window.__ModuleLoader__.load({
       return h(Group, { title: '模型', note: '只影响值班轮（headless 会话），不影响当前对话。' },
         h(Row, {
           label: '当前生效',
-          help: loading ? '加载中…' : (eff ? `${eff.provider || '—'} / ${eff.model || '—'}` : '取不到当前会话模型'),
+          help: loading ? '加载中…' : (eff ? `${eff.provider || '—'} / ${eff.model || '—'}（${eff.mode === 'config' ? '按插件配置' : '跟随当前会话'}）` : '取不到当前会话模型'),
         },
-          eff ? h(Pill, { tone: 'ok' }, eff.mode === 'config' ? '插件配置' : '跟随默认') : null,
+          eff ? h(Pill, { tone: 'ok' }, eff.mode === 'config' ? '插件配置' : '跟随会话') : null,
           eff?.reasoningEffort ? h(Tag, null, `推理 ${eff.reasoningEffort}`) : null,
-          h(Btn, { small: true, variant: 'ghost', onClick: onFollow }, '跟随当前会话模型'),
+          eff && eff.mode === 'config'
+            ? h(Btn, { small: true, variant: 'ghost', onClick: onFollow }, '改为跟随当前会话')
+            : null,
         ),
         h(Row, { label: 'provider', help: '值班轮使用的模型供应商' },
           h(Select, {
@@ -2679,14 +2693,25 @@ window.__ModuleLoader__.load({
       const log = usePoll(React.useCallback(() => apiGet('/log?tail=200'), []), 5000)
       const [openRaw, setOpenRaw] = React.useState(false)
       const events = log.data?.events || []
-      const list = events.length
-        ? events.slice(-40).map((line, i) => {
-            const t = /^\[(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\]/.exec(line)
-            const msg = t ? line.slice(t[0].length) : line
-            const err = /失败|错误|异常|error/i.test(msg)
+      // 折叠连续重复行（`dshBin 探测` 这类每次重扫都一样的行会刷屏，把真错误淹掉）
+      const parsed = events.slice(-80).map((line) => {
+        const t = /^\[(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\]/.exec(line)
+        return { time: t ? t[1] : '', msg: t ? line.slice(t[0].length) : String(line) }
+      })
+      const collapsed = []
+      for (const x of parsed) {
+        const prev = collapsed[collapsed.length - 1]
+        if (prev && prev.msg === x.msg) { prev.n += 1; continue }
+        collapsed.push({ ...x, n: 1 })
+      }
+      const shown = collapsed.slice(-40)
+      const list = shown.length
+        ? shown.map((x, i) => {
+            const err = /失败|错误|异常|error/i.test(x.msg)
             return h('div', { className: `bf-log-line${err ? ' err' : ''}`, key: i },
-              h('span', { className: 'bf-log-t' }, t ? hhmmss(t[1]) : ''),
-              h('span', { className: 'bf-log-msg' }, msg),
+              h('span', { className: 'bf-log-t' }, x.time ? hhmmss(x.time) : ''),
+              h('span', { className: 'bf-log-msg' }, x.msg),
+              x.n > 1 ? h('span', { className: 'bf-log-n' }, '×' + x.n) : null,
             )
           })
         : h('div', { className: 'bf-note' }, '（还没有宿主事件）')
@@ -2970,7 +2995,9 @@ window.__ModuleLoader__.load({
           const ratio = lim > 0 ? Math.round((used / lim) * 100) : 0
           return h('div', { className: 'bf-metric', key: label },
             h('div', { className: 'bf-metric-label' }, label),
-            h('div', { className: 'bf-metric-value' }, String(used), lim ? h('small', null, '/ ' + lim) : null),
+            h('div', { className: 'bf-metric-value' }, String(used),
+              // 上限必须始终可见：0 = 该项关闭（动态默认 0），否则瓦片只有数字，标题里的「上限」形同虚设
+              lim ? h('small', null, '/ ' + lim) : h('small', null, '· 关')),
             h('div', { className: 'bf-bar' }, h('i', {
               // 用满（=100%）是正常状态，只有超配才标红；旧版 1/1 也标红，看着像出错
               className: ratio > 100 ? 'over' : ratio >= 80 ? 'warn' : '',
@@ -2986,6 +3013,9 @@ window.__ModuleLoader__.load({
     function PresenceCard({ presence }) {
       const p = presence || {}
       const avail = p.available !== false
+      // 「收到的赞」B站没有通知接口：likesAvailable:false 时必须显「无数据源」，
+      // 不能跟着 available 一起显示假 0（交付记录 §5 的承诺）。
+      const likesAvail = avail && p.likesAvailable !== false
       const trend = Array.isArray(p.trend) ? p.trend : []
       const max = Math.max(1, ...trend.map((x) => Number(x.count) || 0))
       return h(Card, null,
@@ -2994,11 +3024,11 @@ window.__ModuleLoader__.load({
           h('span', { className: 'bf-card-note' }, '收到点赞 / 被回复 / 发出的评论'),
         ),
         h('div', { className: 'bf-grid-3' },
-          h(Metric, { label: '收到点赞', value: avail ? fmtNum(p.likes7d ?? 0) : '—', foot: avail ? '正向证据才算可见' : '无数据源' }),
+          h(Metric, { label: '收到点赞', value: likesAvail ? fmtNum(p.likes7d ?? 0) : '—', foot: likesAvail ? '正向证据才算可见' : '无数据源' }),
           h(Metric, { label: '被回复', value: fmtNum(p.replies7d ?? 0), foot: '来自通知流' }),
           h(Metric, { label: '发出的评论', value: fmtNum(p.comments7d ?? 0), foot: '最近 7 天' }),
         ),
-        !avail && p.note ? h('div', { className: 'bf-note', style: { marginTop: 10 } }, p.note) : null,
+        p.note && (!avail || !likesAvail) ? h('div', { className: 'bf-note', style: { marginTop: 10 } }, p.note) : null,
         avail && trend.length
           ? h('div', { style: { marginTop: 12 } },
               h('div', { className: 'bf-note', style: { marginBottom: 2 } }, '每日分布'),
@@ -3024,10 +3054,16 @@ window.__ModuleLoader__.load({
 
     /** 人设一句话 + 健康检查（各一行，可展开） */
     function PersonaHealthCard({ persona, health, model, onGo }) {
-      const p = persona || {}
+      // persona 传进来的是 usePoll 的 **hook 对象**（{data,error,at}），数据在 .data 里；
+      // 半兼容 initial.persona（已经是数据本身）。解包错了就会永远「未加载 / 语料 0 条」。
+      const p = (persona && persona.data) || persona || {}
       const ph = p.health || {}
       const pact = p.active || {}
       const preset = (p.presets || []).find((x) => x.id === pact.presetId) || null
+      // 生效的是用户自己编辑的卡（active.mode='file'，没有 presetId）时，preset 查不到，
+      // 但 p.card 里就有真实卡名/版本 —— 不能因此显示「未加载」。
+      const cardName = preset?.name || (p.card && p.card.name) || ''
+      const cardVer = preset?.version || (p.card && p.card.version) || ''
       const l0checks = ((ph.l0 || {}).checks) || []
       const legacy = ph.mode === 'legacy'
       const items = [
@@ -3059,7 +3095,8 @@ window.__ModuleLoader__.load({
         ),
         h('div', { className: 'bf-tools' },
           h(Pill, { tone: legacy ? 'warn' : 'ok' }, legacy ? 'legacy 直通' : '卡生效'),
-          h('span', { className: 'bf-strong' }, preset?.name || (legacy ? '旧格式人设' : '未加载')),
+          h('span', { className: 'bf-strong' },
+            cardName ? cardName + (cardVer ? ' @' + cardVer : '') : (legacy ? '旧格式人设' : '未加载')),
           l0checks.length
             ? h(Tag, { kind: 'like' }, 'L0 ' + l0checks.filter((c) => c.level === 'pass').length + '/' + l0checks.length)
             : null,
@@ -3098,6 +3135,9 @@ window.__ModuleLoader__.load({
       const mode = (rt && rt.mode) || 'poll'
       const ageMs = (rt && rt.ageMs) || 0
       const err = (rt && rt.error) || ''
+      // 信封还没到时 data 是 {}：此时 health.cli 必然是 undefined，如果照样渲染横幅
+      // 就会把「加载中」误报成「找不到 dsh CLI」（2026-10-28 真机就踩过）。
+      const loaded = !!Object.keys(data).length
 
       const statusLine = h('div', { className: 'bf-statusline' },
         running ? h(Pill, { tone: 'ok' }, '运行中') : h(Pill, { tone: 'off' }, '空闲'),
@@ -3120,7 +3160,7 @@ window.__ModuleLoader__.load({
             running ? T.stop : T.run),
         ),
         h('div', { className: 'bf-pagemain' },
-          h(Banner, { health, account, round, onLogin }),
+          h(Banner, { health: loaded ? health : null, account: loaded ? account : null, round: loaded ? round : {}, onLogin }),
           statusLine,
           h(TodayCard, { quota, presence, act, onGo }),
           h(ProactiveCard, { quota, round, act, onGo }),

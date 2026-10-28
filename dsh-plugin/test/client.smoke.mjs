@@ -55,10 +55,26 @@ new Function('window', code)(globalThis.window)
 
 console.log('injected slots:', injected.join(', '))
 console.log('registered:', JSON.stringify(registered))
+
+/* ── 源码级回归守卫 ──
+   下面几处是纯浏览器行为（SSE 帧序、flex 布局、hook 解包），Node 里跑不出来，
+   用最小源码断言防止被后来的重构悄悄改回去（2026-10-28 控制台事故）。 */
+const mustHave = [
+  ['首帧无条件接受（seq 守卫只在有数据后生效）', /if \(r\.hasData && seq <= r\.seq\) return false/],
+  ['tick 允许与当前信封同 seq', /Number\.isFinite\(seq\) && seq < r\.seq\) return/],
+  ['wide 行改上下布局（防 label 竖排）', /\.bf-row\.wide\{flex-direction:column/],
+  ['Row 输出 wide 类名', /'bf-row' \+ \(wide \? ' wide' : ''\)/],
+  ['人设卡解包 hook.data', /\(persona && persona\.data\) \|\| persona/],
+  ['收赞按 likesAvailable 显无数据源', /likesAvailable !== false/],
+]
+const missed = mustHave.filter(([, re]) => !re.test(code)).map(([name]) => name)
+for (const name of missed) console.log('MISSING:', name)
+
 const ok = injected.length === 3
   && injected.includes('sidebar.panellist')
   && injected.includes('main')
   && injected.includes('settings.section')
   && registered.every((r) => r.hasComponent)
+  && missed.length === 0
 console.log(ok ? 'SMOKE OK' : 'SMOKE FAIL')
 process.exit(ok ? 0 : 1)

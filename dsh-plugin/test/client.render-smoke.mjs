@@ -104,7 +104,13 @@ const expectPage = (label, html, markers) => {
 const render = (props) => renderToString(React.createElement(mainComp, props))
 
 /* ═════════ ① 概览 ═════════ */
-const homeHtml = check('ConsolePage（v4 · 概览）', () => render({ initialData: { ov: FIX['/api/bili-fenshen/overview'], act: FIX['/api/bili-fenshen/activity'] } }))
+const homeHtml = check('ConsolePage（v4 · 概览）', () => render({
+  initialData: {
+    ov: FIX['/api/bili-fenshen/overview'],
+    act: FIX['/api/bili-fenshen/activity'],
+    persona: FIX['/api/bili-fenshen/persona'],
+  },
+}))
 expectPage('v4 概览', homeHtml, [
   '概览',                                  // 页标题
   '让小号在B站保持存在感',                  // intro
@@ -118,6 +124,11 @@ expectPage('v4 概览', homeHtml, [
   '存在感（近 7 天）',                      // ⑦ 存在感
   '人设与健康', '健康检查明细',              // ⑧ 人设一句话 + 健康
 ])
+// 回归（2026-10-28 事故）：人设卡必须解包 persona.data，否则永远「未加载 / 语料 0 条」
+expectAll('v4 概览人设卡', homeHtml, ['蓝色大肥鱼', '语料 23 条', '卡生效'])
+if (homeHtml.includes('未加载')) { console.log('✗ FAIL 概览人设卡不应出现「未加载」（persona.data 未解包）'); bad++ }
+// 回归：配额上限必须始终可见（不能只印数字，标题却写「上限」）
+expectAll('v4 配额上限', homeHtml, ['/ 5', '/ 10', '/ 3'])
 // 5 个一级页签、且没有「实时」「判重表」页签
 expectAll('v4 页签', homeHtml, ['概览', '活动', '日报', '人设', '设置'])
 if (count(homeHtml, /role="tab"/g) !== 5) {
@@ -126,6 +137,39 @@ if (count(homeHtml, /role="tab"/g) !== 5) {
 // 空数据态：schema 缺失也不能崩
 const homeEmpty = check('ConsolePage（v4 · 概览 · 空数据）', () => render({ initialData: { ov: {} } }))
 expectAll('v4 概览空数据', homeEmpty, ['今日产出', '配额', '跑一轮'])
+// 回归（2026-10-28 事故）：信封还没到时不能把「加载中」误报成「找不到 dsh CLI」
+if (homeEmpty.includes('找不到 dsh CLI')) {
+  console.log('✗ FAIL 空数据态不应渲染「找不到 dsh CLI」横幅（health 为空不能当缺失）'); bad++
+}
+
+// 回归：presence.available=true 但 likesAvailable=false —— 收赞必须「—/无数据源」+ 说明，不能假 0
+const likesMissing = check('ConsolePage（v4 · 概览 · 收赞无数据源）', () => render({
+  initialData: {
+    ov: {
+      ...FIX['/api/bili-fenshen/overview'],
+      presence: {
+        available: true, likesAvailable: false,
+        likes7d: 0, replies7d: 2, comments7d: 7,
+        trend: [], latest: null,
+        note: 'B站没有「收到的赞」通知接口，收赞一栏暂不统计。',
+      },
+    },
+  },
+}))
+expectAll('v4 收赞无数据源', likesMissing, ['收到点赞', '无数据源', 'B站没有「收到的赞」通知接口'])
+
+// 回归：生效的是用户自己编辑的卡（active.mode='file'，没有 presetId）也要显示卡名，不能「未加载」
+const fileCardHtml = check('ConsolePage（v4 · 概览 · 自定义卡）', () => render({
+  initialData: {
+    ov: FIX['/api/bili-fenshen/overview'],
+    persona: {
+      ...FIX['/api/bili-fenshen/persona'],
+      active: { mode: 'file', path: 'C:/h/persona/card.json' },
+    },
+  },
+}))
+expectAll('v4 概览自定义卡', fileCardHtml, ['蓝色大肥鱼', '卡生效', '@2.0.0'])
+if (fileCardHtml.includes('未加载')) { console.log('✗ FAIL 自定义卡（无 presetId）不应显示「未加载」'); bad++ }
 
 /* ═════════ ② 概览 · 运行中（原「实时」页并入） ═════════ */
 const runningHtml = check('ConsolePage（v4 · 概览 · 运行中）', () => render({
