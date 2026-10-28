@@ -753,6 +753,34 @@ const resolveEffectiveModel = async (cfg) => {
   return { ...em, reasoningEffort: '' }
 }
 
+/**
+ * 本轮值班轮的 MCP 工具白名单（`BILI_MCP_TOOLS`）。
+ *
+ * 为什么要单独抽出来：老用户的 `dutyTools` 是**冻结列表**，新增工具不补进去 = 线上模型永远调不到
+ * （W6-1 的 `bili_persona_lore`、本轮的 `bili_feed` / `bili_ledger_append` / `bili_report_append`
+ * 都是这么补进来的）。抽成纯函数后可以直接单测，不用起宿主。
+ *
+ * @param {object} cfg 生效配置
+ * @returns {string[]} 工具名列表（去重、保持顺序）
+ */
+export const dutyToolList = (cfg) => {
+  const list = Array.isArray(cfg?.dutyTools) && cfg.dutyTools.length
+    ? cfg.dutyTools.slice()
+    : ['bili_search', 'bili_video_info']
+  const add = (...names) => {
+    for (const n of names) if (n && !list.includes(n)) list.push(n)
+  }
+  // 自动拉关注依赖 bili_followings：开了 followAuto 就确保白名单里有它（老配置的 dutyTools 是旧的冻结列表）
+  if (cfg?.followAuto !== false) add('bili_followings')
+  // 人设自演化：开了 growth 管道才把沉淀工具给值班轮
+  if (cfg?.growthEnable !== false) add('bili_persona_note')
+  // W6-1 见闻正文按需读：不给的话线上模型永远调不到这个工具
+  add('bili_persona_lore')
+  // 2026-10-29（§16.5-1/2）：内容源一次拉齐 + 宿主侧记账/报告（省调用、免手写 JSONL/Markdown）
+  add('bili_feed', 'bili_ledger_append', 'bili_report_append')
+  return list
+}
+
 const buildOverlay = (cfg, em) => {
   const yml = []
   // ⭐ headless（0.2.1-rc.2）默认禁用三个服务 ⇒ overlay 是最后一层，把它们打开
@@ -794,13 +822,7 @@ const buildOverlay = (cfg, em) => {
   const posix = (p) => String(p).replace(/\\/g, '/')
   const venvPython = VENV_PYTHON.replace(/\\/g, '/')
   const serverPy = join(PROJECT_ROOT, 'mcp_server.py').replace(/\\/g, '/')
-  const tools = Array.isArray(cfg?.dutyTools) && cfg.dutyTools.length ? cfg.dutyTools.slice() : ['bili_search', 'bili_video_info']
-  // ⭐ 自动拉关注依赖 bili_followings：开了 followAuto 就确保白名单里有它（老配置的 dutyTools 是旧的冻结列表）
-  if (cfg?.followAuto !== false && !tools.includes('bili_followings')) tools.push('bili_followings')
-  // ⭐ 人设自演化：开了 growth 管道才把沉淀工具给值班轮（老配置的冻结列表也要能拿到它）
-  if (cfg?.growthEnable !== false && !tools.includes('bili_persona_note')) tools.push('bili_persona_note')
-  // ⭐ W6-1 见闻正文按需读：同样补进老配置的冻结白名单（不给的话线上模型永远调不到这个工具）
-  if (!tools.includes('bili_persona_lore')) tools.push('bili_persona_lore')
+  const tools = dutyToolList(cfg)
   yml.push(
     '- insert:',
     '    - id: bili-fenshen-duty-mcp',

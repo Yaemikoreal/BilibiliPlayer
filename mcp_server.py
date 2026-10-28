@@ -1935,6 +1935,346 @@ async def bili_followings(pn: int = 1, ps: int = 50, sort: str = "attention", ke
     })
 
 
+# ========== 值班轮工具 A：内容源一次拉齐（关注池最新投稿 + 账本过滤） ==========
+#
+# 为什么要有这个工具（计划 §16.5-1 / §17）：
+#   以前一轮的发现阶段是「bili_followings + 每个 UP 一次 bili_user_videos」——
+#   2026-10-29 真实日志：第三轮查了 6 个 UP ≈ 6 次调用，20 次预算被吃掉一大块，
+#   模型还得在「先扫哪几个」上反复权衡（配置写的还是 40）。服务端一次循环解决：
+#   关注池取前 N 个 → 并行拉每人最新 M 条 → 用账本过滤掉已看过的 → 只把没看过的返回。
+# 纪律：
+#   1. 纯读；单个 UP 失败只进 failures，不影响其他 UP；
+#   2. 账本过滤是"尽力而为"：读不到账本就照常全部返回（seen 全 false），绝不因此失败；
+#   3. 返回体积可控：默认 8 个 UP × 3 条，最多 20 × 5。
+
+_FEED_MAX_UPS = 20
+_FEED_MAX_PER_UP = 5
+_FEED_CONCURRENCY = 4
+_BV_FULL_RE = re.compile(r"^BV[0-9A-Za-z]{8,12}$")
+
+
+def _iso_local(ts) -> str:
+    """unix 秒 → 本地时区 ISO（模型看"几小时前"比看 epoch 有用）。"""
+    try:
+        return datetime.fromtimestamp(int(ts)).astimezone().isoformat(timespec="seconds")
+    except Exception:
+        return ""
+
+
+def _ledger_read_events(limit: int = 0) -> list:
+    """读账本事件。
+
+    一行可能塞了多个对象（2026-10-25 的真实事故：`{...}{...}` 导致整行解析失败、
+    当天配额全消失）——所以这里用 raw_decode 逐个扫，容忍老账本里的坏行。
+    """
+    out: list = []
+    path = _persona_home() / "ledger.jsonl"
+    try:
+        if not path.exists():
+            return out
+        dec = json.JSONDecoder()
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+                i = 0
+                while i < len(s):
+                    while i < len(s) and s[i] in " \t":
+                        i += 1
+                    if i >= len(s):
+                        break
+                    try:
+                        obj, j = dec.raw_decode(s, i)
+                    except Exception:
+                        break
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                    i = j
+    except Exception:
+        return out
+    return out[-limit:] if limit and limit > 0 else out
+
+
+def _ledger_seen_bvids() -> set:
+    """账本里"看过/动作过"的 BV（与 dsh-plugin/lib/seen.js 同口径：任何带合法 BV 的事件都算）。"""
+    seen: set = set()
+    for ev in _ledger_read_events():
+        bv = ev.get("bvid")
+        if isinstance(bv, str) and _BV_FULL_RE.match(bv):
+            seen.add(bv)
+    return seen
+
+
+@_gated_tool()
+async def bili_feed(limit_up: int = 8, per_up: int = 3, only_new: bool = True) -> str:
+    """
+    一次拿到「最常访问」前 N 个关注 UP 主的最新投稿，并已按账本标好"看过/没看过"
+
+    这是"拉内容源"的第一档首选：一次调用顶掉「bili_followings + N 次 bili_user_videos」。
+    返回里 seen=True 的视频**直接丢**（账本里已经看过/赞过/评过/跳过过），别再花调用。
+
+    Args:
+        limit_up: 取前几个常看 UP 主，默认 8（上限 20）
+        per_up: 每个 UP 主拉最新几条，默认 3（上限 5）
+        only_new: True=只返回账本里没看过的（默认）；False=全返回并带 seen 标记
+
+    Returns:
+        videos（按发布时间倒序的候选，带 up/mid/seen）、ups（每个 UP 的新旧计数）、
+        skippedSeen、failures（单个 UP 失败不影响其他人）
+    """
+    cred = get_cred()
+    uid = str(cred.dedeuserid or "").strip()
+    if not uid.isdigit():
+        return _err("凭证里缺少 dedeuserid，无法拉关注池；请重新扫码登录")
+    limit = max(1, min(int(limit_up or 8), _FEED_MAX_UPS))
+    per = max(1, min(int(per_up or 3), _FEED_MAX_PER_UP))
+    me = user.User(uid=int(uid), credential=cred)
+    try:
+        fol = await me.get_followings(pn=1, ps=limit, attention=True, order=user.OrderType.desc)
+    except Exception as e:
+        return _err(f"拉关注列表失败: {e}（可退回 bili_followings + bili_user_videos）")
+    ups = [x for x in (fol.get("list") or []) if x.get("mid")]
+    if not ups:
+        return _ok({"success": True, "videos": [], "ups": [], "skippedSeen": 0, "failures": [],
+                    "hint": "关注列表是空的（先关注几个 UP 主，或改用关键词搜索）"})
+    seen = _ledger_seen_bvids()
+    sem = asyncio.Semaphore(_FEED_CONCURRENCY)
+
+    async def pull(x):
+        mid = int(x.get("mid"))
+        name = str(x.get("uname") or "")
+        async with sem:
+            try:
+                r = await user.User(uid=mid, credential=cred).get_videos(
+                    pn=1, ps=per, order=user.VideoOrder.PUBDATE)
+            except Exception as e:
+                return {"mid": mid, "uname": name, "error": str(e)[:120], "videos": []}
+        vlist = ((r.get("list") or {}).get("vlist")) or []
+        out = []
+        for it in vlist:
+            bv = str(it.get("bvid") or "")
+            out.append({
+                "bvid": bv,
+                "title": str(it.get("title") or ""),
+                "play": it.get("play", 0),
+                "comment": it.get("comment", 0),
+                "created": it.get("created", 0),
+                "publishedAt": _iso_local(it.get("created")),
+                "length": str(it.get("length") or ""),
+                "description": str(it.get("description") or "")[:100],
+                "seen": bv in seen,
+            })
+        return {"mid": mid, "uname": name, "error": "", "videos": out}
+
+    results = await asyncio.gather(*[pull(x) for x in ups])
+    videos: list = []
+    failures: list = []
+    up_rows: list = []
+    skipped = 0
+    for r in results:
+        if r.get("error"):
+            failures.append({"mid": r["mid"], "uname": r["uname"], "error": r["error"]})
+            continue
+        fresh = [v for v in r["videos"] if not v["seen"]]
+        skipped += len(r["videos"]) - len(fresh)
+        up_rows.append({"mid": r["mid"], "uname": r["uname"], "new": len(fresh),
+                        "seen": len(r["videos"]) - len(fresh), "total": len(r["videos"])})
+        for v in (fresh if only_new else r["videos"]):
+            v2 = dict(v)
+            v2["up"] = r["uname"]
+            v2["mid"] = r["mid"]
+            videos.append(v2)
+    videos.sort(key=lambda v: int(v.get("created") or 0), reverse=True)
+    return _ok({
+        "success": True,
+        "videos": videos,
+        "ups": up_rows,
+        "newVideos": sum(1 for v in videos if not v["seen"]),
+        "skippedSeen": skipped,
+        "failures": failures,
+        "note": "seen=true 的别再看/别再评；只挑真正没看过的判",
+    })
+
+
+# ========== 值班轮工具 B：记账 / 报告（宿主写盘，模型不必碰文件编码） ==========
+#
+# 为什么要把「写账本 / 写报告」变成工具（计划 §16.5-2）：
+#   模型现在用 pwsh here-string 手拼 JSONL / Markdown —— 2026-10-25 出过"一行塞两条 ⇒
+#   当天配额全消失"的事故；2026-10-29 又为"控制台乱码"白烧了 2 次调用去回读校验。
+#   工具化之后：t / round 由宿主补（模型不可能写错），字段按类型校验，重复条目直接拒，
+#   UTF-8 一次写一行 —— 编码问题从"模型要小心"变成"结构上不可能"。
+
+_LEDGER_REQUIRED = {
+    "view": ("bvid",),
+    "like": ("bvid",),
+    "comment": ("bvid", "text"),
+    "dynamic": ("text",),
+    "skip": ("bvid", "reason"),
+    "reply-out": ("bvid", "parent", "text"),
+    "reply-scan": ("bvid", "decision"),
+    "note": ("text",),
+}
+_LEDGER_MAX_EVENTS = 40
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _current_round_id() -> str:
+    """本轮 round id = 宿主起轮时写进 state.json 的 lastRunStartedAt（与 prompt 里那个值同源）。"""
+    st = _persona_read_json(_persona_home() / "state.json") or {}
+    return str(st.get("lastRunStartedAt") or "")
+
+
+def _validate_ledger_event(ev, idx: int, round_id: str):
+    """单条事件校验 + 补 t/round。返回 (obj, error)。"""
+    if not isinstance(ev, dict):
+        return None, "不是对象"
+    kind = str(ev.get("type") or "").strip()
+    if kind not in _LEDGER_REQUIRED:
+        return None, f"type 只允许 {'/'.join(_LEDGER_REQUIRED)}，收到 {kind or '空'}"
+    for key in _LEDGER_REQUIRED[kind]:
+        val = ev.get(key)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            return None, f"{kind} 缺必填字段 {key}"
+    bv = ev.get("bvid")
+    if bv not in (None, "") and not _BV_FULL_RE.match(str(bv)):
+        return None, f"bvid 格式不合法: {bv}"
+    if kind == "reply-scan":
+        decision = str(ev.get("decision") or "").strip()
+        if decision not in ("posted", "skipped"):
+            return None, "reply-scan.decision 只能是 posted / skipped"
+        if decision == "posted" and ev.get("targetRpid") is None:
+            return None, "reply-scan(decision=posted) 必须带 targetRpid"
+    if kind == "reply-out":
+        try:
+            int(ev.get("parent"))
+        except Exception:
+            return None, "reply-out.parent 必须是对方评论 rpid（整数）"
+    out = dict(ev)
+    out.setdefault("t", _now_iso())
+    if not out.get("round"):
+        out["round"] = round_id
+    return out, ""
+
+
+@_gated_tool()
+async def bili_ledger_append(events: list[dict]) -> str:
+    """
+    把本轮动作一次性追加进账本（宿主补 t/round、校验字段、去重、UTF-8 落盘）
+
+    **首选这个，不要用 pwsh 手写 ledger.jsonl**。每条事件的 `t` 和 `round` 缺省由宿主补，
+    你只需要写业务字段。被拒的条目看 rejected 里的 reason 改完再发（不要重试同一条）。
+
+    Args:
+        events: 事件数组，每个对象带 type 与必填字段。例：
+            [{"type":"view","bvid":"BV1xx","title":"…","author":"…","views":123,"duration":892,"source":"follow","grade":"worth"},
+             {"type":"comment","bvid":"BV1xx","text":"正文","rpid":318480352401},
+             {"type":"reply-scan","bvid":"BV1xx","candidates":[],"decision":"skipped","reason":"热评全在站队"}]
+
+    Returns:
+        written（写入条数）、rejected（[{index,reason}]）、round（本轮 round id）
+    """
+    if not isinstance(events, list) or not events:
+        return _err("events 必须是非空数组（一次可传多条，别再一行塞两个对象）")
+    if len(events) > _LEDGER_MAX_EVENTS:
+        return _err(f"一次最多 {_LEDGER_MAX_EVENTS} 条（收到 {len(events)}）")
+    round_id = _current_round_id()
+    if not round_id:
+        return _err("读不到本轮 round id（state.json 缺 lastRunStartedAt）；退回直接写文件")
+    existing = _ledger_read_events(limit=800)
+    seen_keys = {(e.get("round"), e.get("type"), e.get("bvid"), e.get("text")) for e in existing}
+    path = _persona_home() / "ledger.jsonl"
+    lines: list = []
+    rejected: list = []
+    for idx, ev in enumerate(events):
+        obj, why = _validate_ledger_event(ev, idx, round_id)
+        if obj is None:
+            rejected.append({"index": idx, "reason": why})
+            continue
+        if "\ufffd" in json.dumps(obj, ensure_ascii=False):
+            rejected.append({"index": idx, "reason": "文本里有 U+FFFD（编码坏了），重发一次"})
+            continue
+        key = (obj.get("round"), obj.get("type"), obj.get("bvid"), obj.get("text"))
+        if key in seen_keys:
+            rejected.append({"index": idx, "reason": "重复条目（账本里已有同 round/type/bvid/text）"})
+            continue
+        seen_keys.add(key)
+        lines.append(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+    if not lines:
+        return _ok({"success": False, "written": 0, "rejected": rejected, "round": round_id,
+                    "error": "没有一条通过校验，账本未改动"})
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        blob = "\n".join(lines) + "\n"
+        if path.exists() and path.stat().st_size > 0:
+            with open(path, "rb") as f:
+                f.seek(-1, os.SEEK_END)
+                tail = f.read(1)
+            if tail not in (b"\n", b"\r"):
+                blob = "\n" + blob
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(blob)
+    except Exception as e:
+        return _err(f"账本写入失败: {e}")
+    return _ok({"success": True, "written": len(lines), "rejected": rejected, "round": round_id,
+                "path": str(path)})
+
+
+_REPORT_HEADING_RE = re.compile(
+    r"^##\s+.*?round\s*id\s*[:：]?\s*([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)", re.I | re.M)
+
+
+@_gated_tool()
+async def bili_report_append(markdown: str) -> str:
+    """
+    把本轮报告整段追加到 out/<今天>.md（宿主校验标题里的 round id，重复提交会被拒）
+
+    **首选这个，不要用 pwsh 手拼 Markdown**。标题必须是 `## <时段>轮（round id <ISO>）`，
+    否则宿主回填/控制台对不上账。同一个 round id 已经写过一次 ⇒ 拒绝（防止重复追加）。
+
+    Args:
+        markdown: 本轮报告全文（从 `## …轮（round id …）` 开始，到本轮总结行为止）
+
+    Returns:
+        file、bytes、roundId
+    """
+    text = (markdown or "").strip("\n")
+    if not text.strip():
+        return _err("markdown 不能为空")
+    if len(text) > 20000:
+        return _err(f"单轮报告超长（{len(text)} > 20000 字）；分段发或精简")
+    if "\ufffd" in text:
+        return _err("文本里有 U+FFFD（编码坏了）；重发一次，别手抄")
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    if not first.startswith("## "):
+        return _err("第一行必须是 `## <时段>轮（round id <ISO>）`（否则控制台对不上账）")
+    hit = _REPORT_HEADING_RE.search(text)
+    if not hit:
+        return _err("找不到 round id：标题要写成 `## 凌晨轮（round id 2026-10-28T16:07:49.108Z）`（只写时段名+round id，别写「第三轮」这种全局编号）")
+    round_id = hit.group(1)
+    home = _persona_home()
+    day = datetime.now().astimezone().strftime("%Y-%m-%d")
+    path = home / "out" / f"{day}.md"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old = path.read_text(encoding="utf-8") if path.exists() else ""
+        if round_id in old:
+            return _ok({"success": False, "code": "DUPLICATE_ROUND", "error": f"这一轮（{round_id}）已经写进报告了，别重复追加",
+                        "file": str(path), "roundId": round_id})
+        head = "" if old else f"# {day}\n\n"
+        sep = "" if not old or old.endswith("\n\n") else ("\n" if old.endswith("\n") else "\n\n")
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(head + sep + text + "\n")
+    except Exception as e:
+        return _err(f"报告写入失败: {e}")
+    return _ok({"success": True, "file": str(path), "roundId": round_id,
+                "bytes": len((head + sep + text + "\n").encode("utf-8")),
+                "message": "报告已追加；账本用 bili_ledger_append 写"})
+
+
 # ========== Tool: 见闻正文按需取用（C3 生成期通道 · 路径 A / W6-1） ==========
 #
 # 为什么要有这个工具（计划 §2.2/§2.5/§5.6/§8.3）：

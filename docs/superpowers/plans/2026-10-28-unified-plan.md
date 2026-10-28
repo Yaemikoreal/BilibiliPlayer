@@ -901,6 +901,52 @@ speak-decision => { scope: 'round', mode: 'observe', decision: 'normal',
    （三轮里有两轮因为 2 个赞打满而只能不赞，点赞是最便宜的存在感）。
 4. `speakGateMode` 观察到三天后可切 `enforce`；lint 从 `warn` 切 `block`。
 
+---
+
+## 17 进度快照·第六轮（2026-10-29）：把 §16.5 的 1/2/3 做完（发现一次拉齐 + 记账工具化 + 配置收口）
+
+> 目标是把「每轮预算」与「写盘可靠性」两件事从"模型要小心"变成"结构上不容易错"。
+> 测试 448 → **451 pass / 0 fail**；Python 侧用临时家目录探针逐条验过写盘行为。
+
+### 17.1 三个新工具（`mcp_server.py`，都进值班轮白名单）
+
+| 工具 | 作用 | 关键设计 |
+|---|---|---|
+| `bili_feed(limit_up=8, per_up=3, only_new=True)` | 一次拿到「最常访问」前 N 个关注 UP 的最新投稿 | 服务端 `asyncio.gather`（并发 4）逐个拉；**读账本把所有 bvid 标成 `seen`**，默认只返回没看过的；单个 UP 失败只进 `failures`；返回体积上限 20×5 |
+| `bili_ledger_append(events=[…])` | 一次写多条账本事件 | `t` / `round` 由宿主补（round 取 `state.lastRunStartedAt`，与 prompt 同源）；**按 type 校验必填字段**（view/like/comment/dynamic/skip/reply-out/reply-scan/note）；拒重复（同 round+type+bvid+text）、拒 U+FFFD、单次写入、一行一个对象 |
+| `bili_report_append(markdown)` | 追加本轮报告到 `out/<今天>.md` | **强制标题带 `round id <ISO>`**（缺了直接拒，并给出正确写法）；同一 round 已写过 ⇒ `DUPLICATE_ROUND`；自动补 `# <日期>` 头与段落分隔；拒 U+FFFD |
+
+配套改动：
+
+- `dsh-plugin/index.js` 抽出并导出 `dutyToolList(cfg)`（原来是一串内联 `if`）——新工具对**老用户的冻结
+  `dutyTools`** 自动补齐（这正是 §16.5 里"线上模型永远调不到"的那类坑）；新增 `test/duty-tools.test.js` 3 例。
+- `prompts/duty.md`：内容源首选 `bili_feed`（`seen=true` 直接丢）、记账/报告都改成"首选工具、文件只做兜底"，
+  并给出新的预算分配（发现 ≤3 / 读 ≤6 / 动作 ≤4 / 记账 1 / 报告 1）。
+- `README`：工具清单 29 → 32，值班机制那一步同步。
+- 配置（真实家目录）：`followPerRound` 40 → **8**、`likesPerDay` 2 → **5**（§16.5-3 的建议值）。
+
+### 17.2 证据（临时家目录探针，不碰真实账本）
+
+```
+ledger#1 {"success": true, "written": 3, "round": "2026-10-28T16:30:00.000Z"}
+ledger#1 rejected [{"index":2,"reason":"bvid 格式不合法: BV1bad"}]
+ledger#2 dup      [{"index":0,"reason":"重复条目（账本里已有同 round/type/bvid/text）"}]
+ledger 3 行，每行单个对象；t/round 自动补齐
+report#1 success（自动写 # <日期> 头）
+report#2 DUPLICATE_ROUND（同一 round 不重复追加）
+report#3 拒绝：找不到 round id（标题必须带 round id）
+seen bvids: ['BV1TisX6dEFS']   ← 账本过滤生效
+```
+
+### 17.3 下一步（下轮真机看三件事）
+
+1. `duty.log` 出现 `bili_feed` 调用、发现阶段调用数从 6–8 降到 2–3；
+2. 账本由 `bili_ledger_append` 写入（`round-end.replyScans` 应等于模型真实扫描数，§16.2-② 的复算已在真实数据上验过）；
+3. 报告由 `bili_report_append` 写入（标题必带 round id ⇒ 回填的切块永远能命中）。
+
+之后再看：`speakGateMode` → `enforce`、lint `warn` → `block`、`/persona/history` 窗口化。
+
+
 
 
 

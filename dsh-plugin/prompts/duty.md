@@ -24,6 +24,8 @@
 
 - **`bili_*` 工具调用 ≤ 20 次/轮**（`pwsh` / `read` / `write` / `edit` 这类本地文件操作另算，但合计别超过 4 次）；
   候选最多看 8 条，**凑够本轮该发的条数就停**，不要"再看看有没有更好的"。
+  ⭐ 有了 `bili_feed`（内容源一次拉齐）和 `bili_ledger_append` / `bili_report_append`（记账/报告各一次调用），
+  一轮大致是：发现 ≤3 次、读字幕/热评 ≤6 次、动作 ≤4 次、记账 1 次、报告 1 次 —— 预算应该够，别再省在读字幕上。
 - ⭐ **写完账本/报告不要用 `pwsh` 回读中文来"确认编码"**：控制台把 UTF-8 显示成乱码是**显示问题**，
   文件其实是好的（2026-10-29 实测：为此白烧 2 次调用，还差点把好文件重写一遍）。要核对就用 `read` 工具读一行。
 - **不要枚举复述候选池**（把 30 条热门一条条抄下来编号再逐条判）——扫一遍，记住 2–3 个够格的就行。
@@ -47,9 +49,12 @@
 0. **先看有没有人等我回**：`bili_received_replies` 查一次——有人回复我的评论/接话就先跟进
    （见「跟进纪律」，优先级高于铺新评论）；没人等就正常往下刷。
 1. **拉内容源**（严格按这个优先级；上一档挑够或没有可看的，再看下一档）：
-   - 订阅 UP 主的新投稿：本轮指定了 UID 就直接用 `bili_user_videos` 拉；没指定就用 `bili_followings` 按「最常访问」排序
-     （sort=attention，ps=50）拉我常看的 UP 主，取前「每轮抽查」个（都看过了/没新的就往后顺延），再逐个 `bili_user_videos`
-     拉最新投稿（order=pubdate）
+   - ⭐ **首选 `bili_feed`（一次调用）**：它内部就是「最常访问前 N 个关注 UP 的最新投稿」，
+     并且**已经用账本标好 `seen`** —— `seen=true` 的直接丢（不用再自己判重）。默认 `limit_up=8, per_up=3`。
+     返回里 `failures` 非空只说明个别 UP 拉失败，换下一个候选即可，**不要重试**。
+   - 只有 `bili_feed` 失败、或返回的候选不够时，才退回手工组合：本轮指定了 UID 就直接用 `bili_user_videos` 拉；
+     没指定就用 `bili_followings` 按「最常访问」排序（sort=attention，ps=50）拉我常看的 UP 主，取前「每轮抽查」个
+     （都看过了/没新的就往后顺延），再逐个 `bili_user_videos` 拉最新投稿（order=pubdate）
    - 关注关键词搜索（`bili_search`，近 7 天优先）
    - 热门榜兜底（`bili_hot_videos`）
    - ⚠️ 命中「不看清单」（BV号 / UP主 / 标题关键词）的视频**直接跳过**：不读字幕、不点赞、不评论、不发动态，跳过理由写「不看清单：<命中条目>」。
@@ -152,6 +157,8 @@
 ## 报告契约（宿主靠它对账）
 
 - 报告写到 `<家目录>/out/<YYYY-MM-DD>.md`；今天已有就**追加到末尾**，别覆盖（配额按全天算）。
+- ⭐⭐ **首选 `bili_report_append(markdown=本轮整段报告)`**：宿主负责追加到今天的文件，并**校验标题里的 round id**
+  （缺 round id、或这一轮已经写过一次，都会被拒并告诉你原因）。**不要**用 pwsh 手拼 Markdown（编码/覆盖风险）。
 - ⭐ **一轮一个 `## ` 段，标题里带本轮 round id**，例：`## 凌晨轮（round id 2026-10-25T11:07:49.738Z）`。
   ⚠️ **不要写"第三轮/第五轮/第七轮"这种全局编号**（以前本节的示例就叫"第三轮"，模型照着抄，
   2026-10-29 同一天的第二轮被写成"第三轮"，报告和判重表对不上）：`round id` 是**唯一可信**的轮次标识；
@@ -195,23 +202,25 @@
 
 ## 记账契约（控制台靠它对账）
 
-- ⭐⭐ 每执行一个动作，**立即**向 `<家目录>/ledger.jsonl` **追加一行** JSON（一行一个，绝不覆盖、绝不重排）：
-  - 看完一条：`{"t":"<ISO>","round":"<本轮开始时刻ISO>","type":"view","bvid":"BV…","title":"…","author":"…","views":123456,"duration":892,"source":"hot|search|follow","grade":"worth|ok|meh"}`
-  - 点赞：`{"t":…,"round":…,"type":"like","bvid":"BV…"}`
-  - 评论：`{"t":…,"round":…,"type":"comment","bvid":"BV…","text":"评论正文","rpid":123456}`
-  - 发动态：`{"t":…,"round":…,"type":"dynamic","bvid":"BV…","text":"动态正文","id":"动态id"}`
-  - 跳过：`{"t":…,"round":…,"type":"skip","bvid":"BV…","title":"…","author":"…","reason":"为什么跳过"}`
-  - 回复别人：`{"t":…,"round":…,"type":"reply-out","bvid":"BV…","parent":<对方rpid>,"text":"回复正文","rpid":<自己rpid>}`
+- ⭐⭐ **首选 `bili_ledger_append(events=[…])` 一次性写账本**（一次调用可传多条）：
+  `t` 和 `round` 由宿主自动补（你不用算、也不会写错），字段按类型校验，重复条目会被拒（看 `rejected[].reason` 改完再发，**别重发同一条**）。
+  ⚠️ 只有工具不可用时，才退回"手工追加 JSONL"，格式见下。
+- 该传什么（每条都是对象，业务字段照抄下面，别再带 t/round）：
+  - 看完一条：`{"type":"view","bvid":"BV…","title":"…","author":"…","views":123456,"duration":892,"source":"hot|search|follow","grade":"worth|ok|meh"}`
+  - 点赞：`{"type":"like","bvid":"BV…"}`
+  - 评论：`{"type":"comment","bvid":"BV…","text":"评论正文","rpid":123456}`
+  - 发动态：`{"type":"dynamic","bvid":"BV…","text":"动态正文","id":"动态id"}`
+  - 跳过：`{"type":"skip","bvid":"BV…","title":"…","author":"…","reason":"为什么跳过"}`
+  - 回复别人：`{"type":"reply-out","bvid":"BV…","parent":<对方rpid>,"text":"回复正文","rpid":<自己rpid>}`
     ⭐ **主动接话**（回复别人的评论）要多带一个字段：`"kind":"proactive"`；跟进回复不用带。
   - **接话扫描（每轮至少一条，硬要求）**：
-    `{"t":…,"round":…,"type":"reply-scan","bvid":"BV…","candidates":[{"rpid":321560862800,"user":"666设计师","like":396,"verdict":"接","why":"一句能答的吐槽"}],"decision":"posted","targetRpid":321560862800,"postedRpid":318378624657}`
-    没接就写：`{"t":…,"round":…,"type":"reply-scan","bvid":"BV…","candidates":[],"decision":"skipped","reason":"热评全是站队，接一句就是掺和"}`
+    `{"type":"reply-scan","bvid":"BV…","candidates":[{"rpid":321560862800,"user":"666设计师","like":396,"verdict":"接","why":"一句能答的吐槽"}],"decision":"posted","targetRpid":321560862800,"postedRpid":318378624657}`
+    没接就写：`{"type":"reply-scan","bvid":"BV…","candidates":[],"decision":"skipped","reason":"热评全是站队，接一句就是掺和"}`
     `decision` 只能是 `posted` / `skipped`；`posted` 必须带 `targetRpid`，并在同一轮补一条 `reply-out`（带 `"kind":"proactive"`）。
 - `rpid` 取自 `bili_reply` 返回；**返回里没有就写 `null`，绝不自己编数字，也不要写"待补"**（"待补"不是合法值）。
-- ⭐ **一行一个对象**：一次追加多条就分多行写，**别把一个物理行塞成 `{...}{...}`**。
+- 手工兜底时的格式（**只在工具不可用时**）：每行一个对象，**别把一个物理行塞成 `{...}{...}`**——
   实测这么写会导致整行解析失败、**当天评论/动态全部从配额里消失**（宿主以为今天没评过，于是额度算错）。
-  宁可多调几次写入，也不要合并成一行。
-- 同一个动作只记一次（宿主会按 bvid+type+text 去重，但别指望它替你兜——重复写会把"今天已用"抬高）。
+- 同一个动作只记一次（工具会拒重复；手工写时宿主也会按 bvid+type+text 去重，但别指望它替你兜）。
 - 记账写不进去，要在报告里**明说**（控制台会缺这条）。
 - 顺序：**先记账，再写报告**。报告是给人看的摘要，账本是控制台的唯一事实来源。
 - 账本路径是绝对路径 `<家目录>/ledger.jsonl`，别写错地方。

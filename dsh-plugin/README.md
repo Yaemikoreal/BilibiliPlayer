@@ -18,14 +18,16 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂�
 
 安装后 Agent 自动获得两层能力：
 
-- **全量 MCP 工具**（`mcp__bili-fenshen__bili_*`，29 个）：任何 DSH 会话里都能直接用（搜索/字幕/评论/关注列表/点赞/动态/登录…）
+- **全量 MCP 工具**（`mcp__bili-fenshen__bili_*`，32 个）：任何 DSH 会话里都能直接用（搜索/字幕/评论/关注列表/点赞/动态/登录…）
+- **值班轮专用（宿主侧）**：`bili_feed`（一次拿到常看 UP 主的最新投稿，已按账本标好看过/没看过）、
+  `bili_ledger_append`（一次写多条账本事件，宿主补 t/round、校验、去重）、`bili_report_append`（追加本轮报告并校验 round id）
 - **宿主工具**：`bili_fenshen_status`（状态与配额）、`bili_fenshen_run`（立即值班一轮）、`bili_fenshen_diagnose`（一键诊断，返回逐项 pass/warn/fail 与修复建议）
 
 ## 值班机制
 
 1. 到点（或手动触发）→ Host 生成一次性 overlay → `dsh --profile headless --patch overlay "值班提示词"` 拉起独立会话
 2. 那一轮只见白名单工具（`BILI_MCP_TOOLS`，默认值班所需的最小集），看不到上传/私信等高权限工具
-3. Agent 按章程：拉内容源（**订阅 UP 主（没指定 UID 时用 bili_followings 按「最常访问」取常看的 UP 主）→ 关键词搜索 → 热门榜兜底**，命中「不看清单」直接跳过）→ 判重 → 读字幕原文 → 决定动作（受配额与禁令开关约束）→ 写报告与判重表
+3. Agent 按章程：拉内容源（**优先 `bili_feed` 一次拉齐常看 UP 主的最新投稿并已按账本过滤「看过」→ 关键词搜索 → 热门榜兜底**，命中「不看清单」直接跳过）→ 判重 → 读字幕原文 → 决定动作（受配额与禁令开关约束）→ `bili_ledger_append` 记账 + `bili_report_append` 写报告
 4. 结束 90 秒后宿主复核调度（对抗压审：接口回执成功 ≠ 公开可见）
 
 ## 控制台
