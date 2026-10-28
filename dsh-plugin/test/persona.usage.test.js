@@ -63,7 +63,13 @@ test('recordUsage → saveState → 下一轮读到冷却表（端到端闭环�
 
   const persisted = loadState()
   assert.ok(persisted.loreUsed['wuchang-ranked'], '冷却表应写入时间戳')
-  assert.equal(String(persisted.loreUsed['wuchang-ranked']).slice(0, 10), dayKeyOf())
+  // ⚠️ 别用 `String(ts).slice(0,10)` 断言"今天"：loreUsed 存的是 UTC 时间戳，而"今天"是本地日。
+  //    UTC+8 的 00:00–08:00 两者差一天 ⇒ 这条断言每天有 8 小时必红（2026-10-29 实际踩到）。
+  //    生产口径在 state.js usedToday()：带时间的按本地日折算。这里按同一口径断言。
+  assert.equal(
+    dayKeyOf(new Date(String(persisted.loreUsed['wuchang-ranked']))), dayKeyOf(),
+    '冷却表时间戳应落在本地「今天」',
+  )
 
   // 第二轮：deriveState 继承持久化冷却表 → usedToday 命中 → 不再新鲜
   const state2 = deriveState({ events: [], card: smokeCard(), now: new Date(), persisted })

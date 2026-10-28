@@ -1906,7 +1906,7 @@ window.__ModuleLoader__.load({
         flat.sort((a, b) => String(b.e.t || '').localeCompare(String(a.e.t || '')))
         let lastDay = ''
         body = h(Card, null, flat.map(({ e, item }, i) => {
-          const day = String(e.t || '').slice(0, 10)
+          const day = e.t ? dayKeyOf(e.t) : ''   // 本地日：与服务器侧 groupByDay 同口径（UTC 切片在凌晨会差一天）
           const sep = day !== lastDay ? h('div', { className: 'bf-daysep', key: 'd-' + day + '-' + i }, day) : null
           lastDay = day
           const isProactive = e.type === 'reply-out' && e.kind === 'proactive'
