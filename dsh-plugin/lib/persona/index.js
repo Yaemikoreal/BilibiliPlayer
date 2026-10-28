@@ -25,6 +25,8 @@ import { guardPrompt, resolveBudget, resolveModes, normalizeModes, effectiveMode
 import { processGrowth, appendPending, vetCorpus, vetLore, pruneBucket, GROWTH_LIMITS } from './growth.js'
 import { buildMemory, filterMemoryRelevant, renderMemory, MEMORY_C2_ENTRIES, MEMORY_C2_CHARS } from '../memory.js'
 import { buildCheckup } from './checkup.js'
+import { buildTagStats } from './tagstats.js'
+import { scoreSpeakDecision, describeSpeakDecision } from './speak.js'
 import { selfCorrectFromCheckup, describeCheckup } from './selfcorrect.js'
 
 export {
@@ -41,6 +43,8 @@ export {
   buildMemory, filterMemoryRelevant, renderMemory, MEMORY_C2_ENTRIES, MEMORY_C2_CHARS,
   // W7-3 体检自纠（W5-2 的控制台表现用 buildCheckup；这里同时导出，避免两边各写一份）
   buildCheckup, selfCorrectFromCheckup, describeCheckup,
+  // W5-2 换卡对比 / W7-2 发言门控的打分核心（接线在 index.js，纯函数在这里）
+  buildTagStats, scoreSpeakDecision, describeSpeakDecision,
 }
 
 /** 插件根（`<插件>/prompts/persona` 往上两级）：相对路径与 `preset:` 的解析基准。 */
