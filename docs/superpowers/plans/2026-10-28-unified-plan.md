@@ -38,7 +38,7 @@
 
 | 指标 | 值 | 出处 |
 |---|---|---|
-| 测试 | **219 pass / 0 fail / ~1.0s**（本稿实测） | `npm test` |
+| 测试 | **219 pass**（本稿基线）→ **327 pass / 0 fail**（W0–W4 之后实测） | `npm test` |
 | 人设编译体量 | whale **1,404** / elaina 1,356 / generic 1,464 字符 | 实测 `compilePersona` |
 | 分块体量 | core 885–1010 / lore 0–195 / state 157 / samples 72 / tail 95–117 | 同上 |
 | 注入两段 | before ≈1010–1118（章程前）、after ≈324–346（末尾） | `index.js:82-91`（行号已漂移，见 §4.5） |
@@ -261,23 +261,23 @@ B 的三条契约风险（实施时逐条守）：
 
 | 编号 | 内容 | 出处 | 现状 |
 |---|---|---|---|
-| **W0-1** | 补 3 个尾巴 + 2 条便宜断言 | 两稿都回避 | ❌ 未做 |
-| **W0-2** | 已完成的改动与文档提交 | — | 8 改 + 10 未跟踪 |
-| **W1-6** | **切卡链路**（先 diff 再切） | 两稿都漏 | ❌ 未做 |
-| **W1-0** | 抽 `lib/persona/layers.js` | A-P1 / B §7 | ⏳ |
-| **W1-1** | 冷却表接线 | A-P0-① / B-B1-1 | ✅（3 尾巴见 W0-1） |
-| **W1-2** | 场域字数 100/40/60 | A-P0-② / B-B1-2 | ⏳ |
-| **W1-3** | 卡内 `render.budget`/`position` 生效 | A-P0-③（B 漏） | ⏳ |
-| **W1-4** | L0 与注入口径统一（3 项） | A-P0-⑤ / B-B1-3 | ⏳ |
-| **W1-5** | 降级接线（保尾注） | A-P0-④ / B-B1-6 | ⏳ |
-| **W2-1** | 归因 `persona-inject` + 报告/概览 `personaTag` | A-§11 / B-B1-4 | ⏳ |
-| **W2-2** | 质量门 lint（JS 规则 + Python 哑执行） | A-§8 / B-B1-5 | ⏳ |
-| **W2-3** | 语料治理（origin 三分 + 反抄 + situation/style） | A-§8 | ⏳ |
-| **W3-1~6** | 稳定性 6 项（overlay/轮询/素材/原子写/路径/超时） | B-B2-1,6,7,8,9,10 | ⏳ |
-| **W3-7~8** | dshBin 缓存、日志治理 | B-B2-2,3,4,5 | ✅（2 代缺 → W0-1） |
-| **W4-0~4** | 性能：bench → 增量读 → 一次读多处用 → tick 降频 → 客户端合并 | B-B3-0~4 | ⏳ |
+| **W0-1** | 补 3 个尾巴 + 2 条便宜断言 | 两稿都回避 | ✅ 完成（轮转保 2 代 / canon 冷却接线 / commitPendingUsage 导出 + 3 例 / resetCliCaches 与 health.cli 断言） |
+| **W0-2** | 已完成的改动与文档提交 | — | ✅ 完成（`git status` 干净） |
+| **W1-6** | **切卡链路**（先 diff 再切） | 两稿都漏 | ✅ **已切**：diff 见 `docs/analysis/2026-10-28-w1-6-switch-diff.md`；补卡 4 项后 `personaPrompt` 置空（备份 `config.json.bak-w1-6`），实测 `mode=card` |
+| **W1-0** | 抽 `lib/persona/layers.js` | A-P1 / B §7 | ✅（18 例 + 字节级快照） |
+| **W1-1** | 冷却表接线 | A-P0-① / B-B1-1 | ✅ |
+| **W1-2** | 场域字数 100/40/60 | A-P0-② / B-B1-2 | ✅（P3 场域表 + P5 同口径 + 章程 ≤80→≤40 对齐） |
+| **W1-3** | 卡内 `render.budget`/`position` 生效 | A-P0-③（B 漏） | ✅ |
+| **W1-4** | L0 与注入口径统一（3 项） | A-P0-⑤ / B-B1-3 | ✅（另：judgement/quota 定论不注入、尾注病句修复、canon 4→6） |
+| **W1-5** | 降级接线（保尾注） | A-P0-④ / B-B1-6 | ✅（二次编译 + state:drop + 兜底砍前段保尾注） |
+| **W2-1** | 归因 `persona-inject` + 报告/概览 `personaTag` | A-§11 / B-B1-4 | ✅ 完成（账本事件 + 报告头照抄行 + 概览字段） |
+| **W2-2** | 质量门 lint（JS 规则 + Python 哑执行） | A-§8 / B-B1-5 | ✅ 代码完成（默认 warn；**上线前需跑一次 `node scripts/export-lint-rules.mjs`** 生成规则文件） |
+| **W2-3** | 语料治理（origin 三分 + 反抄 + situation/style） | A-§8 | ✅ lib 完成（生产接线待补：`bili_persona_note` 缺 `originalText`、`review`/`growthCheckedOnly` 未接 config） |
+| **W3-1~6** | 稳定性 6 项（overlay/轮询/素材/原子写/路径/超时） | B-B2-1,6,7,8,9,10 | ⏳ 3/6：轮询超时退避 ✅、state 原子写 ✅、故障注入基线 8 例 ✅；overlay 中止 / 素材留痕回收 / spawn 硬超时 / `personaPrompt` 表示法待做 |
+| **W3-7~8** | dshBin 缓存、日志治理 | B-B2-2,3,4,5 | ✅（含轮转 2 代） |
+| **W4-0~4** | 性能：bench → 增量读 → 一次读多处用 → tick 降频 → 客户端合并 | B-B3-0~4 | ⏳ 2/5：bench ✅（前后数字见 `docs/analysis/bench-before.md`/`bench-after.md`）、`lib/ledger-index.js` ✅、概览 O(n²) 修复 ✅；11 处调用点收敛 / tick 降频 / 请求合并待做 |
 | **W5-1~4** | 人设页三块 + 页头 | A-§10/§11 / B-B4 | ⏳ |
-| **W6-1** | C3 路径 A：`bili_persona_lore(keyword)` | A-§6 路径A | ⏳ |
+| **W6-1** | C3 路径 A：`bili_persona_lore(keyword)` | A-§6 路径A | ⏳（`layers.c3Hints` 结构已就位） |
 | **W6-2** | C3 路径 B：companion（**有条件**） | A-§6 路径B | ⏸ 暂缓 |
 | **W7-1** | 记忆：聚合 + 重要度 + 7 天半衰期 + 限量注入 | A-§7 | ⏳ |
 | **W7-2** | 发言门控：6 特征打分 + `speak-decision` | A-§9 | ⏳ |
@@ -589,3 +589,74 @@ lintComment({ text, mode, card, rules, bank }) → { ok, level:'block'|'warn', c
 | [人格注入分层方案](../persona-layer-design.md) | 方法与外部调研底稿 | 想论证"为什么六层三通道"或查外部资料 URL |
 | [优化方案](2026-10-28-optimization-plan.md) | 缺陷根因与最小改法的原始记录 | 想回溯某条缺口的推导过程 |
 | [控制台问题清单](../CONSOLE-ISSUES-2026-10-28.md) | B0/B2 的原始排查与修复进展 | 查控制台问题的现场证据（截图/日志） |
+
+---
+
+## 12 进度快照与下一波（2026-10-28 夜）
+
+> 这一节是**执行记录**，不是设计。每次收口后追加，别改上面的设计段落。
+
+### 12.1 已交付（W0 / W1 / W2 / W3 部分 / W4 前半）
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| W0 三个尾巴 + 2 条便宜断言 | ✅ | `commits 57c6d58 / 4406984 / 2c16bee` |
+| W1 全波（含切卡链路） | ✅ | `commit 45ed973`；实测 `mode=card / whale@2.2.0` |
+| W2-1 归因闭环 | ✅ | `commit 9644e91`；账本 `persona-inject` + 报告头行 + 概览 `round.personaTag` |
+| W2-2 质量门 | ✅ 代码（默认 warn） | `commit 999f387`；27 例，含 JS↔Python 判定逐字一致 |
+| W2-3 语料治理 | ✅ lib | `commit 697999d`；seed 输出逐字节不变 |
+| W3 部分 | ✅ 3/6 | 轮询超时退避 / state 原子写 / 故障注入 8 例（`commit 9008446`） |
+| W4 前半 | ✅ 2/5 | `commit 9644e91`；bench 前后数字见 `docs/analysis/` |
+
+**测试基线**：219 → **327 pass / 0 fail**；四个 smoke 入口 exit=0（每波收尾都跑）。
+
+### 12.2 本波实测得到的三个硬数字
+
+1. **人设注入体量**：whale 卡编译 1,913 字符 / 五块 core 1281 · lore 236 · state 112 · samples 140 · tail 159
+   （预算 3000，未超任何块）；报告头那行：`人设：whale@2.2.0（core 1281 / … · 合计 1928 / 3000；降级：无）`。
+2. **账本/概览**（10 万行，`scripts/bench-ledger.mjs`）：
+   - 概览纯计算 p95 **2554ms → 99ms**（`lastRoundFrom` 的 O(轮次×事件) 改单遍）；
+   - 一次概览全流程（全量读 + 概览）p95 **2729ms → 343ms**；
+   - 增量读稳态（文件没变）p95 **0.12ms / 读盘 0 字节**（500 次连读 bytesRead +0）。
+   - ⚠️ 与 §5.5 的「10 万行概览 ≤5ms」还有差距：`countToday`/`presenceFrom` 仍扫全量事件，
+     11 处 `readEvents` 调用点也还没收敛成一个 reader —— 这是下一波 W4-2/3 的入口。
+3. **W1-6 内容 diff**：A 类矛盾 9 / B 类实质缺失 21 / C 类 5 / D 类约 22 组同义，
+   其中 **41 项被章程 `duty.md:85-97` 与宿主 prompt 重复覆盖**（所以 md 的 12k 字符边际内容远小于观感）。
+   详见 `docs/analysis/2026-10-28-w1-6-switch-diff.md`。
+
+### 12.3 切链路（W1-6）的实际做法与回退
+
+1. 先 diff（不跳步），按结论**先补卡再切**：`identity.boundaries` +5 条（能力边界 / 不编事实 /
+   不冒充官方 / 不传谣 / 不碰黑产与私德）、`food-wedding` 见闻改写（原句是真人语料里的别人原话）、
+   `version 2.1.0 → 2.2.0`；**话题红线仍只有政治一条**（主人 10-27 拍板不变）。
+2. 章程 `duty.md` 的楼中楼上限 **≤80 → ≤40**（与卡内 `voice.modes.reply=40`、方案验收③对齐）。
+3. 运行期 `~/.dsh/bili-fenshen/config.json` 的 `personaPrompt` 置空；原文件备份为
+   `config.json.bak-w1-6`。
+4. **回退（30 秒）**：把 `personaPrompt` 填回 `D:\projects\bilbili\dsh-plugin\prompts\persona-whale.md`
+   （或直接覆盖回备份文件）。
+5. **尚未做的验收**：真机冷启动一轮（会真实发评论、占配额）留给主人手动触发；
+   切换前已做只读验证：`resolvePersona(cfg) → mode=card / whale@2.2.0`，P3 与 P5 的场域口径一致。
+
+### 12.4 下一波建议顺序（按依赖，不按人日）
+
+1. **W4-2/W4-3**：把 `index.js` 的 11 处 `readEvents` 收敛成 `ledgerReaderFor()` 一个实例 +
+   概览只读近 7/14 天窗口 ⇒ 冲「10 万行 p95 ≤5ms」；随后 `W4-3` 空闲不推 tick 帧。
+2. **W3 余下 3 项**（都在 `index.js`，可与 W4-2 同批）：overlay 写失败中止本轮并写 `lastError`、
+   素材删除 `.bak-<ts>` + 软删除 + 孤儿扫描、spawn 20 分钟硬超时 + 进程树 kill、
+   `personaPrompt` 支持 `preset:` 与相对根。
+3. **W2 收尾接线**（小但卡住生产）：`mcp_server.py` 的 `bili_persona_note` 加 `originalText`；
+   `processGrowth` 注入 `review` 与 `cfg.growthCheckedOnly`；「保存卡 → 重导 lint-rules.json」挂同一路径。
+4. **W5 人设页**（依赖 W2-1，已就绪）：页头 / 本轮实际注入 / 体检 / 换卡对比，四请求合并成
+   `/persona/bundle`（W4-4 先落）。
+5. **W6-1** `bili_persona_lore(keyword)`：`layers.c3Hints` 已经把 `interpolate:false / maxChars:600 /
+   maxLoreBodies:2 / loreIndex` 准备好，只差 MCP 工具与冷却判定落地。
+6. **W7-1/W7-2**：记忆与发言门控（硬依赖 W4 的增量读）。
+
+### 12.5 待主人拍板（仍有效）
+
+1. **真机冷启动一轮的时机**：切链路已生效，但「真跑一轮」会真实发评论、占当日配额 —— 需要主人点头
+   （或直接在控制台点「跑一轮」）。
+2. **质量门何时从 `warn` 切 `block`**：现状是 warn；建议按 §6.3 观察 3 天、误杀 <5% 再切。
+3. **W6-2 companion 插件**：仍按 §6.1 三条门槛挂起。
+4. **记忆半衰期 7 天 / 体检基线**：等 W7 开工前再确认一次。
+
