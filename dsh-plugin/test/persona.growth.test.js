@@ -57,7 +57,7 @@ test('质检链：community 超 30 字 / 缺 source → 拒；合规公共梗 �
   assert.equal(noSrc.ok, false)
   assert.match(noSrc.reason, /source/)
 
-  const ok = vetCorpus({ kind: 'corpus', form: 'meme', text: '电子榨菜', origin: 'community', source: '社区通用梗' }, { bank: normalizeBank({}), card: null, ownTexts: [] })
+  const ok = vetCorpus({ kind: 'corpus', form: 'meme', text: '电子榨菜', origin: 'community', source: '社区通用梗', originalText: '今天又是靠这个视频当电子榨菜的一天' }, { bank: normalizeBank({}), card: null, ownTexts: [] })
   assert.equal(ok.ok, true, ok.reason)
   assert.match(ok.entry.source, /公共梗/)
 })
@@ -72,7 +72,7 @@ test('质检链：禁词 / 政治词表 / 查重 → 拒', () => {
   assert.match(politics.reason, /时评|政治/)
 
   const bank1 = { buckets: { meme: [{ id: 'a', text: '史味的巧克力', form: 'meme', status: 'active', len: 6, heat: 0, source: '' }] } }
-  const dup = vetCorpus({ kind: 'corpus', form: 'meme', text: '史味的巧克力！', origin: 'community', source: '梗' }, { bank: normalizeBank(bank1), card: null, ownTexts: [] })
+  const dup = vetCorpus({ kind: 'corpus', form: 'meme', text: '史味的巧克力！', origin: 'community', source: '梗', originalText: '原帖是另一句跟巧克力完全无关的热评' }, { bank: normalizeBank(bank1), card: null, ownTexts: [] })
   assert.equal(dup.ok, false)
   assert.match(dup.reason, /重合/)
 })
@@ -139,8 +139,8 @@ test('每日转正限额：4 条满分 candidate 只转 3（FIFO），跨天重�
 })
 
 test('pending 过期：超 14 天的候选丢弃并记录', () => {
-  const stale = { kind: 'corpus', form: 'meme', text: '过期的一条', origin: 'community', source: '梗', pendingAt: dayOffset(-15) }
-  const fresh = { kind: 'corpus', form: 'meme', text: '新鲜的一条', origin: 'community', source: '梗', pendingAt: new Date().toISOString() }
+  const stale = { kind: 'corpus', form: 'meme', text: '过期的一条', origin: 'community', source: '梗', originalText: '原帖热评原文甲', pendingAt: dayOffset(-15) }
+  const fresh = { kind: 'corpus', form: 'meme', text: '新鲜的一条', origin: 'community', source: '梗', originalText: '原帖热评原文乙', pendingAt: new Date().toISOString() }
   appendPending(stale)
   appendPending(fresh)
   const out = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 0 }, events: [] })
@@ -205,4 +205,106 @@ test('GROWTH_LIMITS 决策 B 常量', () => {
   assert.equal(GROWTH_LIMITS.pendingTtlDays, 14)
   assert.equal(GROWTH_LIMITS.activeCap, 200)
   assert.equal(GROWTH_LIMITS.promotePerDay, 3)
+})
+
+/* ───────────── W2-3 语料治理（统一方案 §8.3）新增四件的逐条覆盖 ───────────── */
+
+test('W2-3 origin 三分①：blocked 永不入库，只做反例（vetCorpus 拒 + processGrowth 留反例记录）', () => {
+  const out = vetCorpus({ kind: 'corpus', form: 'meme', text: '这是一个不该入库的反例', origin: 'blocked' }, { bank: normalizeBank({}), card: null, ownTexts: [] })
+  assert.equal(out.ok, false)
+  assert.equal(out.blocked, true, 'blocked 要带 blocked 标记，供处理日志记反例')
+  assert.match(out.reason, /blocked|反例/)
+
+  appendPending({ kind: 'corpus', form: 'meme', text: '另一条反例', origin: 'blocked' })
+  const g = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 0 }, events: [] })
+  assert.equal(g.stats.blocked, 1)
+  assert.ok(!Object.values(loadBank().buckets).flat().some((e) => e.text === '另一条反例'), 'blocked 不得入库')
+})
+
+test('W2-3 origin 三分②：community 必须附原帖原文，且与原帖 >60% 判抄；改写后才过', () => {
+  // 缺"与原帖"原文 → 无法做改写检查 → 拒（否则 community 条目本身就是抄来的）
+  const noOriginal = vetCorpus({ kind: 'corpus', form: 'meme', text: '电子榨菜', origin: 'community', source: '梗' }, { bank: normalizeBank({}), card: null, ownTexts: [] })
+  assert.equal(noOriginal.ok, false)
+  assert.match(noOriginal.reason, /originalText|原帖/)
+
+  // 逐字抄原帖 → 拒
+  const original = '这巧克力怎么一股史味啊兄弟们'
+  const copied = vetCorpus({ kind: 'corpus', form: 'meme', text: original, origin: 'community', source: '热评', originalText: original }, { bank: normalizeBank({}), card: null, ownTexts: [] })
+  assert.equal(copied.ok, false)
+  assert.match(copied.reason, /重合|改写/)
+
+  // 改写过（与原帖重合低）→ 过，origin 落库为 community
+  const rewritten = vetCorpus({ kind: 'corpus', form: 'meme', text: '史味巧克力', origin: 'community', source: '热评', originalText: original }, { bank: normalizeBank({}), card: null, ownTexts: [] })
+  assert.equal(rewritten.ok, true, rewritten.reason)
+  assert.equal(rewritten.entry.origin, 'community')
+})
+
+test('W2-3 结构升级：situation/style 成对、各 ≤20 字；落库带字段，前缀「当/时/可以」被归一', () => {
+  const base = { kind: 'corpus', form: 'reaction', text: OWN1, origin: 'self' }
+  const onlySituation = vetCorpus({ ...base, situation: '看到离谱操作' }, { bank: normalizeBank({}), card: null, ownTexts: [OWN1] })
+  assert.equal(onlySituation.ok, false)
+  assert.match(onlySituation.reason, /成对|style/)
+
+  const tooLong = vetCorpus({ ...base, situation: '第一次看到这种完全超出常识又没法解释的操作', style: '发一句短感叹' }, { bank: normalizeBank({}), card: null, ownTexts: [OWN1] })
+  assert.equal(tooLong.ok, false)
+  assert.match(tooLong.reason, /situation 超长/)
+
+  const ok = vetCorpus({ ...base, situation: '当看到离谱操作时', style: '可以发一句短感叹' }, { bank: normalizeBank({}), card: null, ownTexts: [OWN1] })
+  assert.equal(ok.ok, true, ok.reason)
+  assert.equal(ok.entry.situation, '看到离谱操作', '「当…时」的前后缀由渲染模板补，不入库')
+  assert.equal(ok.entry.style, '发一句短感叹', '「可以」前缀由渲染模板补，不入库')
+})
+
+test('W2-3 写入闸门①：count 加权——同一句重复提交只累加 count，不重复入库', () => {
+  const ev = [{ t: new Date().toISOString(), round: 'r1', type: 'comment', bvid: 'BV1', text: OWN1 }]
+  appendPending({ kind: 'corpus', form: 'question', text: OWN1, origin: 'self' })
+  const g1 = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 0 }, events: ev })
+  assert.equal(g1.stats.acceptedCorpus, 1)
+  const before = loadBank().buckets.question.filter((e) => e.text === OWN1)
+  assert.equal(before.length, 1)
+  assert.equal(before[0].count, 1)
+
+  appendPending({ kind: 'corpus', form: 'question', text: OWN1, origin: 'self' })
+  const g2 = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 0 }, events: ev })
+  assert.equal(g2.stats.counted, 1, '重复提交应计为 count 加权，而不是又入库一条')
+  const after = loadBank().buckets.question.filter((e) => e.text === OWN1)
+  assert.equal(after.length, 1)
+  assert.equal(after[0].count, 2)
+})
+
+test('W2-3 写入闸门②：AI 复核位（review 回调）未过不入库，过了标 aiReviewed', () => {
+  const ev = [{ t: new Date().toISOString(), round: 'r1', type: 'comment', bvid: 'BV2', text: OWN2 }]
+  appendPending({ kind: 'corpus', form: 'experience', text: OWN2, origin: 'self' })
+  const rejected = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 0 }, events: ev, review: () => ({ ok: false, reason: '太像 AI 写的' }) })
+  assert.equal(rejected.stats.reviewRejected, 1)
+  assert.ok(!loadBank().buckets.experience.some((e) => e.text === OWN2), 'AI 复核未过不得入库')
+
+  appendPending({ kind: 'corpus', form: 'experience', text: OWN2, origin: 'self' })
+  const ok = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 0 }, events: ev, review: () => ({ ok: true }) })
+  assert.equal(ok.stats.acceptedCorpus, 1)
+  const hit = loadBank().buckets.experience.find((e) => e.text === OWN2)
+  assert.ok(hit, '复核通过应入库')
+  assert.equal(hit.aiReviewed, true)
+  assert.equal(hit.checked, false, 'AI 复核 ≠ 人工确认')
+})
+
+test('W2-3 写入闸门③：人工位 checked=false，checkedOnly=true 时不自动转正；人工置 true 后可转', async () => {
+  const text = '这个细节我还真没注意过'
+  const ev = [{ t: new Date().toISOString(), round: 'r1', type: 'comment', bvid: 'BV3', text }]
+  appendPending({ kind: 'corpus', form: 'detail', text, origin: 'self' })
+  const g1 = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 99 }, events: ev, checkedOnly: true })
+  assert.equal(g1.stats.acceptedCorpus, 1)
+  const hit = loadBank().buckets.detail.find((e) => e.text === text)
+  assert.ok(hit)
+  assert.equal(hit.checked, false)
+  assert.equal(hit.status, 'candidate', 'checked=false 在 checkedOnly 下不得自动转正')
+
+  // 人工确认（控制台/人工修剪置 checked=true）→ 下一轮可转正
+  const { saveBank } = await import('../lib/persona/store.js')
+  const bank = loadBank()
+  bank.buckets.detail.find((e) => e.text === text).checked = true
+  saveBank(bank)
+  const g2 = processGrowth({ cfg: { growthEnable: true, growthAutoPromote: 99 }, events: [], checkedOnly: true })
+  assert.equal(g2.stats.promoted, 1)
+  assert.equal(loadBank().buckets.detail.find((e) => e.text === text).status, 'active')
 })
