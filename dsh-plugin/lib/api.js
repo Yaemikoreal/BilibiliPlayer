@@ -147,8 +147,34 @@ export function createApiHandler(deps) {
    *   /live/stream  = 一轮里的工具/输出事件流（给「运行详情」）
    *   /stream       = 概览数字（配额/轮次/存在感/健康），文件一变就推
    * 两者共用同一个连接上限与卸载清理口径。
+   *
+   * W4-3（空闲不推 tick 帧）：旧实现每 1.5s 无条件算一次 `deps.live.snapshot(0)`；
+   * index.js 的 snapshot 会读账本 + config.json ⇒ 空闲挂一天就是一天的空转盘。
+   * 现在：
+   *   ① 先用**廉价的** `deps.live.isRunning()` 短路 —— 本轮没在跑就一个字节都不算；
+   *      连接活性由 15s 的 `: ping` 注释心跳保证（EventSource 不靠 data 帧保活）。
+   *   ② 运行中按「关键字段签名」去重：轮次/阶段/工具计数/动作计数/本轮配额变化 ⇒ 立刻推；
+   *      都没变化时最长 `TICK_HEARTBEAT_MS` 补一帧（撑住前端「数据 Ns 前」，否则会误报 warn）。
+   *      秒表不靠 tick 的 elapsedMs：客户端 useElapsed 用 startedAt 本地推算（见 client.js:1130）。
    */
   const TICK_MS = 1500
+  /** 运行中「状态没变化」时最长多少毫秒补一帧（前端 >15s 会显示 warn，留 5s 余量） */
+  const TICK_HEARTBEAT_MS = 10_000
+
+  /** tick 帧的「有变化」签名：只含会变的关键字段（不含 elapsedMs —— 秒表由 startedAt 本地推） */
+  const tickSignatureOf = (round, perRound) => {
+    const stats = round?.stats || {}
+    const pr = perRound || null
+    return JSON.stringify([
+      round?.roundId ?? null,
+      round?.phase?.key ?? null,
+      stats.tools || null,
+      stats.actions || null,
+      stats.errors ?? 0,
+      pr ? [pr.roundId, pr.picked, pr.comments, pr.likes, pr.dynamics, pr.proactive, pr.scans, pr.replies] : null,
+    ])
+  }
+
   const openStream = (req, res) => {
     const hub = deps.overviewHub
     if (!hub || typeof hub.view !== 'function' || typeof hub.subscribe !== 'function') {
@@ -197,25 +223,32 @@ export function createApiHandler(deps) {
     if (env) write({ type: 'overview', data: env })
     try { unsub = hub.subscribe((next) => write({ type: 'overview', data: next })) } catch { /* 至少保留首帧 */ }
 
-    // 运行中每 1.5s 一帧：秒表/阶段/工具计数必须连续，不能等文件变更
+    // 运行中按「有变化才推」：见本段头部 W4-3 说明。
+    let lastTickSig = ''
+    let lastTickAt = 0
     tickTimer = setInterval(() => {
       if (closed) return
       try {
+        // ① 空闲短路（W4-3）：先问廉价的 isRunning，没在跑就**不算 snapshot**（不读账本/配置），也不推帧。
+        if (typeof deps.live?.isRunning === 'function' && deps.live.isRunning() === false) return
         const snap = deps.live?.snapshot ? deps.live.snapshot(0) : null
         if (!snap?.running) return
-        write({
-          type: 'tick',
-          seq: hub.seq,
-          round: {
-            running: true,
-            roundId: snap.roundId ?? null,
-            startedAt: snap.startedAt ?? null,
-            elapsedMs: Number(snap.elapsedMs) || 0,
-            phase: snap.phase || null,
-            stats: snap.stats || null,
-          },
-          quota: { perRound: typeof deps.quotaPerRound === 'function' ? deps.quotaPerRound() : null },
-        })
+        const perRound = typeof deps.quotaPerRound === 'function' ? deps.quotaPerRound() : null
+        const round = {
+          running: true,
+          roundId: snap.roundId ?? null,
+          startedAt: snap.startedAt ?? null,
+          elapsedMs: Number(snap.elapsedMs) || 0,
+          phase: snap.phase || null,
+          stats: snap.stats || null,
+        }
+        // ② 关键字段没变且离上一帧不到心跳上限 ⇒ 不重复推
+        const sig = tickSignatureOf(round, perRound)
+        const at = Date.now()
+        if (sig === lastTickSig && at - lastTickAt < TICK_HEARTBEAT_MS) return
+        lastTickSig = sig
+        lastTickAt = at
+        write({ type: 'tick', seq: hub.seq, round, quota: { perRound } })
       } catch { /* 兜住 */ }
     }, TICK_MS)
     tickTimer.unref?.()

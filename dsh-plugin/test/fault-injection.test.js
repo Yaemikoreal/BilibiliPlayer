@@ -12,12 +12,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const HOME = mkdtempSync(join(tmpdir(), 'bf-fault-'))
 process.env.BILI_FENSHEN_HOME = HOME   // store.js 的 homeDir() 是调用时读 env，所以这里设置有效
+// W3-6 硬超时是 20 分钟，测试等不起：在 import index.js **之前**用环境变量压到 1.2 秒。
+process.env.BILI_FENSHEN_ROUND_TIMEOUT_MS = '1200'
 
 const { readEvents } = await import('../lib/ledger.js')
 const { createLedgerReader } = await import('../lib/ledger-index.js')
@@ -121,6 +123,94 @@ test('故障注入⑤：账本被轮转清空 ⇒ 读到的就是空，不能返
   assert.equal(readFileSync(f, 'utf8'), '')
 })
 
-/* TODO（W3 落地后追加）：⑥ overlay 写失败 ⇒ 本轮中止并写 lastError；
- *                        ⑦ spawn 立即退出 ⇒ code≠0 + 不空跑；
- *                        ⑧ 规则文件缺失 ⇒ 放行 + 告警（等 W2-2 的 lint.js 落地）。 */
+/* ───────── ⑥ overlay 写失败 ⇒ 本轮中止并写 lastError（W3-1） ───────── */
+
+/**
+ * 起一个真实的插件实例（fake webServer/tools），返回 POST /run 的 HTTP 入口 + dispose。
+ * 为什么要走 HTTP 而不是直调 runDuty：runDuty 不是导出（保持模块边界），
+ * 而 /run 是控制台「跑一轮」按钮与工具共用的真实入口 —— 测它等于测线上路径。
+ */
+async function bootPlugin(patchConfig) {
+  const { apply } = await import('../index.js')
+  let runHandler = null
+  const fakeWeb = {
+    register: (def) => {
+      if (def?.kind === 'exact' && def.path === '/api/bili-fenshen/run') runHandler = def.handler
+      return () => {}
+    },
+  }
+  const fakeTools = { register: () => () => {} }
+  const ctx = { get: (k) => (k === 'webServer' ? fakeWeb : k === 'tools' ? fakeTools : null) }
+  const dispose = apply(ctx, patchConfig)
+  const postRun = async () => {
+    const res = {
+      status: 0, body: '', writableEnded: false,
+      writeHead(s) { this.status = s; this.writableEnded = false },
+      end(b) { this.writableEnded = true; this.body = String(b || '') },
+    }
+    const req = { method: 'POST', url: '/api/bili-fenshen/run', [Symbol.asyncIterator]: async function* () {} }
+    await runHandler(req, res)
+    return res.body ? JSON.parse(res.body) : null
+  }
+  return { dispose, postRun }
+}
+
+test('故障注入⑥（W3-1）：overlay 写失败 ⇒ 本轮不 spawn、lastError 有痕、返回 started:false', async () => {
+  // 把 overlay 路径占成一个**目录** ⇒ buildOverlay 的 writeFileSync 必失败
+  const overlayPath = P('headless-overlay.yml')
+  try { rmSync(overlayPath, { recursive: true, force: true }) } catch { /* 不存在 */ }
+  mkdirSync(overlayPath, { recursive: true })
+  const fakeBin = P('fake-dsh-bin.js')
+  writeFileSync(fakeBin, 'setInterval(() => {}, 1000)\n', 'utf8')
+
+  const { dispose, postRun } = await bootPlugin({ autoDuty: false, dshBin: fakeBin, perDay: 5 })
+  try {
+    const out = await postRun()
+    assert.equal(out?.started, false, 'overlay 写失败必须返回 started:false（不许用残缺 overlay 起轮）')
+    assert.match(String(out?.error), /overlay/, '错误里要能看出是 overlay')
+    const st = JSON.parse(readFileSync(P('state.json'), 'utf8'))
+    assert.match(String(st.lastError), /overlay/, 'state.lastError 要留下可读原因')
+    assert.equal(st.lastCode, 'overlay-failed')
+    // W3-4b：state 写盘是 tmp+rename ⇒ 正常路径不该留下 .tmp 残骸
+    assert.equal(existsSync(P('state.json.tmp')), false, '原子写不允许留下 .tmp')
+    assert.match(readFileSync(P('duty.log'), 'utf8'), /overlay 写失败/, 'duty.log 要留一行')
+  } finally {
+    dispose()
+    try { rmSync(overlayPath, { recursive: true, force: true }) } catch { /* 兜住 */ }
+  }
+})
+
+/* ───────── ⑦ spawn 后挂死 ⇒ 20 分钟硬超时 + 进程树 kill（W3-6） ───────── */
+
+test('故障注入⑦（W3-6）：spawn 后挂死 ⇒ 硬超时强杀、round-end code=timeout、lastError 有痕', async () => {
+  try { rmSync(P('headless-overlay.yml'), { recursive: true, force: true }) } catch { /* 上个用例的残骸 */ }
+  const fakeBin = P('fake-dsh-hang.js')
+  // 挂死的假 dsh：一直不退出（真 dsh 挂死时也长这样：父进程在、子进程 python 也还在）
+  writeFileSync(fakeBin, 'setInterval(() => {}, 1000)\n', 'utf8')
+
+  const { dispose, postRun } = await bootPlugin({ autoDuty: false, dshBin: fakeBin, perDay: 5 })
+  try {
+    const out = await postRun()
+    assert.equal(out?.started, true, '这一轮应该真的起来了（overlay 正常）')
+    // 等硬超时（测试把 env 压到 1.2s）+ 收尾写盘
+    const deadline = Date.now() + 10_000
+    let st = {}
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 150))
+      try { st = JSON.parse(readFileSync(P('state.json'), 'utf8')) } catch { st = {} }
+      if (st.lastCode === 'timeout') break
+    }
+    assert.equal(st.lastCode, 'timeout', '超时被杀的一轮必须记 code=timeout（不是 1/null）')
+    assert.match(String(st.lastError), /超时/, 'state.lastError 要写明硬超时')
+    const ledger = readEvents(P('ledger.jsonl'))
+    assert.ok(
+      ledger.some((e) => e.type === 'round-end' && e.code === 'timeout'),
+      '账本里要有一条 round-end code=timeout（概览/复盘可查）',
+    )
+    assert.match(readFileSync(P('duty.log'), 'utf8'), /硬超时/, 'duty.log 要留一行')
+  } finally {
+    dispose()
+  }
+})
+
+/* TODO（剩余验收）：规则文件缺失 ⇒ 放行 + 告警（W2-2 lint.js 的 Python 侧，见 mcp_server.py 测试）。 */

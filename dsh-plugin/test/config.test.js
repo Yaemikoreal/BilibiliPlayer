@@ -66,6 +66,20 @@ test('模型字段进入白名单：defaultsOf 取字符串、拒绝错误类型
   assert.equal('modelName' in defaultsOf({ modelName: null }), false)
 })
 
+test('W2 收尾：growthCheckedOnly 进白名单（默认 false / 覆盖层可开），且与 growthEnable 并存', () => {
+  // 契约：人工位开关默认关闭；只有显式 true 才「只转正人工确认过的候选」
+  assert.equal('growthCheckedOnly' in defaultsOf({}), false, '不传就不下发，交给 schema 默认 false')
+  assert.equal(defaultsOf({ growthEnable: true, growthCheckedOnly: true }).growthCheckedOnly, true)
+  assert.equal(validateFields({ growthCheckedOnly: false }).ok, true)
+  assert.equal(validateFields({ growthCheckedOnly: 'yes' }).ok, false, '必须是 boolean')
+  const file = join(dir(), 'config.json')
+  writeOverride(file, { growthCheckedOnly: true })
+  const { values, sources } = effectiveConfig({ autoDuty: false, growthCheckedOnly: false }, file)
+  assert.equal(values.growthCheckedOnly, true, '覆盖层能打开人工位')
+  assert.equal(sources.growthCheckedOnly, 'override')
+  assert.equal(values.growthEnable, undefined, '别的字段不受影响')
+})
+
 test('模型字段 validateFields 接受字符串、拒绝非字符串', () => {
   assert.equal(validateFields({
     modelProvider: 'deepseek-account', modelName: 'deepseek-flash', modelReasoningEffort: 'high',

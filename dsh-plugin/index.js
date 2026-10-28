@@ -16,13 +16,15 @@
  */
 
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, mkdirSync, unlinkSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, mkdirSync, unlinkSync, renameSync, copyFileSync } from 'node:fs'
+import { join, dirname, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 // ⭐ lib/* 是本插件的纯逻辑模块（package.json files 已带上）；任何加载失败都按可选依赖降级
-import { appendEvents, readEvents, isDuplicate } from './lib/ledger.js'
+import { appendEvents, isDuplicate } from './lib/ledger.js'
+// ⭐ W4-2：账本读收敛成**模块级单实例**（stat 未变 0 次读盘 / size 增长只读增量段 / 轮转自动全量回退）
+import { ledgerReaderFor } from './lib/ledger-index.js'
 import { createUtf8Decoder, keepTail, rotateIfBig, createProbeLogger } from './lib/logsink.js'
 import { parseRoundReport, parseProactiveScan } from './lib/report.js'
 import { createApiHandler } from './lib/api.js'
@@ -30,9 +32,9 @@ import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort
 import { fetchAccount } from './lib/account.js'
 import { fetchReplyNotifs, toReplyIn, roundIdForReply, proactiveTargetsFromLedger } from './lib/replies.js'
 import { seenListFromLedger } from './lib/seen.js'
-import { buildOverview as buildOverviewData } from './lib/overview.js'
+import { buildOverview as buildOverviewData, countToday, windowPool } from './lib/overview.js'
 import { createOverviewHub } from './lib/realtime.js'
-import { roundAccounting, presenceFrom } from './lib/round.js'
+import { roundAccounting } from './lib/round.js'
 import { loadPersona } from './lib/persona.js'
 import {
   resolvePersona, seedIfEmpty, guardPrompt, personaHealth, previewPersona,
@@ -42,7 +44,6 @@ import {
   processGrowth, degradationPlan, resolveBudget,
 } from './lib/persona/index.js'
 import { buildPersonaInjectEvent, describePersonaInject } from './lib/persona/attribution.js'
-import { toActivities, dayKeyOf } from './lib/activity.js'
 import { runDiagnose, formatDiagnoseText } from './lib/diagnose.js'
 import { createLiveStream } from './lib/live.js'
 
@@ -203,6 +204,8 @@ export const Config = !z ? undefined : z.object({
   growthEnable: z.boolean().default(true),
   /** 每天自动转正的候选上限（FIFO；0 = 只收候选不自动转正） */
   growthAutoPromote: z.natural().default(3),
+  /** W2 收尾：人工位 —— true 时只转正「人工确认过（checked=true）」的候选（= 麦麦 checked_only） */
+  growthCheckedOnly: z.boolean().default(false),
   /** 日报形态：full=完整 · brief=薄版 · off=不写 */
   reportLevel: z.string().default('full'),
   /** dsh 的 bin.js 路径（不填自动探测） */
@@ -222,6 +225,7 @@ export const Config = !z ? undefined : z.object({
     'bili_reply', 'bili_like', 'bili_send_dynamic', 'bili_check_credential',
     'bili_received_replies', 'bili_user_info',
     'bili_persona_note', // 人设自演化：沉淀候选（growthEnable=false 时 overlay 自动剔除）
+    'bili_persona_lore', // W6-1：见闻正文按需读（C3 路径 A；Python 侧已实现，这里只开白名单）
   ]),
 })
 
@@ -238,6 +242,19 @@ const STATE_FILE = join(HOME, 'state.json')
 const OVERLAY_FILE = join(HOME, 'headless-overlay.yml')
 const LEDGER_FILE = join(HOME, 'ledger.jsonl')   // 机器账本（设计文档 §4）
 const CONFIG_FILE = join(HOME, 'config.json')    // 运行时配置覆盖层（§12.3）
+
+// ⭐ W4-2：**一个账本一个 reader**。过去 11 处 `readLedger()` 各自全量 readFileSync + sort，
+//    10 万行时单次几十 ms；现在全部走这个实例：
+//      · 文件没变 ⇒ 0 次读盘（SSE 每帧重算不再碰盘）
+//      · append 之后 ⇒ 只读增量段（appendEvents 轮转后 size 变小会自动全量回退）
+//      · 语义与 readEvents 完全一致（同一套 parseLedgerText/sortEvents，有 12 例单测）
+//    ⚠️ 不要每次调用都 invalidate：reader 靠 size+mtime 自己发现新事件，手动失效只会让缓存白丢。
+//    ⚠️ 本模块的账本路径在加载时就固定了（HOME 由 BILI_FENSHEN_HOME 决定），所以单实例安全。
+const ledgerReader = ledgerReaderFor(LEDGER_FILE)
+/** 读全量事件（排序后）。所有需要账本的地方都用它，别再直接 readLedger()。 */
+const readLedger = () => ledgerReader.read()
+/** 账本读器的计数快照（诊断/汇报用：cacheHits / fullReads / bytesRead …）。 */
+export const getLedgerReaderStats = () => ledgerReader.stats()
 
 // ⭐ 实时运行流：内存环形缓冲（值班轮 stdout/stderr + 宿主事件），供 /live 与 /live/stream 消费。
 //    全局单例：跨轮保留最后一批事件，页面刷新后仍能看到上一轮尾部。
@@ -261,8 +278,22 @@ for (const d of [HOME, OUT_DIR, DIGEST_DIR]) {
 const readJson = (p, fallback) => {
   try { return JSON.parse(readFileSync(p, 'utf8')) } catch { return fallback }
 }
+/**
+ * 状态写盘（W3-4b）：先写 `<p>.tmp`，再 rename 覆盖 —— 同目录 rename 是原子替换。
+ * 旧实现直接 writeFileSync：进程在写一半时被杀 / 磁盘满，state.json 就是半截 JSON，
+ * 之后每次 readJson 都返回 {}（静默丢状态：窗口标记、seenNotifs、lastRunAt 全没了）。
+ * ⚠️ 与 lib/persona/state.js 的 writeJsonAtomic 同一口径，但别合并：宿主状态与 persona 状态是两份文件。
+ */
 const writeJsonSafe = (p, data) => {
-  try { writeFileSync(p, JSON.stringify(data, null, 2), 'utf8'); return true } catch { return false }
+  const tmp = `${p}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
+    renameSync(tmp, p)
+    return true
+  } catch {
+    try { unlinkSync(tmp) } catch { /* 清不掉就算了 */ }
+    return false
+  }
 }
 const dayKey = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -272,6 +303,98 @@ const bumpState = (patch) => {
   const next = { ...st, ...patch }
   writeJsonSafe(STATE_FILE, next)
   return next
+}
+
+/* ───────────────────────── 素材留痕 / 孤儿扫描（W3-3，端点层） ─────────────────────────
+ * lib 层已经把「删除」改成软删除（`disabled:true`，可 restore / purge）。端点层补两件事：
+ *   ① 删前留痕：把整份文件复制成 `<file>.bak-<ts>`，只保留最近 3 份 —— 软删也留，物理删（purge）更要留；
+ *   ② 孤儿扫描：`persona/lore/*.md` 里不在 loreIndex 的（有正文没索引），以及 loreIndex 引用了不存在正文的。
+ * 为什么在端点层做：lib 层是纯存取，不该知道"控制台点删除"的时间点；备份应该正好发生在删除动作之前。
+ */
+
+/** 备份文件的保留份数（超出按文件名时间戳倒序删最旧的）。 */
+const BAK_KEEP = 3
+
+const pruneBackups = (file, keep = BAK_KEEP) => {
+  try {
+    const dir = dirname(file)
+    const base = basename(file)
+    const baks = readdirSync(dir)
+      .filter((f) => f.startsWith(`${base}.bak-`))
+      .sort()          // 文件名里是紧凑时间戳（20261028T231200），字典序 = 时间序
+      .reverse()
+    for (const f of baks.slice(keep)) {
+      try { unlinkSync(join(dir, f)) } catch { /* 删不掉就算了，别影响主流程 */ }
+    }
+  } catch { /* 目录不存在 / 读不到：没有备份可清 */ }
+}
+
+/**
+ * 写一份 `<file>.bak-<ts>` 快照（文件不存在就跳过），并清理到只留最近 `keep` 份。
+ * @returns {boolean} 是否真的产出了备份
+ */
+const backupFileKeep = (file, keep = BAK_KEEP) => {
+  try {
+    if (!existsSync(file)) return false
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '') // 20261028T231200
+    const target = `${file}.bak-${stamp}`
+    if (!existsSync(target)) copyFileSync(file, target)
+    pruneBackups(file, keep)
+    return true
+  } catch { return false }
+}
+
+/** 当前用户素材目录（preset 模式没有用户副本，只有物化之后才有）。 */
+const personaAssetPaths = () => {
+  const dir = join(HOME, 'persona')
+  return {
+    dir,
+    bankFile: join(dir, 'expression-bank.json'),
+    cardFile: join(dir, 'card.json'),
+    loreDir: join(dir, 'lore'),
+  }
+}
+
+/**
+ * 孤儿扫描（W3-3）：只读、不抛。
+ *  - bodiesWithoutIndex：`<家目录>/persona/lore/*.md` 有正文，但当前 loreIndex 里没有这个 id（purge 后残留 / 手放的文件）
+ *  - indexWithoutBody：loreIndex 条目（未软删）指向的正文文件不存在（迁移漏拷 / 误删）
+ */
+const scanPersonaLoreOrphans = () => {
+  const out = { bodiesWithoutIndex: [], indexWithoutBody: [], scannedAt: new Date().toISOString() }
+  try {
+    const p = personaAssetPaths()
+    let bodies = []
+    try {
+      bodies = readdirSync(p.loreDir).filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''))
+    } catch { /* 没有 lore 目录 = 没有用户正文 */ }
+    const active = readActive()
+    const loaded = loadCard(active)
+    // 「有正文没索引」按**卡里的原始 loreIndex**（含软删 disabled 条目）判定：
+    // 软删除只是"控制台里隐藏"，正文是故意留着的（restore 用），不能算孤儿。
+    const rawIndex = Array.isArray(loaded.card?.loreIndex) ? loaded.card.loreIndex : []
+    const rawIds = new Set(rawIndex.map((l) => String(l?.id || '')))
+    out.bodiesWithoutIndex = bodies.filter((id) => !rawIds.has(id)).sort()
+    // 「有索引没正文」只看**生效**条目（disabled 的不参与编译，正文缺失不算问题）
+    const entries = resolveLoreIndex(loaded.card || {}, loadState()) || []
+    for (const e of entries) {
+      const id = String(e?.id || '')
+      if (!id) continue
+      if (!existsSync(lorePath(id, active))) out.indexWithoutBody.push(id)
+    }
+    out.indexWithoutBody.sort()
+  } catch { /* 扫描失败不能 500，也不能挡住删除 */ }
+  return out
+}
+
+/** 孤儿扫描结果的日志行（为空就不吵）。 */
+const logLoreOrphans = (orphans, where = '') => {
+  try {
+    const a = orphans?.bodiesWithoutIndex || []
+    const b = orphans?.indexWithoutBody || []
+    if (!a.length && !b.length) return
+    log(`人设素材孤儿${where ? `（${where}）` : ''}：有正文无索引 ${a.length ? a.join('、') : '无'}；有索引无正文 ${b.length ? b.join('、') : '无'}`)
+  } catch { /* 兜住 */ }
 }
 
 const LOG_MAX_BYTES = 512 * 1024
@@ -311,25 +434,14 @@ const effCfg = () => effectiveConfig(cfgSnapshot || {}, CONFIG_FILE).values
  */
 const quotaFromLedger = () => {
   const day = dayKey()
-  const acc = { picked: 0, comments: 0, likes: 0, dynamics: 0, replies: 0, repliesProactive: 0, replyScans: 0, proactiveSkipped: 0 }
   try {
-    for (const e of readEvents(LEDGER_FILE)) {
-      if (dayKeyOf(e.t) !== day) continue
-      if (e.type === 'view') acc.picked++
-      else if (e.type === 'comment') acc.comments++
-      else if (e.type === 'like') acc.likes++
-      else if (e.type === 'dynamic') acc.dynamics++
-      else if (e.type === 'reply-out') {
-        acc.replies++
-        if (e.kind === 'proactive') acc.repliesProactive++
-      } else if (e.type === 'reply-scan') {
-        // ⭐ 接话扫描：每轮硬步骤（设计定稿 §3）。「扫描了但没接」与「压根没想」必须能分开统计
-        acc.replyScans++
-        if (e.decision === 'skipped') acc.proactiveSkipped++
-      }
-    }
-  } catch { /* 账本读不到 ⇒ 全 0，不拖垮调用方 */ }
-  return acc
+    // ⭐ W4-2b：今日计数与概览共用 lib/overview.js 的 countToday（同日区间口径，10 万行 ~4ms，
+    //    旧版逐条 dayKeyOf 是 32ms）。口径逐字段一致：view=挑中 / comment / like / dynamic / reply-out / reply-scan。
+    return countToday(readLedger(), day)
+  } catch {
+    // 账本读不到 ⇒ 全 0，不拖垮调用方
+    return { picked: 0, comments: 0, likes: 0, dynamics: 0, replies: 0, repliesProactive: 0, replyScans: 0, proactiveSkipped: 0 }
+  }
 }
 
 const WINDOWS = {
@@ -426,6 +538,15 @@ let currentChild = null
 let currentRoundId = null
 let currentRoundAt = 0
 let routeRegistered = false   // prefix 路由同进程一次性守卫（§12.2）
+// ⭐ W3-6：spawn 硬超时（20 分钟）—— 挂死的一轮必须由宿主自己收掉，否则 running 永远 true、调度器再也不会触发。
+//    数值可用环境变量覆盖（只给故障注入测试用；线上不设就是 20 分钟）。
+// ⚠️ 在模块加载时读：测试必须在 import index.js **之前**设好 BILI_FENSHEN_ROUND_TIMEOUT_MS。
+const ROUND_TIMEOUT_MS = (() => {
+  const n = Number(process.env.BILI_FENSHEN_ROUND_TIMEOUT_MS)
+  return Number.isFinite(n) && n >= 100 ? Math.floor(n) : 20 * 60_000
+})()
+let roundTimer = null
+let roundTimedOut = false
 
 const refreshCfg = () => {
   // cfgSnapshot 在 apply() 里已由 Loader 校验后的 config 赋值；这里只保证返回最新快照
@@ -433,17 +554,40 @@ const refreshCfg = () => {
   return cfgSnapshot
 }
 
-// ⭐ POST /stop：SIGTERM，2s 后补刀，等 exit 走同一收尾路径
+// ⭐ POST /stop：SIGTERM，2s 后补刀（进程树），等 exit 走同一收尾路径
 const stopDuty = () => {
   if (!currentChild) return { ok: true, stopped: false }
+  const child = currentChild
   try {
-    currentChild.kill('SIGTERM')
-    setTimeout(() => { try { currentChild?.kill('SIGKILL') } catch { /* 已退出 */ } }, 2000).unref?.()
-    log('收到中止请求：已发送 SIGTERM（2s 后未退出则强杀）')
+    child.kill('SIGTERM')
+    setTimeout(() => {
+      // 2s 还没退出 ⇒ 连 python MCP 子进程一起收掉（W3-6 的进程树口径）
+      if (currentChild === child) killProcessTree(child)
+    }, 2000).unref?.()
+    log('收到中止请求：已发送 SIGTERM（2s 后未退出则强杀进程树）')
   } catch (e) {
     log(`中止本轮失败：${e?.message ?? e}`)
   }
   return { ok: true, stopped: true }
+}
+
+/**
+ * 强杀整棵进程树（W3-6）：挂死的一轮不能只杀 node 父进程 —— headless 下面还挂着 python MCP，
+ * 父进程被 SIGKILL 后 python 会成孤儿继续占着家目录/端口。
+ * Windows 用 `taskkill /PID <pid> /T /F`；POSIX 走进程组（spawn 时已经 detached，见 runDuty）。
+ */
+const killProcessTree = (child) => {
+  const pid = Number(child?.pid)
+  try {
+    if (!pid) { try { child?.kill?.('SIGKILL') } catch { /* 已退出 */ } return }
+    if (process.platform === 'win32') {
+      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      killer.on?.('error', () => { try { child.kill('SIGKILL') } catch { /* 已退出 */ } })
+      killer.unref?.()
+    } else {
+      try { process.kill(-pid, 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch { /* 已退出 */ } }
+    }
+  } catch { /* 杀不动也不能把宿主带崩 */ }
 }
 
 /**
@@ -495,7 +639,7 @@ const stubReportIfMissing = (code) => {
 
 const backfillFromReport = (roundId) => {
   try {
-    const existing = readEvents(LEDGER_FILE)
+    const existing = readLedger()
     const day = dayKey()
     const f = join(OUT_DIR, `${day}.md`)
     if (!existsSync(f)) return
@@ -627,6 +771,8 @@ const buildOverlay = (cfg, em) => {
   if (cfg?.followAuto !== false && !tools.includes('bili_followings')) tools.push('bili_followings')
   // ⭐ 人设自演化：开了 growth 管道才把沉淀工具给值班轮（老配置的冻结列表也要能拿到它）
   if (cfg?.growthEnable !== false && !tools.includes('bili_persona_note')) tools.push('bili_persona_note')
+  // ⭐ W6-1 见闻正文按需读：同样补进老配置的冻结白名单（不给的话线上模型永远调不到这个工具）
+  if (!tools.includes('bili_persona_lore')) tools.push('bili_persona_lore')
   yml.push(
     '- insert:',
     '    - id: bili-fenshen-duty-mcp',
@@ -698,6 +844,24 @@ export const commitPendingUsage = (roundId) => {
 }
 
 /**
+ * 人设自演化：**写入前复核位**（W2 收尾 / §8.3-3）。
+ *
+ * `processGrowth({ review })` 的契约：`review(entry, ctx) => { ok, reason? }`，返回 ok:false 的候选不入库
+ * （记 `reviewRejected`）。这里是**同步硬规则代理** —— 宿主在 spawn 前没有同步 LLM 调用点，
+ * 真正的 AI 复核要等生成期通道（W6）；先拦掉明显不该学的东西，将来换真复核只改这一个函数。
+ */
+const growthReview = (entry) => {
+  try {
+    const text = String(entry?.text ?? '').trim()
+    if (text.length < 2) return { ok: false, reason: '太短，学不到东西' }
+    if (text.length > 100) return { ok: false, reason: `太长（${text.length} 字），语料应是一句话` }
+    if (/https?:\/\/|www\.|@[\w-]{2,}/i.test(text)) return { ok: false, reason: '含链接或 @ 提及，不入语料库' }
+    if (/(?:\+?\d[\d\s-]{7,}\d)/.test(text)) return { ok: false, reason: '疑似联系方式，不入库' }
+    return { ok: true }
+  } catch { return { ok: false, reason: '复核异常（保守拒绝）' } }
+}
+
+/**
  * 最近一次 buildDutyPrompt 的人设注入元数据（W2-1 写 `persona-inject` 事件用）。
  *
  * 为什么用模块级记录：buildDutyPrompt 的返回值必须保持**字符串**（调用方直接当 prompt 用），
@@ -719,8 +883,13 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   //     前段放章程之前（事实），后段放整轮 prompt 最末尾（行为贴生成点）。
   //   - 场域字数走卡（W1-2）：评论 100 / 楼中楼 40 / 动态 60，与时段上限取更严。
   //   - `degrade` 非空 = 超软线后的**二次编译**（W1-5），只砍见闻/示例/状态，**L0 尾注永远保留**。
+  // ⭐ W4-2b：人设编译链（状态 / 记忆 / 体检）只看近两周 —— 传全量账本进去等于每轮多一次 O(n) 扫描
+  //    （Lead 的实现里 resolvePersona 会跑 buildCheckup，扫全量取近 14 天 ≤20 条）。
+  //    ⚠️ 只裁「人设/体检」这一路；下面的「已看过清单 / 已接话清单」仍用**全量** ledgerEvents
+  //       （判重需要更早历史，lib/seen.js 自己按 14 天窗口算，别在这里提前裁）。
+  const personaEvents = windowPool(ledgerEvents, new Date(), 14)
   const personaOnce = (degrade = []) =>
-    resolvePersona({ cfg, events: ledgerEvents, roundId, modes: 'card', degrade })
+    resolvePersona({ cfg, events: personaEvents, roundId, modes: 'card', degrade })
 
   const q = quotaFromLedger()
   const picked = q.picked
@@ -893,8 +1062,10 @@ const runDuty = async (why = 'manual') => {
       if (seeded.seeded) log('首次运行：已播种默认人设 whale（开箱即用）')
     } catch (e) { log(`人设播种失败：${e?.message ?? e}`) }
     // ⭐ 人设自演化：值班轮启动前先消化沉淀候选（质检→入库→限量转正）；失败绝不阻断值班
+    //    W2 收尾接线：`review` = 写入前复核位；`originals` = 本轮评论区原文（宿主在 spawn 前还没拉到热评 ⇒ 空）。
+    //    `cfg.growthCheckedOnly` 由 processGrowth 自己读（config schema 已补，人工位 = 只转正 checked 的）。
     try {
-      const g = processGrowth({ cfg, events: readEvents(LEDGER_FILE) })
+      const g = processGrowth({ cfg, events: readLedger(), review: growthReview, originals: [] })
       const s = g?.stats
       if (s && (s.received || s.promoted || s.demoted)) {
         log(`自生长：候选 ${s.received} · 语料+${s.acceptedCorpus} · 见闻+${s.acceptedLore} · 拒 ${s.rejected} · 转正 ${s.promoted} · 降级 ${s.demoted} · 清理 ${s.removed} · 过期 ${s.expired}`)
@@ -917,10 +1088,20 @@ const runDuty = async (why = 'manual') => {
     starting = false
     if (running) return { started: false, why, error: '上一轮还没结束' }
     const overlay = buildOverlay(cfg, em)
+    // ⭐ W3-1：overlay 写不出去 ⇒ **本轮不 spawn**。旧实现只是不 push `--patch`，
+    //    结果用「残缺 overlay」起轮：三个服务没开、MCP 工具一个都没有，模型空转烧配额。
+    //    宁可这一轮明确失败（lastError 进 state、控制台/诊断可见），也不烧一轮配额。
+    if (!overlay) {
+      const msg = 'overlay 写失败：headless-overlay.yml 落盘失败，本轮不 spawn（用残缺 overlay 起轮等于没有 MCP 工具）'
+      log(msg)
+      try { live.end({ code: null, durationMs: 0 }) } catch { /* 兜住 */ }
+      bumpState({ lastError: msg, lastRunAt: new Date().toISOString(), lastWhy: why, lastCode: 'overlay-failed' })
+      try { overviewHub.publish('round-failed') } catch { /* 兜住 */ }
+      return { started: false, why, error: msg }
+    }
     const profile = String(cfg?.headlessProfile || 'headless').trim() || 'headless'
-    const args = ['--profile', profile]
-    if (overlay) args.push('--patch', overlay)
-    const dutyPrompt = buildDutyPrompt(cfg, roundId, readEvents(LEDGER_FILE))
+    const args = ['--profile', profile, '--patch', overlay]
+    const dutyPrompt = buildDutyPrompt(cfg, roundId, readLedger())
     // ⭐ W2-1 归因：人设注入**成功后**立刻落一条 persona-inject 事件（成本 0）。
     //    为什么在这里而不是 buildDutyPrompt 里：那是纯装配函数，不该产生 IO；
     //    而且此刻才确定"这一轮真的要跑了"——起不来的轮次不该在账本上留注入记录。
@@ -947,6 +1128,8 @@ const runDuty = async (why = 'manual') => {
     const child = spawn(process.execPath, [cli, ...args], {
       cwd: HOME,
       windowsHide: true,
+      // POSIX：独立进程组（W3-6 超时用 process.kill(-pid) 杀整棵树）；Windows 不需要
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       // ⭐ ELECTRON_RUN_AS_NODE：桌面版里 spawn 出去的 node 必须带，否则当 Electron 应用空退出
       env: {
@@ -962,6 +1145,18 @@ const runDuty = async (why = 'manual') => {
     currentChild = child
     currentRoundId = roundId
     currentRoundAt = Date.now()
+    // ⭐ W3-6：20 分钟硬超时。到点先记 lastError、再杀进程树；exit 收尾时按 `round-end code:'timeout'` 落账本，
+    //    这样「挂死的一轮」在账本/概览/报告兜底里都是一条可查的失败，而不是永远 running。
+    roundTimedOut = false
+    if (roundTimer) { try { clearTimeout(roundTimer) } catch { /* 兜住 */ } }
+    roundTimer = setTimeout(() => {
+      roundTimedOut = true
+      const msg = `值班轮硬超时：超过 ${Math.round(ROUND_TIMEOUT_MS / 60_000)} 分钟仍未退出 ⇒ 强杀进程树`
+      log(msg)
+      try { bumpState({ lastError: msg }) } catch { /* 兜住 */ }
+      killProcessTree(child)
+    }, ROUND_TIMEOUT_MS)
+    roundTimer.unref?.()
     // ⭐ 每条流一个**持久**解码器：跨 chunk 的多字节字符不会被切坏（旧版按块嗅探编码，
     //    中文整段被当 GBK 二次解码 ⇒ duty.log 乱码）。
     //    stdout 只留尾部 4KB（里面主要是模型 reasoning，全量落盘既肥又敏感）；
@@ -980,20 +1175,25 @@ const runDuty = async (why = 'manual') => {
       log(`值班轮起不来：${e?.message ?? e}`)
       running = false
       currentChild = null
+      if (roundTimer) { try { clearTimeout(roundTimer) } catch { /* 兜住 */ } roundTimer = null }
       try { live.end({ code: null, durationMs: Date.now() - currentRoundAt }) } catch { /* 兜住 */ }
+      bumpState({ lastError: `值班轮起不来：${e?.message ?? e}` })
     })
-    child.on('exit', (code) => {
+    child.on('exit', (rawCode) => {
+      if (roundTimer) { try { clearTimeout(roundTimer) } catch { /* 兜住 */ } roundTimer = null }
+      // ⭐ W3-6：超时被杀的一轮在账本里必须是 code:'timeout'（不是 shell 的 1 / null）
+      const code = roundTimedOut ? 'timeout' : rawCode
       running = false
       const durationMs = Date.now() - currentRoundAt
       currentChild = null
-      log(`值班轮结束（${why}，code=${code}）`)
+      log(`值班轮结束（${why}，code=${code}${roundTimedOut ? '（超时强杀）' : ''}）`)
       try { live.end({ code, durationMs }) } catch { /* 兜住 */ }
       try {
         const endedRound = currentRoundId
         // 先按报告兜底回填（agent 忘写账本时，接话/评论仍能从报告里找回来），再盘点本轮
         backfillFromReport(endedRound)
         const stNow = readJson(STATE_FILE, {})
-        const acc = roundAccounting(readEvents(LEDGER_FILE), endedRound, { scanSince: Number(stNow.replyScanSince) || 0 })
+        const acc = roundAccounting(readLedger(), endedRound, { scanSince: Number(stNow.replyScanSince) || 0 })
         appendEvents(LEDGER_FILE, [{
           t: new Date().toISOString(), round: endedRound, type: 'round-end', code, durationMs,
           replyScans: acc.counts.scans,
@@ -1011,7 +1211,12 @@ const runDuty = async (why = 'manual') => {
       } catch (e) { log(`写 round-end 失败：${e?.message ?? e}`) }
       stubReportIfMissing(code)
       rotateLogIfBig()
-      bumpState({ lastRunAt: new Date().toISOString(), lastWhy: why, lastCode: code, lastDurationMs: durationMs })
+      bumpState({
+        lastRunAt: new Date().toISOString(), lastWhy: why, lastCode: code, lastDurationMs: durationMs,
+        // 轮末刷新 lastError：成功清空；超时/非 0 退出留一条可读原因（控制台/诊断直接展示）
+        lastError: roundTimedOut ? `本轮硬超时（${Math.round(ROUND_TIMEOUT_MS / 60_000)} 分钟）已被强杀`
+          : (rawCode === 0 ? '' : `本轮退出码 ${rawCode}`),
+      })
       try { overviewHub.publish('round-end') } catch { /* 兜住 */ }
       // ⭐ 90 秒后复核（评论区压审对策）；不拖住宿主退出
       const t = setTimeout(() => { verifyRecentSafe('round').catch(() => {}) }, 90_000)
@@ -1019,7 +1224,7 @@ const runDuty = async (why = 'manual') => {
     })
     // ⭐ 只记「本轮开始时间」；lastRunAt/lastCode/lastDurationMs 是**上一轮的结果**，轮末才写。
     //    旧版两处都写 lastRunAt，于是运行中概览显示「本轮开始时间 + 上一轮退出码」。
-    bumpState({ lastRunStartedAt: new Date().toISOString(), lastWhy: why })
+    bumpState({ lastRunStartedAt: new Date().toISOString(), lastWhy: why, lastError: '' })
     try { overviewHub.publish('round-start') } catch { /* 兜住 */ }
     return {
       started: true, why, roundId, profile, cli, cwd: HOME, log: LOG_FILE,
@@ -1029,8 +1234,11 @@ const runDuty = async (why = 'manual') => {
     starting = false
     running = false
     currentChild = null
+    if (roundTimer) { try { clearTimeout(roundTimer) } catch { /* 兜住 */ } roundTimer = null }
     try { live.end({ code: null, durationMs: 0 }) } catch { /* 兜住 */ }
-    log(`值班轮开跑失败（${why}）：${e?.stack ?? e}`)
+    const msg = `值班轮开跑失败（${why}）：${e?.stack ?? e}`
+    log(msg)
+    try { bumpState({ lastError: `值班轮开跑失败：${e?.message ?? e}` }) } catch { /* 兜住 */ }
     return { started: false, why, error: String(e?.message ?? e) }
   }
 }
@@ -1053,7 +1261,7 @@ const replyTick = async () => {
   try {
     const cred = readCred()
     if (!cred) return
-    const events = readEvents(LEDGER_FILE)
+    const events = readLedger()
     // 「我的话」= 近 7 天的评论 + 接话/回复；一样都没有就省掉这次 API 轮询
     const recentMine = events.filter((e) => (e.type === 'comment' || e.type === 'reply-out') && e.rpid && Date.now() - Date.parse(e.t) < 7 * 86400_000)
     if (!recentMine.length) return
@@ -1187,7 +1395,7 @@ const overviewHealth = () => ({
 const buildOverview = () => {
   const cfg = effCfg()
   const st = readJson(STATE_FILE, {})
-  const events = readEvents(LEDGER_FILE)
+  const events = readLedger()
   let liveSnap = null
   try { liveSnap = live.snapshot(0) } catch { liveSnap = null }
   return buildOverviewData({
@@ -1197,7 +1405,8 @@ const buildOverview = () => {
     liveSnap,
     account: accountCache.value,
     health: overviewHealth(),
-    presence: presenceFrom(events, { now: Date.now() }),
+    // ⭐ 存在感不再在这里对**全量**事件算：交给 buildOverviewData 在「近 N 天」窗口子集上算（W4-2b）。
+    //    旧写法 `presenceFrom(events)` 会为了 7 天窗口把 10 万条全扫一遍，窗口优化等于白做。
     now: new Date(),
     home: HOME,
     ledgerFile: LEDGER_FILE,
@@ -1208,13 +1417,22 @@ const buildOverview = () => {
 const overviewHub = createOverviewHub({ compute: () => buildOverview() })
 
 // tick 帧用：本轮动作计数（不重算整封信，只算一次账本）
+// ⭐ W4-2：账本没变（reader 命中缓存时返回**同一个数组引用**）就复用上次结果 ——
+//    roundAccounting 是 O(事件数) 的全表过滤，10 万行 ~2.5ms；SSE tick 每 1.5s 一次，不该每次都重算。
+let quotaPerRoundCache = { events: null, roundId: '', scanSince: -1, value: null }
 const quotaPerRound = () => {
   try {
     const rid = currentRoundId
     if (!rid) return null
     const st = readJson(STATE_FILE, {})
-    const acc = roundAccounting(readEvents(LEDGER_FILE), rid, { scanSince: Number(st.replyScanSince) || 0 })
-    return { roundId: rid, ...acc.counts }
+    const scanSince = Number(st.replyScanSince) || 0
+    const events = readLedger()
+    const c = quotaPerRoundCache
+    if (c.events === events && c.roundId === rid && c.scanSince === scanSince) return c.value
+    const acc = roundAccounting(events, rid, { scanSince })
+    const value = { roundId: rid, ...acc.counts }
+    quotaPerRoundCache = { events, roundId: rid, scanSince, value }
+    return value
   } catch { return null }
 }
 
@@ -1647,8 +1865,52 @@ export function apply(ctx, config) {
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
         if (req.method === 'GET' && path === '/api/bili-fenshen/persona/preview') {
-          try { return sendJson(res, 200, previewPersona({ events: readEvents(LEDGER_FILE) })) }
+          try { return sendJson(res, 200, previewPersona({ events: readLedger() })) }
           catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
+        }
+        // ── W5-3 服务端两个端点（体检 / 换卡对比）──
+        // ⚠️ 纯函数由 lib/persona/{checkup,tagstats}.js 提供，**必须动态 import + try/catch**：
+        //    顶层静态 import 会在模块还没落地时让整个 index.js 加载失败（全站测试一起红）。
+        //    文件缺失 ⇒ 200 + ok:true + 空结构（绝不 500），文件一落地自动切真实现（import 有模块缓存）。
+        if (req.method === 'GET' && path === '/api/bili-fenshen/persona/checkup') {
+          const empty = { ok: true, windowDays: 14, n: 0, metrics: null, baseline: null, verdict: { level: 'ok', reasons: ['体检模块未就绪'] }, samples: [] }
+          try {
+            const mod = await import('./lib/persona/checkup.js').catch(() => null)
+            if (!mod || typeof mod.buildCheckup !== 'function') return sendJson(res, 200, empty)
+            const now = new Date()
+            const out = mod.buildCheckup({
+              // 体检只看近 14 天：先切窗口子集再算（10 万行账本不整扫）
+              events: windowPool(readLedger(), now, 14),
+              now,
+              windowDays: 14,
+              limit: 20,
+              card: loadCard(readActive()).card,
+            }) || {}
+            return sendJson(res, 200, {
+              ok: true,
+              windowDays: Number.isFinite(Number(out.windowDays)) ? Number(out.windowDays) : 14,
+              n: Number(out.n) || 0,
+              metrics: out.metrics || null,
+              baseline: out.baseline || null,
+              verdict: out.verdict || { level: 'ok', reasons: [] },
+              samples: Array.isArray(out.samples) ? out.samples : [],
+            })
+          } catch (e) {
+            log(`体检端点失败（已降级为空结构）：${e?.message ?? e}`)
+            return sendJson(res, 200, empty)
+          }
+        }
+        if (req.method === 'GET' && path === '/api/bili-fenshen/persona/history') {
+          const empty = { ok: true, tags: [] }
+          try {
+            const mod = await import('./lib/persona/tagstats.js').catch(() => null)
+            if (!mod || typeof mod.buildTagStats !== 'function') return sendJson(res, 200, empty)
+            const out = mod.buildTagStats({ events: readLedger(), limitPerTag: 3 }) || {}
+            return sendJson(res, 200, { ok: true, tags: Array.isArray(out.tags) ? out.tags : [] })
+          } catch (e) {
+            log(`换卡对比端点失败（已降级为空结构）：${e?.message ?? e}`)
+            return sendJson(res, 200, empty)
+          }
         }
         if (req.method === 'GET' && path === '/api/bili-fenshen/persona/expression') {
           try {
@@ -1662,24 +1924,38 @@ export function apply(ctx, config) {
             const active = readActive()
             const loaded = loadCard(active)
             if (!loaded.card) return sendJson(res, 404, { ok: false, error: loaded.error || '人设卡读不到' })
-            const entries = resolveLoreIndex(loaded.card, loadState()).map((e) => {
+            // W3-3：列表接口要能看到回收站里的条目（disabled:true），但**编译**永远用默认值（跳过）。
+            const entries = resolveLoreIndex(loaded.card, loadState(), new Date(), { includeDisabled: true }).map((e) => {
               const p = lorePath(e.id, active)
               let body = ''
               try { body = readFileSync(p, 'utf8') } catch { /* 正文可缺，索引仍可用 */ }
               return { ...e, path: p, chars: body.length, body }
             })
-            return sendJson(res, 200, { ok: true, entries })
+            // W3-3：孤儿扫描结果随索引一起回（控制台可提示"有正文没索引 / 有索引没正文"），同时写日志
+            const orphans = scanPersonaLoreOrphans()
+            logLoreOrphans(orphans, 'GET persona/lore')
+            return sendJson(res, 200, { ok: true, entries, orphans })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
         if (req.method === 'POST' && path === '/api/bili-fenshen/persona/expression') {
           try {
             const body = await readBody(req)
+            // ⭐ W3-3：删除类动作（软删 remove / 物理删 purge）前先留痕 `<file>.bak-<ts>`（保留最近 3 份）。
+            //    preset 模式先物化用户副本，否则备份到的是内置包里的只读资产、而且随后写的是家目录副本。
+            const act = String(body?.action || '')
+            if (act === 'remove' || act === 'purge') {
+              try { materializeUserCopy() } catch { /* 兜住：物化失败后面 editExpressionBank 自己会报 */ }
+              const bak = backupFileKeep(personaAssetPaths().bankFile)
+              if (bak) log(`语料库${act === 'purge' ? '物理删除' : '软删除'}前已留痕（.bak-<ts>，保留 ${BAK_KEEP} 份）`)
+            }
             const out = editExpressionBank(body || {})
             if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error || '语料库更新失败' })
-            log(`语料库已更新（${out.action} / ${out.form}）：共 ${out.total} 条`)
+            log(`语料库已更新（${out.action} / ${out.form}）：共 ${out.total} 条${out.soft ? `，回收站 ${out.disabled ?? 0} 条（可 restore）` : ''}`)
             return sendJson(res, 200, {
               ok: true, action: out.action, form: out.form,
               total: out.total, buckets: out.buckets, updatedAt: out.updatedAt,
+              // W3-3：remove = 软删除（客户端据此显示「已移入回收站（可恢复）」）；disabled = 回收站条数
+              soft: out.soft === true, disabled: Number(out.disabled) || 0,
               materialized: out.materialized, active: out.active,
             })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
@@ -1687,10 +1963,31 @@ export function apply(ctx, config) {
         if (req.method === 'POST' && path === '/api/bili-fenshen/persona/lore') {
           try {
             const body = await readBody(req)
+            const act = String(body?.action || '')
+            const sid = String(body?.id || '').trim()
+            // ⭐ W3-3：删前留痕。索引住在卡里 ⇒ 备份 card.json；purge 会物理丢索引，
+            //    正文文件也一并挪成 .bak-<ts> 再删（软删除 remove 保留正文，restore 才有东西可恢复）。
+            if (act === 'remove' || act === 'purge') {
+              try { materializeUserCopy() } catch { /* 兜住 */ }
+              const p = personaAssetPaths()
+              if (backupFileKeep(p.cardFile)) log(`见闻索引${act === 'purge' ? '物理删除' : '软删除'}前已留痕（card.json.bak-<ts>）`)
+              if (act === 'purge' && /^[\w-]{1,64}$/.test(sid)) {
+                const bodyFile = join(p.loreDir, `${sid}.md`)
+                if (backupFileKeep(bodyFile)) {
+                  try { unlinkSync(bodyFile) } catch { /* 删不掉就留着，孤儿扫描会报出来 */ }
+                  log(`见闻正文已归档为 .bak（${sid}），原文件移除`)
+                }
+              }
+            }
             const out = editLoreIndex(body || {})
             if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error || '见闻索引更新失败' })
+            const orphans = scanPersonaLoreOrphans()
+            logLoreOrphans(orphans, `POST persona/lore ${out.action}`)
             log(`见闻索引已更新（${out.action}）：共 ${out.count} 条`)
-            return sendJson(res, 200, { ok: true, action: out.action, count: out.count, snapshot: out.snapshot || '', materialized: out.materialized })
+            return sendJson(res, 200, {
+              ok: true, action: out.action, count: out.count, snapshot: out.snapshot || '',
+              soft: out.action === 'remove', materialized: out.materialized, orphans,
+            })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
         if (req.method === 'PUT' && path === '/api/bili-fenshen/persona/lore') {
@@ -1765,6 +2062,8 @@ export function apply(ctx, config) {
         '/api/bili-fenshen/persona', '/api/bili-fenshen/persona/preview', '/api/bili-fenshen/persona/preset',
         '/api/bili-fenshen/persona/expression', '/api/bili-fenshen/persona/lore',
         '/api/bili-fenshen/persona/versions', '/api/bili-fenshen/persona/versions/restore',
+        // W5-3：体检 / 换卡对比（纯函数在 lib/persona/{checkup,tagstats}.js，动态 import 降级）
+        '/api/bili-fenshen/persona/checkup', '/api/bili-fenshen/persona/history',
       ]
       const mountRoutes = () => {
         if (!web?.register) { log('webServer 不可用：HTTP 路由未挂'); return () => {} }
@@ -1777,7 +2076,7 @@ export function apply(ctx, config) {
           seenFile: join(HOME, 'seen.md'),
           logFile: LOG_FILE,
           patchConfig: () => cfgSnapshot,
-          readEvents: () => readEvents(LEDGER_FILE),
+          readEvents: () => readLedger(),
           overview: buildOverview,
           overviewHub,
           // ⭐ 保存配置后失效 CLI 探测缓存（否则改 dshBin 最长 10 分钟不生效）
@@ -1800,6 +2099,8 @@ export function apply(ctx, config) {
           live: {
             snapshot: (after) => liveSnapshot(after),
             subscribe: (listener) => live.onPush(listener),
+            // ⭐ W4-3：SSE tick 的**空闲短路**。纯内存布尔，不读账本/配置（snapshot 会读，见 liveSnapshot）。
+            isRunning: () => running || live.isRunning(),
           },
         })
         // ⭐ /live/stream 的 SSE 连接需要随插件卸载一起关掉，否则重载后旧连接还在推旧实例数据
@@ -1911,7 +2212,8 @@ export function apply(ctx, config) {
 
   // ── 启动即消化一次沉淀候选（停用自动值班也不让候选积压） ──
   try {
-    const g = processGrowth({ cfg: effCfg(), events: readEvents(LEDGER_FILE) })
+    // W2 收尾：同样注入复核位与 originals（启动时没有「本轮评论区」，传空）
+    const g = processGrowth({ cfg: effCfg(), events: readLedger(), review: growthReview, originals: [] })
     const s = g?.stats
     if (s && s.received) log(`自生长（启动消化）：候选 ${s.received} · 语料+${s.acceptedCorpus} · 见闻+${s.acceptedLore} · 拒 ${s.rejected} · 转正 ${s.promoted}`)
   } catch (e) { log(`自生长管道失败（不阻断启动）：${e?.message ?? e}`) }

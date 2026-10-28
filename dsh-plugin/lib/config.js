@@ -35,6 +35,8 @@ export const FIELDS = {
   // 人设自演化管道：值班轮沉淀候选（bili_persona_note）→ 宿主质检入库
   growthEnable: 'boolean',
   growthAutoPromote: 'number',
+  // W2 收尾：人工位（只转正人工确认过的候选；= 麦麦 checked_only）
+  growthCheckedOnly: 'boolean',
   reportLevel: 'string',
   dshBin: 'string',
   headlessProfile: 'string',

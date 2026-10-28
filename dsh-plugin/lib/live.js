@@ -361,6 +361,14 @@ export function createLiveStream(opts = {}) {
     },
 
     /**
+     * 轮次是否在跑（W4-3）。**廉价**：只读一个布尔，不构造快照、不复制事件数组。
+     * SSE 的 tick 定时器用它做空闲短路 —— 空闲时连 snapshot 都不该算（index.js 的 snapshot 会读账本+配置）。
+     */
+    isRunning() {
+      return running
+    },
+
+    /**
      * 订阅推流：listener 只收两种消息对象（Lead 2026-10-25 补充）：
      *   新事件 { kind:'event', frame:{seq,t,kind,tool?,text} }
      *   状态变化 { kind:'state' } —— 订阅方自己调 snapshot() 取整体状态

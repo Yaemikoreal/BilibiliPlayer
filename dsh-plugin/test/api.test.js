@@ -1,5 +1,5 @@
 // dsh-plugin/test/api.test.js
-import { test } from 'node:test'
+import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -265,6 +265,89 @@ test('GET /stream：hub 已有数据时，hello 不得带 seq 把客户端单调
     )
   } finally {
     h.closeSse()                                 // 关掉订阅与心跳，别吊住测试进程
+  }
+})
+
+/* ───────── SSE tick（W4-3）：空闲不推 + 运行中按关键字段去重 ─────────
+ * 用 node:test 的假时钟推进 10 秒，测试不真的等 10s（口径与线上 1.5s tick 完全一致）。
+ */
+
+function sseFrames(res) {
+  return res.chunks
+    .join('').split('\n\n').filter(Boolean)
+    .map((raw) => { const line = raw.split('\n').find((l) => l.startsWith('data: ')); return line ? JSON.parse(line.slice(6)) : null })
+    .filter(Boolean)
+}
+
+const sseReq = () => ({ method: 'GET', url: '/api/bili-fenshen/stream', headers: {}, on() {} })
+
+test('GET /stream（W4-3）：空闲 10 秒只推 0 帧 tick，且不做昂贵的实时快照', async () => {
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] })
+  let snapCalls = 0
+  const hub = createOverviewHub({ compute: () => ({ duty: { autoDuty: false }, health: {} }) })
+  hub.view()
+  const h = createApiHandler(deps({
+    overviewHub: hub,
+    live: {
+      isRunning: () => false,
+      snapshot: () => { snapCalls += 1; return { running: false, events: [], cursor: 0, phase: null, stats: { events: 0, tools: {}, actions: {}, errors: 0 } } },
+      subscribe: () => () => {},
+    },
+    quotaPerRound: () => ({ roundId: 'r1', picked: 1 }),
+  }))
+  const res = sseRes()
+  try {
+    await h(sseReq(), res)
+    assert.ok(sseFrames(res).some((f) => f.type === 'overview'), '首帧 overview 仍要立刻推')
+    // 10 秒 ≈ 6~7 个 tick 间隔
+    mock.timers.tick(10_000)
+    assert.equal(
+      sseFrames(res).filter((f) => f.type === 'tick').length, 0,
+      '空闲 10 秒不许推空 tick 帧（旧实现每 1.5s 一帧）',
+    )
+    // ⭐ 关键：空闲时连 snapshot 都不该算 —— index.js 的 snapshot 会读账本 + config.json，
+    //    空闲页面挂一天就是一天的空转盘（旧实现的真实代价，不是理论问题）。
+    assert.equal(snapCalls, 0, '空闲时不应调用 deps.live.snapshot')
+  } finally {
+    h.closeSse()
+    mock.timers.reset()
+  }
+})
+
+test('GET /stream（W4-3）：运行中状态没变不重复推、变化立刻推、最长 10s 补一帧', async () => {
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] })
+  let phase = { key: 'think', label: '思考' }
+  let stats = { events: 0, tools: {}, actions: { like: 0, comment: 0, dynamic: 0, reply: 0 }, errors: 0 }
+  const hub = createOverviewHub({ compute: () => ({ duty: {}, health: {} }) })
+  hub.view()
+  const h = createApiHandler(deps({
+    overviewHub: hub,
+    live: {
+      isRunning: () => true,
+      snapshot: () => ({ running: true, roundId: 'r1', startedAt: '2026-10-28T00:00:00.000Z', elapsedMs: 1500, phase, stats }),
+      subscribe: () => () => {},
+    },
+    quotaPerRound: () => ({ roundId: 'r1', picked: 1 }),
+  }))
+  const res = sseRes()
+  const ticks = () => sseFrames(res).filter((f) => f.type === 'tick')
+  try {
+    await h(sseReq(), res)
+    assert.equal(ticks().length, 0, '连上时还没到 tick 间隔')
+    mock.timers.tick(1500)                        // 第 1 个 tick：签名首次出现 ⇒ 立刻推
+    assert.equal(ticks().length, 1, '运行中第一帧 tick 要立刻推')
+    mock.timers.tick(3000)                        // 再 2 个 tick，关键字段没变且 <10s ⇒ 不重复
+    assert.equal(ticks().length, 1, '状态没变化时不许每 1.5s 重复推（tick 去重）')
+    phase = { key: 'act', label: '发言' }          // 状态变化
+    stats = { ...stats, tools: { bili_reply: 1 }, actions: { ...stats.actions, comment: 1 } }
+    mock.timers.tick(1500)
+    assert.equal(ticks().length, 2, '阶段/工具/动作变化必须立刻推')
+    const before = ticks().length
+    mock.timers.tick(15_000)                      // 状态不再变化：只有 10s 心跳会补帧
+    assert.ok(ticks().length >= before + 1, '状态长期没变也要有 ≤10s 的心跳帧（前端「数据 Ns 前」）')
+  } finally {
+    h.closeSse()
+    mock.timers.reset()
   }
 })
 
