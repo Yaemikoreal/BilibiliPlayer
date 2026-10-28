@@ -68,7 +68,7 @@ test('卡模式：before 含身份与标签，after 含状态/手感/尾注', ()
   assert.match(r.before, /一个测试用的普通网友/)
   assert.match(r.before, /你的生活/)
   assert.match(r.after, /你这会儿的状态/)
-  assert.match(r.after, /写之前，最后看三行/)
+  assert.match(r.after, /写之前，最后看几行/)
   assert.ok(r.stats.total <= 3000)
 })
 

@@ -110,21 +110,33 @@ test('见闻正文写读回环；路径穿越被拒', () => {
   assert.equal(bad.ok, false)
 })
 
-test('预设卡（whale 2.1.0）本身可过整卡校验且内容符合主人决策', async () => {
+test('预设卡（whale 2.2.0）本身可过整卡校验且内容符合主人决策', async () => {
   const { validateCard, SPEC } = await import('../lib/persona/card.js')
   const { presetPath } = await import('../lib/persona/store.js')
   const whale = JSON.parse(readFileSync(presetPath('whale'), 'utf8'))
   assert.equal(whale.spec, SPEC)
-  assert.equal(whale.version, '2.1.0')
+  assert.equal(whale.version, '2.2.0')
   const v = validateCard(whale)
   assert.deepEqual(v.errors, [], 'whale 预设卡应通过校验：' + JSON.stringify(v.errors))
 
-  // 主人决策：话题红线只有政治一条；活动范围不再有"绕开"清单
+  // 主人决策（2026-10-27 不变）：话题红线只有政治一条；活动范围不再有"绕开"清单
   assert.equal(whale.redlines.length, 1)
   assert.equal(whale.redlines[0].id, 'no-politics')
   assert.ok(whale.redlines[0].instead && !/^(不|别|禁止)/.test(whale.redlines[0].instead), 'instead 必须是正向动作')
   assert.ok(!Array.isArray(whale.taste.avoid) || whale.taste.avoid.length === 0, 'taste.avoid 应删除或为空')
   assert.ok(Array.isArray(whale.taste.watch) && whale.taste.watch.length > 0, '初始口味保留')
+
+  // 2026-10-28 补卡（W1-6 切链路前置）：能力边界与自我保护进 boundaries，不占红线位
+  const boundaries = whale.identity.boundaries.join('\n')
+  for (const must of ['只会点赞和评论', '不编会被当真的事实', '不冒充官方', '不传谣', '不碰代练']) {
+    assert.ok(boundaries.includes(must), `boundaries 应含「${must}」`)
+  }
+  // 见闻不再把别人的原话认领成自己的经历（A9）
+  const food = whale.loreIndex.find((l) => l.id === 'food-wedding')
+  assert.ok(food, 'food-wedding 见闻应保留（只是换了故事）')
+  assert.ok(!/广西|蹭婚宴/.test(food.oneLine), '见闻不能再复用真人语料里的「广西人蹭婚宴」原句')
+  const sampleText = whale.voice.samples.good.map((s) => s.text).join('\n')
+  assert.ok(sampleText.includes('广西人'), '那条真人语料仍保留在 samples 里当语料样本（身份是样本，不是我的经历）')
 })
 
 test('resolveLoreIndex 对编辑后的卡照常工作（正文可缺，索引仍可用）', () => {

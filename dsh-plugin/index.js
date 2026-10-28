@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 
 // ⭐ lib/* 是本插件的纯逻辑模块（package.json files 已带上）；任何加载失败都按可选依赖降级
 import { appendEvents, readEvents, isDuplicate } from './lib/ledger.js'
+import { createUtf8Decoder, keepTail, rotateIfBig, createProbeLogger } from './lib/logsink.js'
 import { parseRoundReport, parseProactiveScan } from './lib/report.js'
 import { createApiHandler } from './lib/api.js'
 import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort } from './lib/config.js'
@@ -36,10 +37,11 @@ import { loadPersona } from './lib/persona.js'
 import {
   resolvePersona, seedIfEmpty, guardPrompt, personaHealth, previewPersona,
   listPresets, savePersonaCard, loadBank, bankStats, readActive, writeActive, l0Checks, SPEC,
-  loadCard, listVersions, readVersion, normalizeBank, resolveLoreIndex, lorePath, loadState,
+  loadCard, listVersions, readVersion, normalizeBank, resolveLoreIndex, lorePath, loadState, saveState, recordUsage,
   editExpressionBank, editLoreIndex, writeLoreBody,
-  processGrowth,
+  processGrowth, degradationPlan, resolveBudget,
 } from './lib/persona/index.js'
+import { buildPersonaInjectEvent, describePersonaInject } from './lib/persona/attribution.js'
 import { toActivities, dayKeyOf } from './lib/activity.js'
 import { runDiagnose, formatDiagnoseText } from './lib/diagnose.js'
 import { createLiveStream } from './lib/live.js'
@@ -272,6 +274,22 @@ const bumpState = (patch) => {
   return next
 }
 
+const LOG_MAX_BYTES = 512 * 1024
+const LOG_KEEP_BYTES = 256 * 1024
+let lastRotateAt = 0
+
+/**
+ * 日志轮转：**按字节**保留尾部，而不是按字符（旧实现 `.slice(-256*1024)` 是字符串切片，
+ * 中文 3 字节 ⇒ `.old` 实际可达 ~768KB，轮转后仍超阈值）。
+ * 子进程输出会高频调用它，所以 5 秒节流，避免每个 chunk 都 stat 一次。
+ */
+const rotateLogIfBig = (force = false) => {
+  const nowMs = Date.now()
+  if (!force && nowMs - lastRotateAt < 5_000) return false
+  lastRotateAt = nowMs
+  return rotateIfBig(LOG_FILE, { maxBytes: LOG_MAX_BYTES, keepBytes: LOG_KEEP_BYTES })
+}
+
 const log = (msg) => {
   try {
     appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${msg}\n`, 'utf8')
@@ -279,15 +297,6 @@ const log = (msg) => {
   } catch { /* 写日志绝不能抛 */ }
   // ⭐ 同时推进实时流：控制台「实时」页无需轮询日志文件即可看到宿主事件
   try { live.pushHost(msg) } catch { /* 实时流失败不能影响日志 */ }
-}
-const rotateLogIfBig = () => {
-  try {
-    if (!existsSync(LOG_FILE)) return
-    if (statSync(LOG_FILE).size < 512 * 1024) return
-    const old = readFileSync(LOG_FILE, 'utf8').slice(-256 * 1024)
-    writeFileSync(LOG_FILE + '.old', old, 'utf8')
-    writeFileSync(LOG_FILE, '', 'utf8')
-  } catch { /* 兜住 */ }
 }
 
 /* ───────────────────────── 生效配置（patch ← config.json 覆盖层，设计文档 §12.3） ───────────────────────── */
@@ -357,21 +366,21 @@ const scanForDsh = (dir, depth, budget) => {
   return ''
 }
 
-let dshCliCache = { v: null, at: 0 }
-const findDshCli = (cfg) => {
+// ⭐ 缓存 key 必须带上 dshBin：旧版不含配置，用户改了 dshBin 也照样返回旧值。
+// ⭐ 探测细节不再每次 log：概览轮询会把它变成刷屏（duty.log 曾被顶到 485KB），
+//    改为「结论变化才记一行」。
+let dshCliCache = { v: null, at: 0, key: null }
+const dshProbe = createProbeLogger((m) => log(m), { label: 'dshBin 探测' })
+
+const findDshCliRaw = (cfg) => {
   const explicit = String(cfg?.dshBin || '').trim()
   if (explicit) {
-    log(`dshBin 探测：explicit=${explicit} exists=${existsSync(explicit)}`)
     if (existsSync(explicit)) return explicit
   }
   // ⭐ 桌面版主通道：asar 内的 bin.js（宿主进程读 asar 透明；探测路径与 schemastery 相同）
   if (process.resourcesPath) {
     const asarBin = join(process.resourcesPath, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
-    const asarOk = existsSync(asarBin)
-    log(`dshBin 探测：asarBin=${asarBin} exists=${asarOk}`)
-    if (asarOk) return asarBin
-  } else {
-    log('dshBin 探测：process.resourcesPath 为空（非 Electron 宿主？）')
+    if (existsSync(asarBin)) return asarBin
   }
   try {
     for (const spec of ['@deepseek-ai/dsh/lib/bin.js', '@deepseek-ai/dsh']) {
@@ -390,11 +399,20 @@ const findDshCli = (cfg) => {
   }
   return ''
 }
+
+/** 探测 + 降噪留痕（同结论不重复记）。 */
+const findDshCli = (cfg) => {
+  const v = findDshCliRaw(cfg)
+  dshProbe(v)
+  return v
+}
+
 const dshCliCached = (cfg) => {
   const now = Date.now()
-  if (dshCliCache.v !== null && now - dshCliCache.at < 60_000) return dshCliCache.v
+  const key = String(cfg?.dshBin || '').trim()
+  if (dshCliCache.v !== null && dshCliCache.key === key && now - dshCliCache.at < 60_000) return dshCliCache.v
   const v = findDshCli(cfg)
-  dshCliCache = { v, at: now }
+  dshCliCache = { v, at: now, key }
   return v
 }
 
@@ -428,6 +446,12 @@ const stopDuty = () => {
   return { ok: true, stopped: true }
 }
 
+/**
+ * 外部输入的兜底解码（只在**真 GBK** 来源使用，例如 Windows 控制台回显）。
+ * ⚠️ 子进程 stdout/stderr 绝不能走这里：它们是 UTF-8，而 Node 会在多字节字符中间切块，
+ *    按块嗅探 U+FFFD 会把整块（可达 64KB）误判成 GBK，中文全毁、ASCII 完好
+ *    （2026-10-28 实测：duty.log 15:46 之后整段乱码）。子进程用 createUtf8Decoder。
+ */
 const toText = (buf) => {
   try {
     const b = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf))
@@ -437,8 +461,12 @@ const toText = (buf) => {
   } catch { return String(buf) }
 }
 
-const appendLogChunk = (buf) => {
-  try { appendFileSync(LOG_FILE, toText(buf), 'utf8') } catch { /* 兜住 */ }
+/** 追加一段日志（接受字符串或 Buffer）；顺便触发按字节轮转。 */
+const appendLogChunk = (chunk) => {
+  try {
+    appendFileSync(LOG_FILE, typeof chunk === 'string' ? chunk : toText(chunk), 'utf8')
+    rotateLogIfBig()
+  } catch { /* 兜住 */ }
 }
 
 const stubReportIfMissing = (code) => {
@@ -619,19 +647,80 @@ const buildOverlay = (cfg, em) => {
   try { writeFileSync(OVERLAY_FILE, yml.join('\n'), 'utf8'); return OVERLAY_FILE } catch (e) { log(`写 overlay 失败：${e?.message ?? e}`); return null }
 }
 
+/* ───────────────────────── 人设用量：pending → 轮末转正（冷却表闭环） ─────────────────────────
+ * 为什么两段式：人设编译发生在 spawn **之前**，此时代理还没真用这些素材；若编译时直接写冷却表，
+ * 本轮即使 spawn 失败/中途崩，也会把这些条目记成「今天用过」，白丢一天素材。
+ * 所以编译时只落 pending，`round-end` 确认本轮跑完之后再转正；过期 pending 直接忽略。
+ * 这一步以前完全缺失（recordUsage 只有测试在调），导致 loreUsed/expressionUsed 永远为空、
+ * 「同一天不重复讲同一件事」从未生效。
+ */
+const pendingUsagePath = () => join(HOME, 'persona', 'pending-usage.json')
+
+const writePendingUsage = (roundId, personaRes) => {
+  try {
+    if (!personaRes || personaRes.mode !== 'card') return
+    const used = personaRes.used || {}
+    const n = (used.loreIds?.length || 0) + (used.canonKeys?.length || 0) + (used.expressionIds?.length || 0)
+    if (!n) return
+    writeJsonSafe(pendingUsagePath(), {
+      roundId, at: new Date().toISOString(), personaTag: personaRes.personaTag || '', used,
+    })
+  } catch (e) { log(`写 pending-usage 失败（不影响本轮）：${e?.message ?? e}`) }
+}
+
+/** 轮末转正：把本轮用到的素材记进冷却表；只认本轮自己的 pending。 */
+export const commitPendingUsage = (roundId) => {
+  try {
+    const p = pendingUsagePath()
+    const pending = readJson(p, null)
+    if (!pending || !pending.roundId) return false
+    if (roundId && pending.roundId !== roundId) {
+      log(`pending-usage 属于别的轮（${pending.roundId}），本轮忽略`)
+      return false
+    }
+    const ageMs = Date.now() - Date.parse(pending.at || '')
+    if (Number.isFinite(ageMs) && ageMs > 6 * 3600_000) {
+      log(`pending-usage 已过期（${Math.round(ageMs / 60000)} 分钟），丢弃`)
+      try { unlinkSync(p) } catch { /* 兜住 */ }
+      return false
+    }
+    const ok = saveState(recordUsage(loadState(), pending.used || {}))
+    if (ok) {
+      const u = pending.used || {}
+      log(`人设用量已转正（lore ${(u.loreIds || []).length} / canon ${(u.canonKeys || []).length} / 语料 ${(u.expressionIds || []).length}）`)
+    }
+    try { unlinkSync(p) } catch { /* 兜住 */ }
+    return ok
+  } catch (e) {
+    log(`转正 pending-usage 失败（不影响报告）：${e?.message ?? e}`)
+    return false
+  }
+}
+
+/**
+ * 最近一次 buildDutyPrompt 的人设注入元数据（W2-1 写 `persona-inject` 事件用）。
+ *
+ * 为什么用模块级记录：buildDutyPrompt 的返回值必须保持**字符串**（调用方直接当 prompt 用），
+ * 而"这轮吃了哪版人设 / 超没超线 / 降级砍了什么"只有它自己知道。
+ * `runDuty` 在 spawn 前用 `getLastPersonaInject()` 取，交给 lib/persona/attribution.js 落账本。
+ */
+let lastPersonaInjectRecord = null
+export const getLastPersonaInject = () => lastPersonaInjectRecord
+
 export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   const charter = (() => {
     try { return readFileSync(join(PROMPTS_DIR, 'duty.md'), 'utf8').split('<家目录>').join(HOME) } catch { return '' }
   })()
-  // 人设：唯一入口是 lib/persona/index.js 的 resolvePersona。
+  // 人设：**取数**（resolvePersona：读卡/派生状态/语料库）→ **纯函数装配**（lib/persona/layers.js）
+  //       → **这里只拼装**。编译器细节（场域字数/预算/降级）都在 lib/persona 里，别在这层再写一遍。
   //   - 配置里有 personaPrompt（正文/文件路径）⇒ **legacy 直通**，行为与升级前完全一致；
   //   - 否则读 <家目录>/persona/active.json（默认 preset:whale），编译成
   //     「前段（身份 + 见闻索引）」与「后段（今日状态 + 语料样本 + 最后一公里）」两部分：
   //     前段放章程之前（事实），后段放整轮 prompt 最末尾（行为贴生成点）。
-  const personaRes = resolvePersona({ cfg, events: ledgerEvents, roundId, modeMax: 100 })
-  if (personaRes.notes?.length) log(`人设：${personaRes.notes.join('；')}`)
-  const personaBlock = personaRes.before
-  const personaAfter = personaRes.after || ''
+  //   - 场域字数走卡（W1-2）：评论 100 / 楼中楼 40 / 动态 60，与时段上限取更严。
+  //   - `degrade` 非空 = 超软线后的**二次编译**（W1-5），只砍见闻/示例/状态，**L0 尾注永远保留**。
+  const personaOnce = (degrade = []) =>
+    resolvePersona({ cfg, events: ledgerEvents, roundId, modes: 'card', degrade })
 
   const q = quotaFromLedger()
   const picked = q.picked
@@ -681,11 +770,11 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
       + '\n  命中规则：BV 号完全相同 / UP 主名或 UID 命中 / 标题包含该词（不区分大小写）。'
     : '不看清单：（空）'
 
-  const prompt = `你是这个账号的用户本人——一个独立、有自己判断的普通网友。现在按自己的兴趣刷一轮B站，看到值得的留下点痕迹。`
-    + personaBlock
-    + (charter
-      ? `\n===== 值班章程（<家目录> 已替换为真实路径）—— 严格按它执行 =====\n\n${charter}\n===== 章程结束 =====\n\n`
-      : `然后读章程 ${join(PROMPTS_DIR, 'duty.md')}（章程里的 <家目录> 指 ${HOME}），严格按它执行。\n\n`)
+  // 章程 + 本轮参数：与人设无关，先算好；人设降级后直接复用（不重算、不重读章程）
+  const head = `你是这个账号的用户本人——一个独立、有自己判断的普通网友。现在按自己的兴趣刷一轮B站，看到值得的留下点痕迹。`
+  const rest = (charter
+    ? `\n===== 值班章程（<家目录> 已替换为真实路径）—— 严格按它执行 =====\n\n${charter}\n===== 章程结束 =====\n\n`
+    : `然后读章程 ${join(PROMPTS_DIR, 'duty.md')}（章程里的 <家目录> 指 ${HOME}），严格按它执行。\n\n`)
     + `本轮参数：\n`
     + `- 记账：本轮 round id = ${roundId}（账本 ${LEDGER_FILE} 事件的 round 字段用这个值）；账本绝对路径 = ${LEDGER_FILE}。\n`
     + `- 报告：${report}\n`
@@ -717,15 +806,81 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
     + `- 你的 MCP 工具带 bili- 前缀（如 bili_search / bili_subtitle / bili_reply / bili_like / bili_send_dynamic）。\n`
     + `- 判重表 = ${join(HOME, 'seen.md')}（绝对路径，别写错地方）；归档 = ${join(DIGEST_DIR, dayKey().slice(0, 7) + '.md')}。\n`
     + `- 完成后：报告（按章程契约）+ 判重表，最后用一句话汇报本轮做了什么。现在几点了自己看一眼系统时间。`
-    + personaAfter
 
-  // 预算守卫：prompt 走 argv（Windows 命令行上限 32,767 字符），超硬线直接丢弃人设后段
-  const g = guardPrompt(prompt)
-  if (g.level !== 'ok') log(`值班 prompt ${g.len} 字符（${g.level}；软线 ${g.softMax} / 硬线 ${g.hardMax}）`)
-  if (g.level === 'over' && personaAfter) {
-    log('值班 prompt 超硬线：本轮丢弃人设后段（今日状态/语料/最后一公里），保留身份与章程')
-    return prompt.slice(0, prompt.length - personaAfter.length)
+  const assemble = (res) => head + (res.before || '') + rest + (res.after || '')
+  const assembleNoBefore = (res) => head + rest + (res.after || '')
+
+  let personaRes = personaOnce()
+  let prompt = assemble(personaRes)
+  let guard = guardPrompt(prompt)
+  let degraded = []
+  let droppedBefore = false
+
+  // 预算守卫：prompt 走 argv（Windows 命令行上限 32,767 字符）。
+  // W1-5：超软线不再"整段丢 after"（那会精确丢掉最有用的 L0 尾注），而是按 degradationPlan
+  //       二次编译人设：先 lore:shrink / samples:half，再 lore:drop / samples:drop / state:shrink，
+  //       **尾注不动**；实际降级动作记进 getLastPersonaInject() 供 W2-1 归因。
+  if (guard.level !== 'ok') {
+    const plan = degradationPlan(guard.level)
+    if (plan.length) {
+      const retry = personaOnce(plan)
+      const p2 = assemble(retry)
+      const g2 = guardPrompt(p2)
+      if (g2.len < prompt.length) {
+        personaRes = retry
+        prompt = p2
+        guard = g2
+        degraded = retry.degraded || plan
+      }
+      // over 时再补一刀：state:shrink 只省几十字；仍超硬线就把状态整块砍掉（尾注依然不动）
+      if (guard.level === 'over') {
+        const drop = personaOnce([...plan, 'state:drop'])
+        const p3 = assemble(drop)
+        const g3 = guardPrompt(p3)
+        if (g3.len < prompt.length) {
+          personaRes = drop
+          prompt = p3
+          guard = g3
+          degraded = drop.degraded || [...plan, 'state:drop']
+        }
+      }
+      // 最后一道安全阀：仍超硬线时宁可砍**前段身份**，也保住 C2（状态+手感+尾注）
+      if (guard.level === 'over' && personaRes.before) {
+        const p4 = assembleNoBefore(personaRes)
+        if (p4.length < prompt.length) {
+          prompt = p4
+          guard = guardPrompt(p4)
+          droppedBefore = true
+        }
+      }
+    }
+    log(`值班 prompt ${guard.len} 字符（${guard.level}；软线 ${guard.softMax} / 硬线 ${guard.hardMax}）`
+      + (degraded.length ? ` → 人设降级：${degraded.join('、')}` : '')
+      + (droppedBefore ? ' → 已放弃前段身份（保尾注）' : ''))
+    if (guard.level === 'over') log('⚠️ 降级后仍超硬线：本轮仍带尾注（不再整段丢 after），但 argv 可能被截断，请检查章程/参数段')
   }
+
+  // ⭐ 只落 pending，不直接写冷却表（本轮可能根本起不来）；轮末 commitPendingUsage 转正。
+  //    必须用**最终**（可能已降级）的人设：被砍掉的见闻/语料本来就没进 prompt，不该记成"用过"。
+  writePendingUsage(roundId, personaRes)
+  if (personaRes.notes?.length) log(`人设：${personaRes.notes.join('；')}`)
+
+  // ⭐ W2-1：报告头一行「人设：whale@x（五块 · 合计；降级：…）」——宿主拼进「本轮参数」，模型照抄。
+  //    放在**降级之后**：报告要写的是"这一轮实际吃了什么"，不是编译前的原版。
+  const injectEvent = buildPersonaInjectEvent({
+    round: roundId, personaRes, guard, degraded,
+    notes: droppedBefore ? ['dropped-before：为过硬线放弃前段身份，保 L0 尾注'] : [],
+  })
+  if (injectEvent && prompt.includes('本轮参数：\n')) {
+    prompt = prompt.replace('本轮参数：\n', `本轮参数：\n- 人设（报告头照抄这一行）：${describePersonaInject(injectEvent)}\n`)
+    // 这一行也是 prompt 的一部分，重新过守卫（几十字符，超软线时也要被计入）
+    const gLine = guardPrompt(prompt)
+    if (gLine.level !== guard.level) log(`人设报告行把 prompt 推到 ${gLine.len} 字符（${gLine.level}）`)
+    guard = gLine
+  }
+
+  // W2-1 归因的原始素材：这轮吃了哪版人设、块体量、守卫结果、降级动作
+  lastPersonaInjectRecord = { roundId, personaRes, guard, degraded, droppedBefore, injectEvent, at: new Date().toISOString() }
   return prompt
 }
 
@@ -765,7 +920,28 @@ const runDuty = async (why = 'manual') => {
     const profile = String(cfg?.headlessProfile || 'headless').trim() || 'headless'
     const args = ['--profile', profile]
     if (overlay) args.push('--patch', overlay)
-    args.push(buildDutyPrompt(cfg, roundId, readEvents(LEDGER_FILE)))
+    const dutyPrompt = buildDutyPrompt(cfg, roundId, readEvents(LEDGER_FILE))
+    // ⭐ W2-1 归因：人设注入**成功后**立刻落一条 persona-inject 事件（成本 0）。
+    //    为什么在这里而不是 buildDutyPrompt 里：那是纯装配函数，不该产生 IO；
+    //    而且此刻才确定"这一轮真的要跑了"——起不来的轮次不该在账本上留注入记录。
+    try {
+      const info = getLastPersonaInject()
+      const ev = buildPersonaInjectEvent({
+        round: roundId,
+        personaRes: info?.personaRes,
+        guard: info?.guard,
+        degraded: info?.degraded || [],
+        notes: info?.droppedBefore ? ['dropped-before：为过硬线放弃前段身份，保 L0 尾注'] : [],
+      })
+      if (ev) {
+        appendEvents(LEDGER_FILE, [ev])
+        log(`人设归因：${describePersonaInject(ev)}`)
+      } else {
+        const mode = info?.personaRes?.mode || 'unknown'
+        log(`人设归因：本轮走 ${mode}，没有卡链路注入可记（legacy/missing 不落 persona-inject）`)
+      }
+    } catch (e) { log(`写 persona-inject 失败（不影响本轮）：${e?.message ?? e}`) }
+    args.push(dutyPrompt)
     log(`值班轮开跑（${why}）：profile=${profile} cli=${cli}`)
     log(`值班轮 spawn 调试：execPath=${process.execPath} resourcesPath=${process.resourcesPath || '（无）'}`)
     const child = spawn(process.execPath, [cli, ...args], {
@@ -786,8 +962,20 @@ const runDuty = async (why = 'manual') => {
     currentChild = child
     currentRoundId = roundId
     currentRoundAt = Date.now()
-    child.stdout?.on('data', (buf) => { appendLogChunk(buf); try { live.pushChildChunk(buf) } catch { /* 实时流失败不影响日志 */ } })
-    child.stderr?.on('data', (buf) => { appendLogChunk(buf); try { live.pushChildChunk(buf) } catch { /* 同上 */ } })
+    // ⭐ 每条流一个**持久**解码器：跨 chunk 的多字节字符不会被切坏（旧版按块嗅探编码，
+    //    中文整段被当 GBK 二次解码 ⇒ duty.log 乱码）。
+    //    stdout 只留尾部 4KB（里面主要是模型 reasoning，全量落盘既肥又敏感）；
+    //    stderr 全量保留（诊断主要靠它）。完整原始流已由 live.pushChildChunk 进环形缓冲。
+    const decOut = createUtf8Decoder()
+    const decErr = createUtf8Decoder()
+    child.stdout?.on('data', (buf) => {
+      try { live.pushChildChunk(buf) } catch { /* 实时流失败不影响日志 */ }
+      appendLogChunk(keepTail(decOut.write(buf), 4096))
+    })
+    child.stderr?.on('data', (buf) => {
+      try { live.pushChildChunk(buf) } catch { /* 同上 */ }
+      appendLogChunk(decErr.write(buf))
+    })
     child.on('error', (e) => {
       log(`值班轮起不来：${e?.message ?? e}`)
       running = false
@@ -818,6 +1006,8 @@ const runDuty = async (why = 'manual') => {
           log(`本轮未做接话扫描（不合规）round=${endedRound}`)
           appendEvents(LEDGER_FILE, [{ t: new Date().toISOString(), round: endedRound, type: 'note', text: 'round incomplete: no reply-scan' }])
         }
+        // ⭐ 人设用量转正：本轮确认跑完，才把"摆到台面上的见闻/语料"记进冷却表
+        commitPendingUsage(endedRound)
       } catch (e) { log(`写 round-end 失败：${e?.message ?? e}`) }
       stubReportIfMissing(code)
       rotateLogIfBig()
@@ -966,14 +1156,25 @@ const accountForOverview = async ({ force = false } = {}) => {
   return accountCache.value
 }
 
-// CLI 探测会扫目录；10 分钟内复用，避免概览每次轮询都重扫（旧版把 duty.log 写肥到 485 KB 的元凶之一）
-let cliHealthCache = { at: 0, value: '' }
+// CLI 探测会扫目录：**命中缓存 10 分钟，未命中只缓存 60 秒**。
+// 旧版两侧都是 10 分钟 —— 未命中时每次轮询都重探（duty.log 一分钟一条就是它），
+// 命中时又让「刚填好的 dshBin」最多 10 分钟不生效。缓存 key 还带上 dshBin，改配置即重探。
+let cliHealthCache = { at: 0, value: '', key: null }
 const cliForHealth = () => {
   const nowMs = Date.now()
-  if (!cliHealthCache.value || nowMs - cliHealthCache.at > 10 * 60_000) {
-    try { cliHealthCache = { at: nowMs, value: dshCliCached(effCfg()) || '' } } catch { /* 兜住 */ }
-  }
-  return cliHealthCache.value
+  const key = String(effCfg()?.dshBin || '').trim()
+  const ttl = cliHealthCache.value ? 10 * 60_000 : 60_000
+  if (cliHealthCache.key === key && nowMs - cliHealthCache.at < ttl) return cliHealthCache.value
+  let value = ''
+  try { value = dshCliCached(effCfg()) || '' } catch { /* 兜住 */ }
+  cliHealthCache = { at: nowMs, value, key }
+  return value
+}
+
+/** 保存配置后主动失效 CLI 探测缓存（由 lib/api.js 的 POST /config 调用，见 CONSOLE-ISSUES P1-4）。 */
+export const resetCliCaches = () => {
+  dshCliCache = { v: null, at: 0, key: null }
+  cliHealthCache = { at: 0, value: '', key: null }
 }
 
 const overviewHealth = () => ({
@@ -1437,7 +1638,11 @@ export function apply(ctx, config) {
               presets: listPresets(),
               bank: bankStats(bank || {}),
               versions: listVersions().slice(0, 20).map((v) => ({ name: v.name, mtime: v.mtime })),
-              budget: { blocks: { core: 1500, lore: 300, state: 500, samples: 450, tail: 250 }, totalMax: 3000 },
+              // W1-3：预算面板也读卡（`card.render.budget` 优先，缺省回落 budget.js），否则"卡改了面板不变"
+              budget: {
+                blocks: loaded.card ? { ...resolveBudget(loaded.card) } : { core: 1500, lore: 300, state: 500, samples: 450, tail: 250 },
+                totalMax: 3000,
+              },
             })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
@@ -1575,6 +1780,8 @@ export function apply(ctx, config) {
           readEvents: () => readEvents(LEDGER_FILE),
           overview: buildOverview,
           overviewHub,
+          // ⭐ 保存配置后失效 CLI 探测缓存（否则改 dshBin 最长 10 分钟不生效）
+          resetCliCaches,
           quotaPerRound,
           setDuty: (v) => {
             const cur = effectiveConfig(cfgSnapshot || {}, CONFIG_FILE)

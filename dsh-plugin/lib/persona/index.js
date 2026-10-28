@@ -13,27 +13,28 @@
  */
 import { join } from 'node:path'
 import { loadCard, readActive, writeActive, readAssetJson, assetDir, homeDir, listPresets, saveCard, seedIfEmpty, listVersions, readVersion, materializeUserCopy, saveBank, writeLoreBody, loadBank } from './store.js'
-import { compilePersona, buildCore } from './compile.js'
-import { deriveState, loadState, saveState, debtLine, formOf, timeOfDayOf, hasEmoji } from './state.js'
+import { compilePersona, buildCore, renderPersonaText } from './compile.js'
+import { buildLayers, resolvePosition } from './layers.js'
+import { deriveState, loadState, saveState, recordUsage, debtLine, formOf, timeOfDayOf, hasEmoji } from './state.js'
 import { loadLegacy, legacyBlock } from './legacy.js'
 import { validateCard, l0Checks, migrateLegacyMarkdown, injectedText, SPEC } from './card.js'
 import { normalizeBank, bankStats, BUCKETS } from './expression.js'
 import { renderLoreIndex, resolveLoreIndex, lorePath, validateLoreEntry } from './lore.js'
 import { charLen } from './text.js'
-import { guardPrompt } from './budget.js'
+import { guardPrompt, resolveBudget, resolveModes, normalizeModes, effectiveModes, degradationPlan, FALLBACK_MODES } from './budget.js'
 import { processGrowth, appendPending, vetCorpus, vetLore, pruneBucket, GROWTH_LIMITS } from './growth.js'
 
 export {
   SPEC, validateCard, l0Checks, migrateLegacyMarkdown, injectedText,
   listPresets, saveCard, listVersions, readVersion, seedIfEmpty, readActive, writeActive, loadCard,
-  deriveState, loadState, saveState, compilePersona, buildCore, normalizeBank, bankStats,
+  deriveState, loadState, saveState, recordUsage, compilePersona, buildCore, normalizeBank, bankStats,
   resolveLoreIndex, lorePath, guardPrompt, debtLine, formOf, timeOfDayOf, hasEmoji,
   materializeUserCopy, saveBank, writeLoreBody, loadBank,
   processGrowth, appendPending, vetCorpus, vetLore, pruneBucket, GROWTH_LIMITS,
+  // W1-0 / W1-2 / W1-3 / W1-5 的纯函数与常量（控制台 / W2 归因直接复用，别再各写一份）
+  buildLayers, resolvePosition, renderPersonaText,
+  resolveBudget, resolveModes, normalizeModes, effectiveModes, degradationPlan, FALLBACK_MODES,
 }
-
-const banner = (title) => `\n\n===== ${title} =====\n`
-const END = '===== 人设结束 =====\n'
 
 /**
  * 解析本轮人设。
@@ -42,12 +43,15 @@ const END = '===== 人设结束 =====\n'
  * @param {Array}  [opts.events] 账本事件（派生今日状态）
  * @param {string} [opts.roundId]
  * @param {Date}   [opts.now]
- * @param {number} [opts.modeMax] 该场域字数上限（评论 100 / 楼中楼 40）
+ * @param {number} [opts.modeMax] 旧口径单一字数上限（评论 100 / 楼中楼 40）
+ * @param {object|'card'|null} [opts.modes] 场域字数：'card' = 读生效卡 voice.modes；
+ *        对象 = 直接指定；null = 退回旧口径 modeMax（默认，保持升级前字节）
+ * @param {string[]} [opts.degrade] 降级动作（W1-5）
  * @returns {{mode:'legacy'|'card'|'missing', before:string, after:string, card:object|null,
  *            source:string, path:string, stats:object|null, notes:string[], state:object|null,
- *            personaTag:string}}
+ *            personaTag:string, c3Hints?:object, degraded?:string[]}}
  */
-export const resolvePersona = ({ cfg = {}, events = [], roundId = 'round', now = new Date(), modeMax = 100, active = null } = {}) => {
+export const resolvePersona = ({ cfg = {}, events = [], roundId = 'round', now = new Date(), modeMax = 100, modes = null, degrade = [], active = null } = {}) => {
   const legacyRaw = String(cfg?.personaPrompt ?? '').trim()
 
   // 1) legacy 直通
@@ -76,38 +80,39 @@ export const resolvePersona = ({ cfg = {}, events = [], roundId = 'round', now =
   const bank = loadBank(act)
   // 见闻索引里的"去读"路径必须是真实绝对路径（preset 模式指向插件包内）
   const loreDir = join(assetDir(act), 'lore')
-  const compiled = compilePersona(card, { state, bank, roundId, modeMax, loreDir })
-  const tag = `${card.id}@${card.version}`
-
-  const before = banner(`人设（${tag} · 按这个来说话）`)
-    + compiled.blocks.core.text + '\n'
-    + (compiled.blocks.lore.text ? `\n${banner('你的生活（相关时才用；要用先读正文）')}${compiled.blocks.lore.text}\n` : '')
-    + END
-
-  const after = [
-    compiled.blocks.state.text ? banner('你这会儿的状态') + compiled.blocks.state.text + '\n' : '',
-    compiled.blocks.samples.text ? banner('手感（看落点，别抄内容）') + compiled.blocks.samples.text + '\n' : '',
-    compiled.blocks.tail.text ? banner('写之前，最后看三行') + compiled.blocks.tail.text + '\n' : '',
-  ].join('')
+  // 场域字数：生产链路读卡（W1-2）；显式传对象则直接生效；null 保持旧口径
+  const effModes = modes === 'card' ? resolveModes(card) : modes
+  // 编译器细节全在 layers.js（W1-0）：这里只取数 → 调纯函数
+  const layer = buildLayers({ card, state, bank, now, modes: effModes, degrade, roundId, loreDir })
 
   return {
-    mode: 'card', before, after, card, source, path,
-    stats: compiled.stats, notes: compiled.notes, state, personaTag: tag,
-    blocks: compiled.blocks, targetForm: compiled.targetForm,
+    mode: 'card', before: layer.c1, after: layer.c2, card, source, path,
+    stats: layer.stats, notes: layer.notes, state, personaTag: layer.tag,
+    blocks: layer.blocks, targetForm: layer.targetForm,
+    // ⭐ 这一轮"摆到台面上"的见闻/canon/语料 ⇒ 宿主在轮末 recordUsage 回写冷却表。
+    //    没有它，usedToday 永远 false，「同一天不重复」从未生效。
+    used: layer.used || { loreIds: [], canonKeys: [], expressionIds: [] },
+    // W1-0 / W1-5：给 W6 的每步通道结构 + 本轮实际执行的降级动作（W2-1 写 persona-inject.degraded）
+    c3Hints: layer.c3Hints, degraded: layer.degraded, modes: effModes || null,
   }
 }
 
 /**
  * 控制台预览：给定卡（缺省=生效卡）编译一次，返回文本与预算统计。
  * 不落盘、不注入、不发布。
+ *
+ * W1-2：预览默认走**和生产同一份场域字数**（读卡 voice.modes），消除"预览≠实际"；
+ * 想回到旧口径看单一 modeMax 时传 `modes: null`。
  */
-export const previewPersona = ({ card = null, events = [], roundId = 'preview', now = new Date(), modeMax = 100 } = {}) => {
+export const previewPersona = ({ card = null, events = [], roundId = 'preview', now = new Date(), modeMax = 100, modes = 'card', degrade = [] } = {}) => {
   const act = readActive()
   const picked = card || loadCard(act).card
   if (!picked) return { ok: false, error: '没有可预览的人设卡', text: '', stats: null }
   const state = deriveState({ events, card: picked, now, persisted: loadState() })
   const bank = loadBank(act)
-  const compiled = compilePersona(picked, { state, bank, roundId, modeMax })
+  const effModes = modes === 'card' ? resolveModes(picked) : modes
+  const layer = buildLayers({ card: picked, state, bank, now, modes: effModes, degrade, roundId })
+  const compiled = { text: renderPersonaText(layer.blocks), stats: layer.stats, notes: layer.notes }
   const l0 = l0Checks(picked, { text: injectedText(picked) })
   const v = validateCard(picked)
   return {
@@ -120,6 +125,11 @@ export const previewPersona = ({ card = null, events = [], roundId = 'preview', 
     errors: v.errors,
     warnings: v.warnings,
     tag: `${picked.id}@${picked.version}`,
+    // W1-2 / W1-3：预览也给出同一份场域字数与生效预算，控制台可直接展示
+    modes: effModes || null,
+    budget: layer.budget,
+    c3Hints: layer.c3Hints,
+    degraded: layer.degraded,
   }
 }
 

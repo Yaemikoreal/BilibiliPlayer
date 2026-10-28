@@ -4,21 +4,32 @@
  * 位置即设计（酒馆规范 + 我们的日志实测）：
  *   - **事实常驻、行为末尾**：身份/口味/红线在 P1（缺了必错）；"别收在判断上"在 P5（越靠近生成点越强）。
  *   - **示例靠后、数量极少**：P4 只给同形态 3–5 条，多了会变模板、被逐字复读。
- *   - **末尾位是竞争性资源**：P5 固定 3 行，且**不写具体句子**（给"标准收尾 5 选 1"会让 6 句里 5 句同格）。
+ *   - **末尾位是竞争性资源**：P5 只写约束、**不写具体句子**（给"标准收尾 5 选 1"会让 6 句里 5 句同格）。
  *   - **欠账是数据**："最近 5 条欠哪种形态"由宿主算，不让模型自己数。
+ *   - **场域不同、字数不同**：评论 100 / 楼中楼 40 / 动态 60（W1-2），与时段上限取更严。
  *
- * 纯函数：同一 (card, state, bank, roundId) 必得同一输出。
+ * 纯函数：同一 (card, state, bank, roundId, modes, degrade) 必得同一输出。
  */
-import { fitBlock, summarize } from './budget.js'
-import { charLen } from './text.js'
+import { fitBlock, summarize, resolveBudget, effectiveModes, MODE_LABELS } from './budget.js'
 import { resolveLoreIndex, renderLoreIndex } from './lore.js'
-import { debtLine } from './state.js'
+import { debtLine, usedToday } from './state.js'
 import { pickExpression, renderExpression } from './expression.js'
 import { pickGoodSamples, pickBadSample, renderSamples } from './sample.js'
 
 const wrap = (title, body) => (body ? `===== ${title} =====\n${body}\n` : '')
 
-/** 口吻事实（常驻）：只写"可机检的事实"，不写评语。 */
+/**
+ * 口吻事实（常驻）：只写"可机检的事实"，不写评语。
+ *
+ * 口径定论（W1-4）：`voice.jargon.quotaPerDay` / `cooldownRounds` 与 `mindset.judgement`
+ * **不注入**，原因三条：
+ *   1. 它们本来就不在 `injectedText` 的考察范围里（L0 从未把它们算作"已注入"）；
+ *   2. quota/cooldown 是**宿主侧派发与冷却**数字（由账本 + `state.canonUsed` 执行），
+ *      写进 prompt 只会让模型自己数数——日志证明它数不准；
+ *   3. `judgement` 是卡作者的配比自述（对应 traits/samples 的落点），不是可机检约束；
+ *      真要调低判断力，改 traits 与 samples，不要指望一个数字。
+ * 低频词 `jargon.allow` 则必须注入（可用但少用），否则它只是卡里的死配置。
+ */
 const voiceFacts = (v = {}) => {
   const bits = []
   if (Array.isArray(v.register) && v.register.length) bits.push(`语感：${v.register.join('、')}`)
@@ -34,6 +45,10 @@ const voiceFacts = (v = {}) => {
   const e = v.emoji || {}
   if (e.perComment) bits.push(`一条最多 ${e.perComment} 个表情`)
   if (e.atLeastPerRound) bits.push('一轮至少有一条带表情')
+  // W1-4：低频词必须让人看见（否则 quotas/词表都是死配置）
+  if (Array.isArray(v.jargon?.allow) && v.jargon.allow.length) {
+    bits.push(`低频词可用但少用：${v.jargon.allow.join('、')}`)
+  }
   return bits.join('；')
 }
 
@@ -41,8 +56,36 @@ const voiceFacts = (v = {}) => {
 const selfPresence = (v = {}) =>
   v.intensity ? `情绪有档：轻「${v.intensity['轻'] || ''}」/ 中「${v.intensity['中'] || ''}」/ 重「${v.intensity['重'] || ''}」` : ''
 
+/**
+ * canon 的"今天用过了吗"判定。
+ *
+ * 冷却表里 canonUsed 存的是**日期**（`YYYY-MM-DD`，见 state.js recordUsage），与 lore 存时间戳不同。
+ * 优先用 `state.date`（deriveState 派生，纯函数可复现）；拿不到就退回 usedToday 的当天口径。
+ */
+export const canonUsedOn = (state, key) => {
+  const at = state?.canonUsed?.[key]
+  if (typeof at !== 'string') return false
+  const day = state?.date
+  return day ? at.slice(0, 10) === day : usedToday(state?.canonUsed, key)
+}
+
+/**
+ * 挑选本轮要注入的 canon（最多 6 条，且跳过今天已经讲过的）。
+ *
+ * 为什么必须有这一步：`state.js:167` 一直在写 `canonUsed`，但全仓没有读取方 ⇒
+ * canon 的"同一天不重复讲同一个梗"是空转的（W0-1 T2）。
+ * 为什么是 6 而不是 4：卡里 6 条 canon 各有触发场景（问 AI / 夸可爱 / 骂营销号 / 问运营 /
+ * 求三连 / 问画师），截到 4 会把后两条（求三连、问画师）永远丢掉——这两条正是 md 里有的
+ * （W1-6 diff B12）。core 预算 1500 装得下（实测 core 仍 <1300）。
+ */
+export const pickCanon = (card = {}, state = {}) =>
+  (card?.canon || [])
+    .filter((c) => c && c.when && c.say)
+    .filter((c) => !canonUsedOn(state, c.when))
+    .slice(0, 6)
+
 /** P1 常驻核心：identity + 口吻事实 + 心态 + 品味 + 立场 + 红线摘要 + canon。 */
-export const buildCore = (card = {}) => {
+export const buildCore = (card = {}, { state = {} } = {}) => {
   const id = card.identity || {}
   const v = card.voice || {}
   const m = card.mindset || {}
@@ -74,8 +117,10 @@ export const buildCore = (card = {}) => {
   }
   if (t.criteria?.length) lines.push(`标准：${t.criteria.slice(0, 2).join('；')}`)
 
+  // 立场：attitude 是"怎么做"，misread 是"别被误读成什么"（W1-4 把两稿都漏掉的 misread 补进来）
   for (const s of (card.stance || []).slice(0, 3)) {
-    lines.push(`${s.topic}：${s.attitude}${s.how ? `（${s.how}）` : ''}`)
+    const extra = [s.how, s.misread ? `别误解成：${s.misread}` : ''].filter(Boolean).join('；')
+    lines.push(`${s.topic}：${s.attitude}${extra ? `（${extra}）` : ''}`)
   }
 
   const avoidWords = [
@@ -89,15 +134,23 @@ export const buildCore = (card = {}) => {
   const red = (card.redlines || []).slice(0, 4).map((r) => `${r.rule}${r.instead ? ` → ${r.instead}` : ''}`)
   if (red.length) lines.push(`红线：${red.join('；')}`)
 
-  for (const c of (card.canon || []).slice(0, 4)) {
-    if (c.when && c.say) lines.push(`${c.when} →「${c.say}」`)
+  for (const c of pickCanon(card, state)) {
+    lines.push(`${c.when} →「${c.say}」`)
   }
 
   return lines.filter(Boolean).join('\n')
 }
 
-/** P3 今日状态：mood/精力/时段 + 沉默 + 最近 3 条 + 欠账 + 冷却。 */
-export const buildState = (state = {}, { maxChars = null } = {}) => {
+/**
+ * P3 今日状态：mood/精力/时段 + 沉默 + 最近 3 条 + 欠账 + 冷却 + 场域字数。
+ *
+ * @param {object} state deriveState 的输出
+ * @param {object} [opts]
+ * @param {number} [opts.maxChars] 单一字数上限（旧口径：场域未知时的 modeMax）
+ * @param {object} [opts.modes] 场域字数 `{comment,reply,dynamic}`（W1-2）；给了就输出一行场域表
+ * @param {boolean} [opts.shrink] 降级动作 `state:shrink`：丢掉"最近说过"列表，保住状态/欠账/字数
+ */
+export const buildState = (state = {}, { maxChars = null, modes = null, shrink = false } = {}) => {
   if (!state) return ''
   const lines = []
   const mood = state.mood || {}
@@ -113,7 +166,7 @@ export const buildState = (state = {}, { maxChars = null } = {}) => {
 
   if (state.skipStreak >= 3) lines.push(`连续 ${state.skipStreak} 条都没说上话，有点蔫；这条还接不上就只点赞。`)
 
-  const recent = state.recent?.comments || []
+  const recent = shrink ? [] : state.recent?.comments || []
   if (recent.length) {
     lines.push('最近说过：')
     for (const c of recent) lines.push(`· ${String(c.text).slice(0, 40)}`)
@@ -121,41 +174,101 @@ export const buildState = (state = {}, { maxChars = null } = {}) => {
 
   const d = debtLine(state)
   if (d) lines.push(`⚠️ ${d}`)
-  // 时段会压上限（凌晨/深夜 40 字），与场域上限取更严的那个
-  const hardMax = maxChars ? Math.min(Number(maxChars) || 100, Number(tod.maxChars) || 100) : tod.maxChars
-  if (hardMax) lines.push(`这条按 ${hardMax} 字以内来。`)
+  if (modes) {
+    // W1-2：场域表 —— 各场域上限与时段上限取更严的那个，绝不因"凌晨"把楼中楼放宽
+    const caps = effectiveModes(modes, tod.maxChars)
+    const strict = Math.min(...Object.keys(MODE_LABELS).map((k) => caps[k]))
+    lines.push(`字数：评论 ${caps.comment} / 楼中楼 ${caps.reply} / 动态 ${caps.dynamic} 字封顶（哪个场域用哪个数；现在最紧 ${strict} 字）。`)
+  } else {
+    // 时段会压上限（凌晨/深夜 40 字），与场域上限取更严的那个
+    const hardMax = maxChars ? Math.min(Number(maxChars) || 100, Number(tod.maxChars) || 100) : tod.maxChars
+    if (hardMax) lines.push(`这条按 ${hardMax} 字以内来。`)
+  }
   lines.push('接不上就点赞，别凑数。')
   return lines.join('\n')
 }
 
-/** P5 最后一公里：固定三行，只写约束，不写具体句子。 */
-export const buildTail = (card = {}, { modeMax = 100 } = {}) => {
+/**
+ * P5 最后一公里：只写约束，不写具体句子；固定行数（默认 3 行 + 口径补齐行）。
+ *
+ * @param {object} card
+ * @param {object} [opts]
+ * @param {number} [opts.modeMax] 旧口径单一上限（与 modes 二选一）
+ * @param {object} [opts.modes] 场域字数（W1-2）：给了就把"楼中楼/动态别铺开写"钉在末尾
+ * @param {number|null} [opts.todMaxChars] 时段上限：与场域上限**取更严的**（凌晨/深夜 40），
+ *        否则会出现「P3 说评论 40、P5 说动态 60」的两套口径（W1-4 要消灭的正是这种分叉）
+ */
+export const buildTail = (card = {}, { modeMax = 100, modes = null, todMaxChars = null } = {}) => {
   const moves = (card.voice?.moves || []).slice(0, 6)
-  // 红线只取短标签：尾注是竞争性资源，整句抄进末尾会把 3 行撑成一段
+  // 红线只取**短标签**：尾注是竞争性资源，整句抄进末尾会把行撑成一段。
+  // 以前的 slice(0,10) 会把 "碰政治内容：政治新闻、…" 硬切成病句（实测输出 "红线：碰政治内容：政治新闻。"），
+  // 改成取第一个分隔符（：/（/、）之前的标签；标签本身太长才退回卡里的 id。
+  const shortRule = (r) => {
+    const label = String(r?.rule || '').split(/[：:（(]/)[0].replace(/[，,。；;\s]/g, '').trim()
+    return label.length >= 2 && label.length <= 14 ? label : String(r?.id || label).trim()
+  }
   const rules = (card.redlines || [])
     .filter((r) => r.severity === 'block')
     .slice(0, 3)
-    .map((r) => String(r.rule || '').replace(/[（(].*?[）)]/g, '').slice(0, 10).trim())
+    .map(shortRule)
     .filter(Boolean)
-  const line1 = `1) 别收在判断上。收法轮换着来：${moves.length ? moves.join(' / ') : '纯情绪 / 反问 / 玩梗'}。`
-  const line2 = '2) 第一句单独拿出来，没看过视频的人能读懂吗？'
-  const line3 = `3) 红线：${rules.length ? rules.join('；') : '不碰政治地域性别饭圈；不冒充真人'}。`
-  return [line1, line2, line3].join('\n')
+  const lines = []
+  lines.push(`1) 别收在判断上。收法轮换着来：${moves.length ? moves.join(' / ') : '纯情绪 / 反问 / 玩梗'}。`)
+  lines.push('2) 第一句单独拿出来，没看过视频的人能读懂吗？')
+  lines.push(`3) 红线：${rules.length ? rules.join('；') : '不碰政治地域性别饭圈；不冒充真人'}。`)
+
+  // W1-4：behaviorStyle 的"兴趣优先"进尾注（1 行）——它决定"这条值不值得开口"，
+  // 而 injectedText 一直把它算作已注入却从不注入，是两稿都漏的口径分叉之一。
+  const interestFirst = String(card.behaviorStyle?.interestFirst || '').trim()
+  if (interestFirst) {
+    lines.push(`${lines.length + 1}) ${interestFirst.replace(/[。.]$/, '')}。`)
+  }
+
+  if (modes) {
+    // W1-2：buildTail 以前收了 modeMax 却没用；这里把"场域不同、长度不同"钉在最靠近生成点的位置。
+    // 与 P3 用同一个 effectiveModes(modes, 时段上限)：**同一套数字**，不允许两处各说一套。
+    const caps = effectiveModes(modes, todMaxChars)
+    lines.push(`${lines.length + 1}) 楼中楼 ${caps.reply} 字、动态 ${caps.dynamic} 字封顶，别把评论 ${caps.comment} 字的长度带过去。`)
+  }
+  return lines.join('\n')
 }
 
 /**
+ * 五块 → 单段文本（控制台预览 / 调试用；与 compilePersona(...).text 是同一份拼装）。
+ * @param {object} blocks
+ */
+export const renderPersonaText = (blocks = {}) => [
+  wrap('你是谁（按这个来）', blocks.core?.text),
+  wrap('你的生活（相关时才用；要用先读正文）', blocks.lore?.text),
+  wrap('你这会儿的状态', blocks.state?.text),
+  wrap('手感（看落点，别抄内容）', blocks.samples?.text),
+  wrap('写之前，最后看几行', blocks.tail?.text),
+].filter(Boolean).join('\n')
+
+/**
  * 编译整份人设。
+ *
  * @param {object} card
  * @param {object} ctx
  * @param {object} ctx.state  deriveState 的结果
  * @param {object|null} ctx.bank 表达库（可能为 null）
  * @param {string} ctx.roundId 本轮 id（做抽样 seed）
- * @param {number} [ctx.modeMax] 该场域字数上限（评论 100 / 回复 40）
- * @returns {{text:string, blocks:object, stats:object, notes:string[]}}
+ * @param {number} [ctx.modeMax] 该场域字数上限（评论 100 / 回复 40）——旧口径
+ * @param {object} [ctx.modes] 场域字数 `{comment,reply,dynamic}`（W1-2；给了则取代 modeMax）
+ * @param {object} [ctx.budget] 生效五块预算（缺省读卡 `render.budget`，再缺省 BUDGET）
+ * @param {string[]} [ctx.degrade] 降级动作（W1-5）：lore:shrink / lore:drop / samples:half / samples:drop / state:shrink / state:drop
+ * @returns {{text:string, blocks:object, stats:object, notes:string[], targetForm:string, used:object,
+ *            budget:object, loreIndex:Array, degraded:string[]}}
  */
 export const compilePersona = (card = {}, ctx = {}) => {
-  const { state = {}, bank = null, roundId = 'round', modeMax = 100, loreDir = 'persona/lore' } = ctx
+  const {
+    state = {}, bank = null, roundId = 'round', modeMax = 100, modes = null,
+    budget = null, degrade = [], loreDir = 'persona/lore',
+  } = ctx
   const notes = []
+  const actions = Array.isArray(degrade) ? degradesOnly(degrade) : []
+  const has = (a) => actions.includes(a)
+  const effBudget = budget || resolveBudget(card)
   const debt = state?.recent?.debt || {}
 
   // 欠账 → 目标形态（决定 P4 抽哪个桶 / 哪类卡内样本）
@@ -168,54 +281,77 @@ export const compilePersona = (card = {}, ctx = {}) => {
 
   // P2 见闻索引（正文按需读，这里只放索引 + 绝对路径提示）
   const loreEntries = resolveLoreIndex(card, state)
-  const loreBlock = fitBlock('lore', renderLoreIndex(loreEntries, { dir: loreDir }))
+  const loreMax = has('lore:shrink') ? 5 : 8
+  const loreText = renderLoreIndex(loreEntries, { dir: loreDir, maxItems: loreMax })
+  const loreBlock = fitBlock('lore', has('lore:drop') ? '' : loreText, effBudget)
 
   // P4 语料样本：优先表达库（真实热评），空则退化到卡内 samples
+  const sampleCount = has('samples:half') ? 2 : 4
   let p4 = ''
-  if (bank) {
+  const usedExpressionIds = []
+  if (bank && !has('samples:drop')) {
     const picked = pickExpression(bank, {
       form: targetForm || 'reaction',
       seed: `${roundId}:${targetForm}`,
-      count: 4,
+      count: sampleCount,
       usedToday: state?.expressionUsed || {},
     })
     p4 = renderExpression(picked)
+    for (const e of picked) if (e?.id) usedExpressionIds.push(e.id)
     if (p4) notes.push(`P4 用表达库（${targetForm || 'reaction'}，${picked.length} 条）`)
   }
-  if (!p4) {
+  if (!p4 && !has('samples:drop')) {
     const goods = pickGoodSamples(card, {
       form: targetForm,
       seed: `${roundId}:${targetForm}`,
-      count: 4,
+      count: sampleCount,
       avoidTexts: (state?.recent?.comments || []).map((c) => c.text),
     })
     p4 = renderSamples(goods, pickBadSample(card, roundId))
     if (p4) notes.push(`P4 退化到卡内样本（${goods.length} 条）`)
-  } else {
+  } else if (p4 && !has('samples:drop')) {
     const bad = pickBadSample(card, roundId)
     if (bad?.text) p4 += `\n反例（别这样）：${bad.text}${bad.reason ? ` —— ${bad.reason}` : ''}`
   }
 
+  const stateText = buildState(state, { maxChars: modeMax, modes, shrink: has('state:shrink') })
   const blocks = {
-    core: fitBlock('core', buildCore(card)),
+    core: fitBlock('core', buildCore(card, { state }), effBudget),
     lore: loreBlock,
-    state: fitBlock('state', buildState(state, { maxChars: modeMax })),
-    samples: fitBlock('samples', p4),
-    tail: fitBlock('tail', buildTail(card, { modeMax })),
+    state: fitBlock('state', has('state:drop') ? '' : stateText, effBudget),
+    samples: fitBlock('samples', p4, effBudget),
+    tail: fitBlock('tail', buildTail(card, { modeMax, modes, todMaxChars: state?.timeOfDay?.maxChars ?? null }), effBudget),
   }
 
-  let text = [
-    wrap('你是谁（按这个来）', blocks.core.text),
-    wrap('你的生活（相关时才用；要用先读正文）', blocks.lore.text),
-    wrap('你这会儿的状态', blocks.state.text),
-    wrap('手感（看落点，别抄内容）', blocks.samples.text),
-    wrap('写之前，最后看三行', blocks.tail.text),
-  ].filter(Boolean).join('\n')
+  let text = renderPersonaText(blocks)
 
   const stats = summarize(blocks)
   // 整轮 prompt 的降级由宿主在拼完 prompt 后按 guardPrompt 决定（这里只报块级统计）
   if (stats.over.length) notes.push(`块超预算：${stats.over.join(', ')}`)
   if (stats.overTotal) notes.push(`人设总长 ${stats.total} > ${stats.totalMax}`)
+  if (actions.length) notes.push(`人设降级：${actions.join('、')}`)
 
-  return { text, blocks, stats, notes, targetForm }
+  // ⭐ 冷却表的事实来源：这一轮"摆到台面上"的见闻索引 / canon / 语料条目。
+  //    宿主在轮末用 recordUsage 回写；否则 usedToday 永远判 false，「同一天不重复讲同一件事」
+  //    从未生效（recordUsage 此前只有测试调用）。
+  const used = {
+    loreIds: has('lore:drop')
+      ? []
+      // 只记**真正摆出来的那几条里**还没用过的（索引被截断时，后面的本来就没注入）
+      : loreEntries.slice(0, loreMax).filter((e) => !e.usedToday).map((e) => e.id),
+    // 只记**实际注入**的 canon（已按冷却表过滤），否则今天讲过的会被重复记一遍
+    canonKeys: pickCanon(card, state).map((c) => c.when),
+    expressionIds: usedExpressionIds,
+  }
+
+  return {
+    text, blocks, stats, notes, targetForm, used,
+    budget: effBudget,
+    loreIndex: loreEntries,       // W1-0 c3Hints 用：W6 生成期命中见闻正文的索引
+    degraded: actions,            // W1-5：实际执行的降级动作（供 W2-1 写 persona-inject.degraded）
+  }
 }
+
+/** 只保留已知降级动作（未知项忽略，避免脏输入把编译搞坏）。 */
+const KNOWN_DEGRADE = ['lore:shrink', 'lore:drop', 'samples:half', 'samples:drop', 'state:shrink', 'state:drop']
+const degradesOnly = (list) => list.map((x) => String(x)).filter((x) => KNOWN_DEGRADE.includes(x))

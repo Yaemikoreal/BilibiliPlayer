@@ -40,10 +40,10 @@ test('v2 卡：prompt 有"前段（身份+生活）"和"后段（状态+手感+�
   assert.match(p, /===== 人设（smoke@2\.0\.0 · 按这个来说话） =====/)
   assert.match(p, /一个测试用的普通网友/)
   assert.match(p, /===== 你这会儿的状态 =====/)
-  assert.match(p, /===== 写之前，最后看三行 =====/)
+  assert.match(p, /===== 写之前，最后看几行 =====/)
   // 位置纪律：身份在前段、尾注在整段最后
   assert.ok(p.indexOf('一个测试用的普通网友') < p.indexOf('值班章程'), '身份必须在章程之前')
-  assert.ok(p.indexOf('写之前，最后看三行') > p.indexOf('本轮参数'), '尾注必须在参数之后')
+  assert.ok(p.indexOf('写之前，最后看几行') > p.indexOf('本轮参数'), '尾注必须在参数之后')
   assert.ok(p.length < 24000, `prompt 过长：${p.length}`)
 })
 
