@@ -329,6 +329,34 @@ expectPage('v4 设置', settingsRules, [
 // 行式排版：label + help 同行结构
 expectAll('v4 设置行式', settingsRules, ['class="bf-row-main"', 'class="bf-row-ctl"', 'class="bf-row-help"'])
 
+/* ═════════ ⑫b 设置 · 内容与禁令（人设提示词已删） ═════════ */
+// 子页靠 initialSettingsSub 直达——这两页过去因为子页写死在 rules 里而完全没被测到
+const settingsContent = check('ConsolePage（v4 · 设置 · 内容与禁令）', () => render({
+  initialTab: 'settings',
+  initialSettingsSub: 'content',
+  initialData: { config: FIX['/api/bili-fenshen/config'] },
+}))
+expectAll('v4 设置内容与禁令', settingsContent, [
+  '内容源', '指定 UP 主', '自动拉关注', '每轮抽查', '关键词', '不看清单',
+  '禁令', '不透露隐私', '不碰争议话题',
+  '自生长', '候选管道', '每日自动转正',
+])
+// 主人 2026-10-28 决定：人设已独立成「人设」页，内容与禁令不再有「人设提示词」（也不加指路卡）
+if (settingsContent.includes('人设提示词') || settingsContent.includes('人设直通')) {
+  console.log('✗ FAIL 内容与禁令不应再出现「人设提示词 / 人设直通」'); bad++
+}
+// 回归：wide 行（chips/textarea 类）必须上下布局，否则 label 会被压成单字竖排
+expectAll('v4 设置 wide 行', settingsContent, ['class="bf-row wide"'])
+
+const settingsEnv = check('ConsolePage（v4 · 设置 · 运行环境）', () => render({
+  initialTab: 'settings',
+  initialSettingsSub: 'env',
+  initialData: { config: FIX['/api/bili-fenshen/config'] },
+}))
+expectAll('v4 设置运行环境', settingsEnv, [
+  '运行环境', 'dsh CLI', 'dshBin', 'headless profile', '家目录', '账本', '安装自检',
+])
+
 /* ═════════ ⑬ settings.section 入口 ═════════ */
 const settingsHtml = check('SettingsEntry 静态壳', () => renderToString(React.createElement(settingsComp)))
 expectAll('设置页入口', settingsHtml, ['安装自检', '一键诊断', '打开控制台'])

@@ -70,11 +70,21 @@ const mustHave = [
 const missed = mustHave.filter(([, re]) => !re.test(code)).map(([name]) => name)
 for (const name of missed) console.log('MISSING:', name)
 
+/* ── 反向守卫：应该被删掉的东西不许回来（先剥掉行注释，注释里提到不算复活） ── */
+const codeNoComments = code.replace(/^\s*\/\/.*$/gm, '')
+const mustNotHave = [
+  ['设置页「人设提示词」输入（2026-10-28 已删，人设独立成页）', /人设提示词/],
+  ['设置页「人设直通（legacy）」分组', /人设直通（legacy）/],
+]
+const resurrected = mustNotHave.filter(([, re]) => re.test(codeNoComments)).map(([name]) => name)
+for (const name of resurrected) console.log('SHOULD BE GONE:', name)
+
 const ok = injected.length === 3
   && injected.includes('sidebar.panellist')
   && injected.includes('main')
   && injected.includes('settings.section')
   && registered.every((r) => r.hasComponent)
   && missed.length === 0
+  && resurrected.length === 0
 console.log(ok ? 'SMOKE OK' : 'SMOKE FAIL')
 process.exit(ok ? 0 : 1)

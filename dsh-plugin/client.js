@@ -2460,8 +2460,9 @@ window.__ModuleLoader__.load({
 
     const SET_SUBTABS = [['rules', '节奏与配额'], ['content', '内容与禁令'], ['env', '运行环境']]
 
-    function SettingsPage({ ov, initial }) {
-      const [sub, setSub] = React.useState('rules')
+    function SettingsPage({ ov, initial, initialSub }) {
+      // initialSub 让子页可直达（渲染测试用）；真实宿主不传，默认「节奏与配额」
+      const [sub, setSub] = React.useState(SET_SUBTABS.some(([k]) => k === initialSub) ? initialSub : 'rules')
       return h('div', null,
         h(PageHeader, { title: PAGE_TITLE.settings, intro: PAGE_INTRO.settings }),
         h('div', { className: 'bf-pagemain' },
@@ -2630,15 +2631,9 @@ window.__ModuleLoader__.load({
           h(Num, { value: Number(draft.growthAutoPromote ?? 3), label: '每日自动转正', onChange: (v) => set('growthAutoPromote', v) })),
       )
 
-      const personaPromptGroup = h(Group, { title: '人设直通（legacy）' },
-        h(Row, { label: '人设提示词', help: '留空＝中性说话；也可填文件路径（/绝对路径 或 ~/，目录则读其中的 AGENTS.md）', wide: true },
-          h('textarea', {
-            value: draft.personaPrompt || '',
-            placeholder: '例如：二十五六岁，喜欢硬件测评和游戏，说话短、不客套，偶尔自嘲。',
-            'aria-label': '人设提示词',
-            onChange: (e) => set('personaPrompt', e.target.value),
-          })),
-      )
+      // 人设已独立成「人设」页（人设卡 / 素材库 / 预览与质量），这里不再有旧的人设直通输入框。
+      // personaPrompt 字段仍留在 config 里做兼容（非空 = legacy 直通、整段覆盖卡片），
+      // 但控制台不再编辑它；要退场就改 config.json（删键或置空）。
 
       const envGroup = h(Group, { title: '运行环境' },
         h(Row, { label: 'dsh CLI', help: ov?.data?.health?.cli || '值班轮会先自动探测' },
@@ -2662,7 +2657,7 @@ window.__ModuleLoader__.load({
       const body = sub === 'rules'
         ? h('div', { className: 'bf-config' }, rulesGroup, quotaGroup)
         : sub === 'content'
-          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup, personaPromptGroup)
+          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup)
           : h('div', { className: 'bf-config' },
               h(ModelFields, { draft, onChange: setPatch, models, onFollow: followDefault }),
               envGroup,
@@ -3256,7 +3251,7 @@ window.__ModuleLoader__.load({
                   persona, initial: init?.personaPage || props?.persona,
                   initialTab: props?.initialPersonaTab,
                 })
-              : h(SettingsPage, { ov: { data }, initial: init?.config })
+              : h(SettingsPage, { ov: { data }, initial: init?.config, initialSub: props?.initialSettingsSub })
 
       return h('div', { className: 'bf-console bf-root', 'data-tab': tab },
         h('div', { className: 'bf-page' },
