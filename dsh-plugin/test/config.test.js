@@ -41,6 +41,19 @@ test('validateFields 拒绝未知字段与错误类型', () => {
   assert.equal(validateFields({ autoDuty: true, keywords: ['a'] }).ok, true)
 })
 
+test('validateFields 对枚举字段收值域（speakGateMode 写错要 400，不能静默回落）', () => {
+  // 宿主 z 用不了 z.enum ⇒ 值域只能在 validateFields 收；写错值静默回落最难排查
+  assert.equal(validateFields({ speakGateMode: 'observe' }).ok, true)
+  assert.equal(validateFields({ speakGateMode: 'enforce' }).ok, true)
+  assert.equal(validateFields({ speakGateMode: 'off' }).ok, true)
+  const bad = validateFields({ speakGateMode: 'block' })
+  assert.equal(bad.ok, false)
+  assert.equal(bad.field, 'speakGateMode')
+  assert.match(bad.error, /off \/ observe \/ enforce/)
+  // 类型错误优先报类型（enum 校验不该掩盖类型问题）
+  assert.equal(validateFields({ speakGateMode: 1 }).ok, false)
+})
+
 test('effectiveConfig 忽略覆盖层里的脏数据', () => {
   const file = join(dir(), 'config.json')
   writeOverride(file, { perDay: 9, bogus: 1 })

@@ -158,6 +158,16 @@ export function pickReasoningEffort(effort, supported) {
   return { effort: '', ignored: want }
 }
 
+/**
+ * 值域受限的字符串字段：类型是 string，但只接受这几个值。
+ *
+ * 为什么单独列：宿主的 zod schema 用不了 `z.enum`（见 index.js 的 speakGateMode 注释），
+ * 所以枚举值在这里手工收口 —— 写错立刻 400，而不是静默回落到默认档位（后者最难排查）。
+ */
+export const ENUM_FIELDS = Object.freeze({
+  speakGateMode: ['off', 'observe', 'enforce'],
+})
+
 export function validateFields(fields) {
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
     return { ok: false, error: '请求体必须是对象' }
@@ -166,6 +176,10 @@ export function validateFields(fields) {
     const spec = FIELDS[k]
     if (!spec) return { ok: false, error: `未知字段：${k}`, field: k }
     if (!isType(spec, v)) return { ok: false, error: `字段 ${k} 类型应为 ${spec}`, field: k }
+    const allowed = ENUM_FIELDS[k]
+    if (allowed && !allowed.includes(String(v))) {
+      return { ok: false, error: `字段 ${k} 只能是：${allowed.join(' / ')}`, field: k }
+    }
   }
   return { ok: true }
 }
