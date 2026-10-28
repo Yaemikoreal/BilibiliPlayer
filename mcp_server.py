@@ -17,6 +17,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
@@ -1933,6 +1935,211 @@ async def bili_followings(pn: int = 1, ps: int = 50, sort: str = "attention", ke
     })
 
 
+# ========== Tool: 见闻正文按需取用（C3 生成期通道 · 路径 A / W6-1） ==========
+#
+# 为什么要有这个工具（计划 §2.2/§2.5/§5.6/§8.3）：
+#   候选视频是子进程「拉内容源」之后才出现的，而 argv 里的 prompt 在 spawn 前就定死了；
+#   所以见闻只能「索引常驻、正文按需读」：模型看见视频标题/字幕/热评之后，再调本工具命中正文，
+#   不占 argv 24k 硬线 —— 这正是酒馆（世界书全在编译期）做不到的「生成期世界书」。
+# 三条纪律：
+#   1. 中文**子串匹配**（NFKC 全角半角归一 + casefold 大小写不敏感），**绝不做整词边界** ——
+#      酒馆官方自己说 match whole words 对中日文有害（中文没有空格分词）；
+#   2. 排序 直命中（keys 命中数多）> 今天未用 > 索引顺序；今天用过只降权不淘汰；
+#      预算 C3：≤2 条、总正文 ≤600 字，超了截断并标 truncated；
+#   3. 纯读、不联网；任何异常（卡坏/目录缺失/正文缺失）都**静默降级**成 ok:false，绝不抛。
+
+_PERSONA_LORE_MAX_ITEMS = 2
+_PERSONA_LORE_MAX_CHARS = 600
+_PERSONA_LORE_NO_HIT = "没有命中的见闻（这很正常，别硬凑）"
+_PERSONA_LORE_HINT = "见闻是这个号自己的经历；用得上就借一句细节或一个角度，别整段复述、别当外部事实讲"
+
+
+def _persona_read_json(path):
+    """只读 JSON：读不到/坏 JSON/顶层不是对象都返回 None（人设工具一律按「缺失即降级」处理）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _persona_presets_dir() -> Path:
+    """内置预设卡目录：<仓库根>/dsh-plugin/prompts/persona（与 store.js 的 PRESETS_DIR 同源）。"""
+    return Path(__file__).resolve().parent / "dsh-plugin" / "prompts" / "persona"
+
+
+def _persona_resolve_card():
+    """按 active.json 解析生效卡 + 资产根目录（规则与 store.js 的 readActive/loadCard/assetDir 同源）。
+
+    - preset：卡与见闻都在 <插件>/prompts/persona（随包只读）；
+    - file：卡在 <家目录>/persona/card.json（或 active.path），见闻正文在 <家目录>/persona；
+    - active.json 缺失/读坏 → 按缺省 preset whale；file 卡读不到 → 回落 preset whale。
+    返回 (card|None, assets_dir)；card is None = 连 whale 预设都读不到，调用方静默降级。
+    """
+    persona = _persona_home() / "persona"
+    presets = _persona_presets_dir()
+    active = _persona_read_json(persona / "active.json")
+    if not isinstance(active, dict) or active.get("mode") not in ("preset", "file"):
+        active = {"mode": "preset", "presetId": "whale"}
+    if active.get("mode") == "file":
+        path = Path(str(active.get("path") or (persona / "card.json")))
+        card = _persona_read_json(path) or _persona_read_json(persona / "card.json")
+        if card is not None:
+            return card, persona
+        active = {"mode": "preset", "presetId": "whale"}  # 用户卡读坏 → 回落预设，别让工具整个死
+    preset_id = str(active.get("presetId") or "whale")
+    card = (_persona_read_json(presets / f"{preset_id}.card.json")
+            or _persona_read_json(presets / "whale.card.json"))
+    return card, presets
+
+
+def _persona_lore_norm(text) -> str:
+    """子串匹配前的归一：NFKC（全角→半角） + casefold（大小写不敏感）。中文本身不受影响。"""
+    return unicodedata.normalize("NFKC", str(text or "")).casefold()
+
+
+def _persona_lore_strip_front_matter(text: str) -> str:
+    """剥掉见闻 md 的 YAML front-matter（仅当首行是 --- 且后面有闭合行）。"""
+    raw = str(text or "").lstrip("\ufeff")
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return raw.strip()
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            return "\n".join(lines[i + 1:]).strip()
+    return raw.strip()  # 没有闭合行：当正文就是全部（宁可多给，也别把正文吞掉）
+
+
+def _persona_lore_used_today(lore_used, lore_id: str, now=None) -> bool:
+    """state.loreUsed[id] 是不是「今天」。时间戳按**本地时区**判日；非 ISO 串退回前 10 位比较。"""
+    at = lore_used.get(lore_id) if isinstance(lore_used, dict) else None
+    if not isinstance(at, str) or not at.strip():
+        return False
+    now = now or datetime.now().astimezone()
+    raw = at.strip()
+    try:
+        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw[:10] == now.strftime("%Y-%m-%d")
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(now.tzinfo) if now.tzinfo is not None else stamp.astimezone()
+    return stamp.strftime("%Y-%m-%d") == now.strftime("%Y-%m-%d")
+
+
+def _persona_lore_degrade(reason: str) -> dict:
+    return {"ok": False, "matched": [], "total": 0, "note": f"见闻库暂时不可用：{reason}"}
+
+
+def _persona_lore_match(keyword, card, state=None, assets_dir=None, now=None) -> dict:
+    """W6-1 核心（纯函数，可单测）：子串命中 → 冷却降权 → 取正文，≤2 条 ≤600 字。
+
+    参数：keyword 现场关键词（标题 + 字幕要点 + 热评关键词）；card 人设卡；state 今日状态（读 loreUsed）；
+         assets_dir 资产根（preset = 插件 prompts/persona，file = <家目录>/persona）；now 注入时钟（测试用）。
+    返回 {ok, matched:[{id,oneLine,usedToday,body,chars,truncated}], total, note}；total = 命中总条数（截断前）。
+    任何异常都返回 ok:false 的降级体，绝不抛（C3 纪律：失败必须静默降级）。
+    """
+    try:
+        if not isinstance(card, dict) or not isinstance(card.get("loreIndex"), list):
+            return _persona_lore_degrade("人设卡缺失或没有 loreIndex")
+        if not assets_dir:
+            return _persona_lore_degrade("见闻目录未知")
+        assets = Path(assets_dir)
+        if not assets.is_dir():
+            return _persona_lore_degrade(f"见闻目录缺失：{assets}")
+        lore_used = state.get("loreUsed") if isinstance(state, dict) else None
+        needle = _persona_lore_norm(keyword)
+
+        hits = []
+        for order, entry in enumerate(card["loreIndex"]):
+            if not isinstance(entry, dict):
+                continue
+            lore_id = str(entry.get("id") or "").strip()
+            if not lore_id:
+                continue
+            keys = [str(k).strip() for k in (entry.get("keys") or []) if str(k).strip()]
+            # 子串匹配：normalize(键) 出现在 normalize(关键词) 里即命中；不做整词边界
+            hit_count = sum(1 for k in keys if _persona_lore_norm(k) and _persona_lore_norm(k) in needle)
+            if not hit_count:
+                continue
+            hits.append({
+                "id": lore_id,
+                "oneLine": str(entry.get("oneLine") or "").strip(),
+                "usedToday": _persona_lore_used_today(lore_used, lore_id, now),
+                "_hitCount": hit_count,
+                "_order": order,
+            })
+        if not hits:
+            return {"ok": True, "matched": [], "total": 0, "note": _PERSONA_LORE_NO_HIT}
+
+        # 排序：直命中（keys 命中数多）> 今天未用 > 索引顺序（今天用过只降权、仍可返回）
+        hits.sort(key=lambda h: (-h["_hitCount"], h["usedToday"], h["_order"]))
+
+        matched = []
+        remaining = _PERSONA_LORE_MAX_CHARS
+        capped = False
+        for hit in hits[:_PERSONA_LORE_MAX_ITEMS]:
+            if remaining <= 0:
+                capped = True
+                break
+            body_file = assets / "lore" / f"{hit['id']}.md"
+            try:
+                raw = body_file.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return _persona_lore_degrade(f"见闻正文缺失：{body_file}")
+            body = _persona_lore_strip_front_matter(raw)
+            if not body:
+                return _persona_lore_degrade(f"见闻正文为空：{body_file}")
+            truncated = False
+            if len(body) > remaining:
+                # 留 1 字给省略号，保证总正文严格 ≤600 字
+                body = body[: max(remaining - 1, 0)] + "…" if remaining >= 2 else "…"
+                truncated = capped = True
+            remaining -= len(body)
+            matched.append({
+                "id": hit["id"],
+                "oneLine": hit["oneLine"],
+                "usedToday": hit["usedToday"],
+                "body": body,
+                "chars": len(body),
+                "truncated": truncated,
+            })
+
+        note = _PERSONA_LORE_HINT
+        if len(hits) > len(matched) or capped:
+            note += f"；命中 {len(hits)} 条，按相关度与冷却只给了 {len(matched)} 条（C3 预算 ≤2 条 ≤600 字）"
+        return {"ok": True, "matched": matched, "total": len(hits), "note": note}
+    except Exception as e:  # 兜底：工具自身出 bug 也只降级，不阻断本轮
+        return _persona_lore_degrade(f"{type(e).__name__}: {e}")
+
+
+@_gated_tool()
+async def bili_persona_lore(keyword: str) -> str:
+    """
+    按现场关键词取最多 2 条「见闻正文」（生成期世界书：看见视频/热评之后再决定用哪条）。
+
+    只在**准备写评论/回复/动态**、且标题或热评让你想起「我好像有类似经历」时调用一次；
+    纯本地只读、不联网。
+
+    Args:
+        keyword: 现场关键词（把视频标题 + 字幕要点 + 热评关键词拼起来最准，如"无畏契约 上分 残局"）
+
+    Returns:
+        JSON：{ok, matched:[{id, oneLine, usedToday, body, chars, truncated}], total, note}
+        - 命中：matched 最多 2 条、总正文 ≤600 字；usedToday=true 表示今天已经用过（可返回但该换一条）；
+        - 没命中：matched 为空（这很正常，别硬凑，也别凭印象编细节）；
+        - 见闻库不可用：ok=false、matched 为空 → 本轮照常进行，别重试。
+    """
+    try:
+        keyword = str(keyword or "")
+        card, assets_dir = _persona_resolve_card()
+        state = _persona_read_json(_persona_home() / "persona" / "state.json") or {}
+        return _ok(_persona_lore_match(keyword, card, state, assets_dir))
+    except Exception as e:  # 兜底：C3 通道失败必须静默降级，绝不阻断本轮
+        logger.warning("见闻库不可用（静默降级）：%s", e)
+        return _ok(_persona_lore_degrade(f"{type(e).__name__}: {e}"))
+
+
 # ========== Tool: 人设沉淀候选（自演化管道；薄工具——只做结构预检 + 追加 pending，质检/入库在宿主 JS） ==========
 
 def _persona_pending_file() -> Path:
@@ -1951,6 +2158,7 @@ async def bili_persona_note(
     text: str = "",
     origin: str = "self",
     source: str = "",
+    originalText: str = "",
     id: str = "",
     keys: list[str] | None = None,
     oneLine: str = "",
@@ -1961,7 +2169,8 @@ async def bili_persona_note(
 
     两种用法：
     - kind="corpus"：沉淀一句语料（自己说过且想再用的话用 origin="self"；
-      社区都在用的公共梗用 origin="community" 并写明 source；**别人评论的原句绝对不许提交**）
+      社区都在用的公共梗用 origin="community" 并写明 source，**且必须带 originalText（原帖热评原文）**；
+      **别人评论的原句绝对不许提交**）
     - kind="lore"：沉淀一条见闻（这个号的生活碎片，如"照着做菜视频煮翻车了"；
       只能编角色的生活细节，不许出现可被当真的现实事实）
 
@@ -1971,6 +2180,7 @@ async def bili_persona_note(
         text: corpus 必填：语料原文（≤100 字）
         origin: corpus 用：'self'（自己发过的，宿主会跟账本对账）或 'community'（公共梗，≤30 字）
         source: 来源说明（community 必填；self 可写互动情况，如"被赞 5 次"）
+        originalText: **corpus/community 必填**：原帖热评原文（宿主用它做"与原帖"改写检查；缺了会被拒）
         id: lore 可选：见闻 id（字母数字-连字符；缺了宿主生成）
         keys: lore 必填：触发词列表（命中这些词时才读正文）
         oneLine: lore 必填：一行摘要（≤40 字，会常驻 prompt）
@@ -2016,7 +2226,13 @@ async def bili_persona_note(
             return _err(f"公共梗应 ≤30 字（当前 {len(text)}），太长说明不是梗，是自己写的——用 origin=self 或别交")
         if origin == "community" and not (source or "").strip():
             return _err("公共梗必须写 source（出处性质）")
+        original_text = (originalText or "").strip()
+        if origin == "community" and not original_text:
+            # W2-3 的入库闸门要求 community 能跑「与原帖」改写检查；工具层先拦，免得宿主质检时才拒
+            return _ok({"ok": False, "code": "NEED_ORIGINAL_TEXT", "error": "community 语料必须附原帖原文"})
         entry.update({"form": form, "text": text, "origin": origin, "source": (source or "").strip()})
+        if original_text:
+            entry["originalText"] = original_text
     elif kind == "lore":
         kid = (id or "").strip()
         if kid and not all(ch.isalnum() or ch in "-_" for ch in kid):
