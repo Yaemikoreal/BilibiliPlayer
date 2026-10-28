@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createApiHandler } from '../lib/api.js'
+import { createOverviewHub } from '../lib/realtime.js'
 
 const dir = () => mkdtempSync(join(tmpdir(), 'bf-api-'))
 // 真实 seen.md 的逐字副本（2026-10-25 快照：59 行文件 = 标题 + 空行 + 57 条账本行）
@@ -99,6 +100,26 @@ test('POST /config 合法字段写入覆盖层', async () => {
   const again = await call(h, 'GET', '/api/bili-fenshen/config')
   assert.equal(again.json.values.perDay, 7)
   assert.equal(again.json.sources.perDay, 'override')
+})
+
+/* ⭐ W0-1 便宜断言①：保存配置必须失效 CLI 探测缓存。
+ * 否则 dshBin/模型改完最长要等 10 分钟才生效（CONSOLE-ISSUES P1-4）。
+ * 这条以前只有代码没有断言，回归时谁删掉 resetCliCaches 都没人发现。 */
+test('POST /config 成功后调用 resetCliCaches（缓存失效）', async () => {
+  let reset = 0
+  let published = 0
+  const d = deps({
+    resetCliCaches: () => { reset++ },
+    overviewHub: { publish: () => { published++ } },
+  })
+  const h = createApiHandler(d)
+  const ok = await call(h, 'POST', '/api/bili-fenshen/config', { perDay: 7 })
+  assert.equal(ok.status, 200)
+  assert.equal(reset, 1, '保存配置后必须掉一次 CLI 缓存')
+  assert.equal(published, 1, '保存配置后立刻推一帧概览')
+  // 非法请求不该顺手清缓存（清了也无害，但断言住"只在该清时清"）
+  await call(h, 'POST', '/api/bili-fenshen/config', { perDay: 'five' })
+  assert.equal(reset, 1)
 })
 
 test('GET /log 把宿主事件与原文分开', async () => {
@@ -201,3 +222,49 @@ test('GET /seen 备注行（无 BV）保留为 bvid 空 + action 原文，占位
   assert.ok(notes.every((x) => x.action && x.action !== '-' && x.action !== '—'))
   assert.ok(notes.every((x) => x.title !== '-' && x.title !== '—'))
 })
+
+/* ───────── SSE 概览流：首帧必须能被客户端接受（2026-10-28 空数据态事故的回归） ───────── */
+
+function sseRes() {
+  const chunks = []
+  return {
+    chunks,
+    headersSent: false,
+    writableEnded: false,
+    writeHead() { this.headersSent = true },
+    flushHeaders() {},
+    write(c) { chunks.push(String(c)); return true },
+    end() { this.writableEnded = true },
+    on() {},
+  }
+}
+
+test('GET /stream：hub 已有数据时，hello 不得带 seq 把客户端单调起点抬到首帧之上', async () => {
+  const hub = createOverviewHub({ compute: () => ({ duty: { autoDuty: false }, health: { cli: '/x/bin.js' } }) })
+  hub.view()                                    // ← 先算一次：data 已就绪且不脏
+  const h = createApiHandler(deps({ overviewHub: hub }))
+  const res = sseRes()
+  const req = { method: 'GET', url: '/api/bili-fenshen/stream', headers: {}, on() {} }
+  try {
+    await h(req, res)
+    const frames = res.chunks
+      .join('').split('\n\n').filter(Boolean)
+      .map((raw) => { const line = raw.split('\n').find((l) => l.startsWith('data: ')); return line ? JSON.parse(line.slice(6)) : null })
+      .filter(Boolean)
+    const hello = frames.find((f) => f.type === 'hello')
+    const first = frames.find((f) => f.type === 'overview')
+    assert.ok(hello, '必须发 hello 帧')
+    assert.ok(first, '必须立刻推首帧 overview（不能等下一次 publish）')
+    const helloSeq = Number(hello.seq)
+    const firstSeq = Number(first.data?.seq)
+    // 客户端 accept(): 已有数据才严格单调。若 hello 带了 seq ≤ 首帧 seq，
+    // 首帧就会被丢 —— 这正是「空闲页面永远空数据」的成因。
+    assert.ok(
+      !Number.isFinite(helloSeq) || firstSeq > helloSeq,
+      `hello.seq=${helloSeq} 首帧 seq=${firstSeq}：相等/更大会让客户端丢弃首帧`,
+    )
+  } finally {
+    h.closeSse()                                 // 关掉订阅与心跳，别吊住测试进程
+  }
+})
+

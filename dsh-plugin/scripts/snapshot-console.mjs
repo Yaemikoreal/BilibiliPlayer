@@ -199,6 +199,14 @@ const PAGES = {
     },
   },
   settings: { label: '设置 · 节奏与配额', props: { initialTab: 'settings', initialData: DATA } },
+  'settings-content': {
+    label: '设置 · 内容与禁令',
+    props: { initialTab: 'settings', initialSub: 'content', initialData: DATA },
+  },
+  'settings-env': {
+    label: '设置 · 运行环境',
+    props: { initialTab: 'settings', initialSub: 'env', initialData: DATA },
+  },
   'settings-entry': { label: '设置页入口（settings.section）', entry: true },
 }
 

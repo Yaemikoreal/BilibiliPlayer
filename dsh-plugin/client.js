@@ -494,6 +494,26 @@ window.__ModuleLoader__.load({
       .bf-edit-actions{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center}
       .bf-sandbox-note{max-width:640px;font-size:13px;line-height:20px;color:var(--label-secondary)}
 
+      /* ── 当前账号（概览顶部：头像 + 昵称/UID + 关键数字） ── */
+      .bf-account{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+      .bf-avatar{width:44px;height:44px;border-radius:50%;flex:0 0 44px;display:grid;place-items:center;
+        overflow:hidden;background:linear-gradient(135deg,var(--bili-pink),var(--bili-blue));color:#fff;
+        font-size:17px;font-weight:600;line-height:1;box-shadow:0 0 0 1px var(--border-l2) inset}
+      .bf-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
+      .bf-account-main{min-width:0;flex:1 1 160px}
+      .bf-account-name{display:flex;align-items:center;gap:6px;min-width:0;font-size:15px;line-height:22px;
+        font-weight:500;color:var(--label-primary)}
+      .bf-account-name>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .bf-account-meta{margin-top:2px;font-size:12px;line-height:18px;color:var(--label-tertiary);
+        font-family:var(--font-code);font-variant-numeric:tabular-nums}
+      .bf-lv{font-size:10px;line-height:14px;padding:0 4px;border-radius:6px;background:var(--bg-module-platform);
+        color:var(--label-secondary);border:.5px solid var(--border-l2);font-family:var(--font-code);flex:0 0 auto}
+      .bf-acct-stats{display:flex;gap:18px;flex-wrap:wrap;margin-left:auto}
+      .bf-acct-stat{min-width:52px;text-align:right}
+      .bf-acct-stat-v{font-size:15px;line-height:22px;font-weight:500;color:var(--label-primary);
+        font-variant-numeric:tabular-nums}
+      .bf-acct-stat-k{font-size:11px;line-height:16px;color:var(--label-caption)}
+
       /* ── 设置（行式：label+说明左，控件右，行高 60） ── */
       .bf-config{display:flex;flex-direction:column;gap:10px}
       .bf-group-title{font-size:14px;line-height:20px;font-weight:500;margin:0 0 4px;color:var(--label-primary)}
@@ -501,6 +521,10 @@ window.__ModuleLoader__.load({
         border-top:.5px solid var(--border-l2)}
       .bf-row:first-of-type{border-top:0}
       .bf-row-main{flex:1;min-width:0}
+      /* ⭐ 宽控件行改纵向堆叠：旧版 .bf-row-ctl.wide{width:100%} 在不可换行的 flex 里
+         把 main 挤到 0 宽，中文标签于是变成「一字一行」的竖排。 */
+      .bf-row-wide{flex-direction:column;align-items:stretch;gap:8px}
+      .bf-row-wide .bf-row-ctl{max-width:100%;width:100%;justify-content:flex-start}
       .bf-row-label{font-size:13px;line-height:20px;font-weight:500;color:var(--label-primary)}
       .bf-row-help{font-size:12px;line-height:18px;color:var(--label-secondary);margin-top:2px}
       .bf-row-ctl{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;
@@ -722,6 +746,8 @@ window.__ModuleLoader__.load({
           seq: initSeq, seenAt: 0, running: !!(initial && initial.round && initial.round.running),
           alive: true, mode: useSse && typeof EventSource !== 'undefined' ? 'sse' : 'poll',
           es: null, timer: null, ac: null, reqId: 0,
+          // ⭐ 是否已拿到过真实信封：首帧不做 seq 单调比较的前提（见 accept 注释）
+          hasData: !!(initial && Object.keys(initial).length),
         }
       }
 
@@ -743,9 +769,13 @@ window.__ModuleLoader__.load({
           if (!payload || typeof payload !== 'object') return false
           const seq = Number(payload.seq)
           if (Number.isFinite(seq)) {
-            if (seq <= r.seq) return false          // ← seq 单调守卫：旧帧直接丢
+            // ⭐ 首帧不做单调比较：/stream 先发 hello(seq=hub.seq)，而首帧 overview
+            //    在 hub 已有数据且不脏时用同一个 seq（view() 不自增），严格单调会把
+            //    唯一一帧丢掉 —— 页面于是永远停在空数据态（红条/未找到都由此而来）。
+            if (r.hasData && seq <= r.seq) return false
             r.seq = seq
           }
+          r.hasData = true
           r.running = !!(payload.round && payload.round.running)
           r.seenAt = Date.now()
           setState((p) => ({
@@ -762,10 +792,10 @@ window.__ModuleLoader__.load({
         /** tick 帧：只补运行中会变的三个字段，不做整包替换 */
         const applyTick = (frame) => {
           const seq = Number(frame && frame.seq)
-          if (Number.isFinite(seq)) {
-            if (seq <= r.seq) return
-            r.seq = seq
-          }
+          // ⭐ tick 帧的 seq 就是 hub 当前值（不推进），与 r.seq 相等是常态：
+          //    这里只丢「比已知信封更旧」的 tick，否则运行中的秒表/阶段永远不刷新。
+          if (Number.isFinite(seq) && r.hasData && seq < r.seq) return
+          if (Number.isFinite(seq)) r.seq = Math.max(r.seq, seq)
           r.seenAt = Date.now()
           setState((p) => {
             if (!p.data) return p
@@ -901,8 +931,10 @@ window.__ModuleLoader__.load({
               return
             }
             const seq = Number(payload.seq)
-            if (Number.isFinite(seq) && seq <= r.seq) return
+            // ⭐ 与 accept 同口径：已经有数据才严格单调，否则「点刷新也救不回来」
+            if (Number.isFinite(seq) && r.hasData && seq <= r.seq) return
             if (Number.isFinite(seq)) r.seq = seq
+            r.hasData = true
             r.running = !!(payload.round && payload.round.running)
             r.seenAt = Date.now()
             setState((p) => ({
@@ -1147,8 +1179,16 @@ window.__ModuleLoader__.load({
     }
 
     /** 数据新鲜度徽标：>15s 黄、>60s 红，error 非空也显形（design §2.3） */
-    function Freshness({ ageMs, mode, error }) {
+    function Freshness({ ageMs, mode, error, hasData }) {
       const age = Number(ageMs) || 0
+      // ⭐ 一帧业务数据都没到过：说「正在连接」，不能说「数据 刚刚」（那是谎报新鲜度）
+      if (!hasData && !error) {
+        return h('span', { className: 'bf-fresh', 'data-freshness': '' },
+          h('i', { className: 'bf-dot warn', 'aria-hidden': 'true' }),
+          '正在连接…',
+          mode === 'poll' ? h('span', { className: 'bf-note' }, ' · 轮询') : null,
+        )
+      }
       const tone = error ? 'err' : age > 60000 ? 'err' : age > 15000 ? 'warn' : ''
       const text = error
         ? '数据异常·正在重连'
@@ -1225,9 +1265,9 @@ window.__ModuleLoader__.load({
         note ? h('div', { className: 'bf-note', style: { marginBottom: 4 } }, note) : null,
         children)
 
-    /** 行式字段：label+说明 左，控件 右（行高 60） */
+    /** 行式字段：label+说明 左，控件 右（行高 60）；wide = 控件独占一行（纵向堆叠） */
     const Row = ({ label, help, children, wide }) =>
-      h('div', { className: 'bf-row' },
+      h('div', { className: `bf-row${wide ? ' bf-row-wide' : ''}` },
         h('div', { className: 'bf-row-main' },
           h('div', { className: 'bf-row-label' }, label),
           help ? h('div', { className: 'bf-row-help' }, help) : null,
@@ -1271,7 +1311,9 @@ window.__ModuleLoader__.load({
       if (account && account.loggedIn === false) {
         items.push({ tone: 'warn', text: '未登录，点赞/评论/动态都会失败。', action: '扫码登录', onAction: onLogin })
       }
-      if (health && !health.cli) {
+      // ⭐ 只有「确实拿到了健康信息」才判红：health 对象缺失（首帧未到/信封为空）
+      //    不等于「探测失败」，否则页面一打开就假报「找不到 dsh CLI」。
+      if (health && health.cli !== undefined && health.cli !== null && !health.cli) {
         items.push({ tone: 'error', text: '找不到 dsh CLI，值班轮跑不起来 —— 到「设置 → 运行环境」填写 dshBin。' })
       }
       if (round && round.lastCode != null && round.lastCode !== 0) {
@@ -2448,8 +2490,8 @@ window.__ModuleLoader__.load({
 
     const SET_SUBTABS = [['rules', '节奏与配额'], ['content', '内容与禁令'], ['env', '运行环境']]
 
-    function SettingsPage({ ov, initial }) {
-      const [sub, setSub] = React.useState('rules')
+    function SettingsPage({ ov, initial, initialSub }) {
+      const [sub, setSub] = React.useState(SET_SUBTABS.some(([k]) => k === initialSub) ? initialSub : 'rules')
       return h('div', null,
         h(PageHeader, { title: PAGE_TITLE.settings, intro: PAGE_INTRO.settings }),
         h('div', { className: 'bf-pagemain' },
@@ -2626,9 +2668,18 @@ window.__ModuleLoader__.load({
           })),
       )
 
+      const cliPath = ov?.data?.health?.cli
       const envGroup = h(Group, { title: '运行环境' },
-        h(Row, { label: 'dsh CLI', help: ov?.data?.health?.cli || '值班轮会先自动探测' },
-          ov?.data?.health?.cli ? h(Pill, { tone: 'ok' }, '已探测') : h(Pill, { tone: 'warn' }, '未找到')),
+        h(Row, {
+          label: 'dsh CLI',
+          // ⭐ 三态：还没拿到信封 ≠ 没探测到（旧版两者都渲染成「未找到」，一打开就假报警）
+          help: cliPath || (ov?.data?.health ? '值班轮会先自动探测' : '正在读取运行状态…'),
+        },
+          cliPath
+            ? h(Pill, { tone: 'ok' }, '已探测')
+            : ov?.data?.health
+              ? h(Pill, { tone: 'warn' }, '未找到')
+              : h(Pill, { tone: 'off' }, '检测中')),
         h(Row, { label: 'dshBin', help: '留空自动探测（…/@deepseek-ai/dsh/lib/bin.js）', wide: true },
           h('input', {
             className: 'bf-input', value: draft.dshBin || '', style: { width: '100%' },
@@ -2845,6 +2896,58 @@ window.__ModuleLoader__.load({
     }
 
     /** 今日产出：数字带 + 最近 3 条它说过的话 */
+    /** 当前账号：头像 + 昵称/UID + 关键数字（粉丝/关注/硬币/等级）+ 凭证状态与重新登录
+     *  三态：还没拿到信封（loaded=false）→「读取中」；拿到但未登录 → 登录引导；已登录 → 资料。 */
+    function AccountCard({ account, onLogin, loaded = true }) {
+      const [faceOk, setFaceOk] = React.useState(true)
+      const a = account || null
+      const loggedIn = !!a && a.loggedIn !== false
+      const uname = (a && a.uname) || ''
+      const initial = (uname || 'B').slice(0, 1)
+      const showFace = !!(loggedIn && a && a.face && faceOk)
+      const stat = (v) => (v == null || v === '' ? '—' : (typeof v === 'number' ? fmtNum(v) : String(v)))
+      const stats = [
+        ['粉丝', a ? a.fans : null],
+        ['关注', a ? a.following : null],
+        ['硬币', a ? a.coins : null],
+      ]
+      const note = !loaded ? '读取中…'
+        : !loggedIn ? '未登录'
+          : a.stale ? '凭证有效（信息为缓存）' : '凭证有效'
+      return h(Card, null,
+        h('div', { className: 'bf-card-head' },
+          h('span', { className: 'bf-card-title' }, '当前账号'),
+          h('span', { className: 'bf-card-note' }, note),
+          loggedIn && a.checkedAt
+            ? h('span', { className: 'bf-card-note' }, '· 检查于 ' + hhmmss(a.checkedAt)) : null,
+          h(Sp),
+          h(Btn, { small: true, variant: 'ghost', onClick: onLogin }, loggedIn ? '重新登录' : '扫码登录'),
+        ),
+        h('div', { className: 'bf-account' },
+          h('div', { className: 'bf-avatar', 'aria-hidden': 'true' },
+            showFace
+              ? h('img', {
+                  src: a.face, alt: uname || '头像', referrerPolicy: 'no-referrer',
+                  onError: () => setFaceOk(false),
+                })
+              : initial),
+          h('div', { className: 'bf-account-main' },
+            h('div', { className: 'bf-account-name' },
+              h('span', null, loggedIn ? (uname || '已登录') : (loaded ? '未登录' : '读取中…')),
+              loggedIn && a.vip ? h('span', { className: 'bf-lv' }, '大会员') : null,
+              loggedIn && a.level != null ? h('span', { className: 'bf-lv' }, 'LV' + a.level) : null,
+            ),
+            h('div', { className: 'bf-account-meta' },
+              loggedIn && a.mid ? 'UID ' + a.mid : 'UID —'),
+          ),
+          h('div', { className: 'bf-acct-stats' }, stats.map(([k, v]) => h('div', { className: 'bf-acct-stat', key: k },
+            h('div', { className: 'bf-acct-stat-v' }, stat(v)),
+            h('div', { className: 'bf-acct-stat-k' }, k),
+          ))),
+        ),
+      )
+    }
+
     function TodayCard({ quota, presence, act, onGo }) {
       const limits = quota.limits || {}
       const today = dayKeyOf()
@@ -3023,7 +3126,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 人设一句话 + 健康检查（各一行，可展开） */
-    function PersonaHealthCard({ persona, health, model, onGo }) {
+    function PersonaHealthCard({ persona, health, model, onGo, loaded = true }) {
       const p = persona || {}
       const ph = p.health || {}
       const pact = p.active || {}
@@ -3033,11 +3136,12 @@ window.__ModuleLoader__.load({
       const items = [
         {
           id: 'cred', label: 'B站登录凭证', status: health.cred ? 'pass' : 'warn',
-          detail: health.cred ? '凭证文件存在（未联网校验）' : '没有凭证文件，先扫码登录',
+          detail: health.cred ? '凭证文件存在（未联网校验）'
+            : loaded ? '没有凭证文件，先扫码登录' : '读取中…',
         },
         {
           id: 'cli', label: 'dsh CLI', status: health.cli ? 'pass' : 'warn',
-          detail: health.cli || '未找到（可在设置里指定 dshBin）',
+          detail: health.cli || (loaded ? '未找到（可在设置里指定 dshBin）' : '读取中…'),
         },
         {
           id: 'route', label: '控制台路由', status: health.routeOk ? 'pass' : 'fail',
@@ -3052,7 +3156,8 @@ window.__ModuleLoader__.load({
       return h(Card, null,
         h('div', { className: 'bf-card-head' },
           h('span', { className: 'bf-card-title' }, '人设与健康'),
-          h('span', { className: 'bf-card-note' }, bad ? bad + ' 项需注意' : '全部正常'),
+          h('span', { className: 'bf-card-note' },
+            !loaded ? '读取中…' : bad ? bad + ' 项需注意' : '全部正常'),
           h(Sp),
           h(Btn, { small: true, variant: 'ghost', onClick: () => onGo('persona') }, '人设'),
           h(Btn, { small: true, variant: 'ghost', onClick: () => onGo('settings') }, '设置'),
@@ -3085,6 +3190,9 @@ window.__ModuleLoader__.load({
 
     function OverviewPage({ rt, act, persona, live, onRun, onStop, onLogin, onGo }) {
       const data = (rt && rt.data) || {}
+      // ⭐ 真正的信封一定有内容；空对象（首帧未到 / 失败兜底）不算「有数据」，
+      //    否则会把未加载状态渲染成「未登录 / 未找到 / 数据 刚刚」这类假结论。
+      const hasData = !!(rt && rt.data && Object.keys(rt.data).length > 0)
       const duty = data.duty || {}
       const round = data.round || {}
       const quota = data.quota || {}
@@ -3108,7 +3216,7 @@ window.__ModuleLoader__.load({
           : h(Pill, { tone: 'ok' }, account ? (account.uname || '已登录') : '登录检查中'),
         inbox && Number(inbox.pendingReply) > 0 ? h(Pill, { tone: 'warn' }, '待回 ' + inbox.pendingReply) : null,
         h(Sp),
-        h(Freshness, { ageMs, mode, error: err }),
+        h(Freshness, { ageMs, mode, error: err, hasData }),
       )
 
       return h('div', null,
@@ -3122,13 +3230,14 @@ window.__ModuleLoader__.load({
         h('div', { className: 'bf-pagemain' },
           h(Banner, { health, account, round, onLogin }),
           statusLine,
+          h(AccountCard, { account, onLogin, loaded: hasData }),
           h(TodayCard, { quota, presence, act, onGo }),
           h(ProactiveCard, { quota, round, act, onGo }),
           h(RunningDetail, { live, round, onRun, onStop }),
           h(QuotaCard, { quota }),
           h('div', { className: 'bf-grid-2' },
             h(PresenceCard, { presence }),
-            h(PersonaHealthCard, { persona, health, model, onGo }),
+            h(PersonaHealthCard, { persona, health, model, onGo, loaded: hasData }),
           ),
           h('div', { className: 'bf-note', style: { paddingTop: 8, borderTop: '.5px solid var(--border-l2)' } },
             '数据来源：账本 ' + (data.ledgerFile || '—') + ' · 家目录 ' + (data.home || '—') +
@@ -3216,7 +3325,7 @@ window.__ModuleLoader__.load({
                   persona, initial: init?.personaPage || props?.persona,
                   initialTab: props?.initialPersonaTab,
                 })
-              : h(SettingsPage, { ov: { data }, initial: init?.config })
+              : h(SettingsPage, { ov: { data }, initial: init?.config, initialSub: props?.initialSub })
 
       return h('div', { className: 'bf-console bf-root', 'data-tab': tab },
         h('div', { className: 'bf-page' },

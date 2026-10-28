@@ -123,9 +123,54 @@ expectAll('v4 页签', homeHtml, ['概览', '活动', '日报', '人设', '设�
 if (count(homeHtml, /role="tab"/g) !== 5) {
   console.log(`✗ FAIL 一级页签应为 5 个，实际 ${count(homeHtml, /role="tab"/g)}`); bad++
 }
+/* 账号基础信息区（v4 重做时被误删，2026-10-28 恢复）：头像 + 昵称/UID + 粉丝/关注/硬币 + 等级 */
+expectAll('v4 概览 · 当前账号', homeHtml, [
+  '当前账号', '蓝鱼小号', 'UID 10000001', 'LV6', '重新登录', 'bf-avatar',
+  '>粉丝<', '>关注<', '>硬币<',
+])
+expectAll('v4 概览 · 账号数字', homeHtml, ['>12<'])       // 粉丝 12
+// 有 face 时必须渲染真实头像 <img>（不允许只剩首字母占位）
+const withFace = check('ConsolePage（v4 · 概览 · 有头像）', () => render({
+  initialData: {
+    ov: {
+      ...FIX['/api/bili-fenshen/overview'],
+      account: { ...FIX['/api/bili-fenshen/overview'].account, face: 'https://i1.hdslb.com/bfs/face/x.jpg' },
+    },
+  },
+}))
+if (!/class="bf-avatar"[^>]*>\s*<img[^>]+src="https:\/\/i1\.hdslb\.com/.test(withFace)) {
+  console.log('✗ FAIL 有 face 时头像应为 <img>，实际没渲染出来'); bad++
+}
 // 空数据态：schema 缺失也不能崩
 const homeEmpty = check('ConsolePage（v4 · 概览 · 空数据）', () => render({ initialData: { ov: {} } }))
 expectAll('v4 概览空数据', homeEmpty, ['今日产出', '配额', '跑一轮'])
+/* ⭐ 空数据态不得给出「故障」结论：首帧未到 ≠ CLI 没探测到、≠ 未登录、≠ 数据新鲜 */
+for (const bogus of ['找不到 dsh CLI', '数据 刚刚', '未找到']) {
+  if (homeEmpty.includes(bogus)) { console.log(`✗ FAIL 空数据态误报「${bogus}」`); bad++ }
+}
+expectAll('v4 概览空数据 · 占位文案', homeEmpty, ['正在连接…', '读取中…'])
+// 完全没有 initialData（真实首屏：信封由 SSE 推来）同样不许误报
+const homeNoInit = check('ConsolePage（v4 · 概览 · 无 initialData）', () => render({}))
+for (const bogus of ['找不到 dsh CLI', '数据 刚刚']) {
+  if (homeNoInit.includes(bogus)) { console.log(`✗ FAIL 首屏（无 initialData）误报「${bogus}」`); bad++ }
+}
+expectAll('v4 首屏 · 占位文案', homeNoInit, ['正在连接…', '当前账号'])
+
+/* ⭐ W0-1 便宜断言②：`health.cli === undefined` 不许判红（"没拿到"≠"探测失败"）。
+ * 只断"不出现横幅"是单边的——把整个 Banner 删掉也能过；所以两面都断：
+ *   缺字段 → 不出横幅；明确是空串 → 必须出横幅。 */
+const healthNoCli = check('ConsolePage（v4 · 概览 · health 缺 cli 字段）', () => render({
+  initialData: { ov: { ...FIX['/api/bili-fenshen/overview'], health: { cred: true, routeOk: true, cliCheckedAt: '2026-10-28T00:20:00.000Z' } } },
+}))
+if (healthNoCli.includes('找不到 dsh CLI')) {
+  console.log('✗ FAIL health.cli 缺失（首帧未到）被误判成「找不到 dsh CLI」'); bad++
+}
+const healthEmptyCli = check('ConsolePage（v4 · 概览 · health.cli 明确为空）', () => render({
+  initialData: { ov: { ...FIX['/api/bili-fenshen/overview'], health: { cli: '', cred: true } } },
+}))
+if (!healthEmptyCli.includes('找不到 dsh CLI')) {
+  console.log('✗ FAIL health.cli 明确为空时必须出横幅（否则隐性故障没人发现）'); bad++
+}
 
 /* ═════════ ② 概览 · 运行中（原「实时」页并入） ═════════ */
 const runningHtml = check('ConsolePage（v4 · 概览 · 运行中）', () => render({

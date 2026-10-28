@@ -187,7 +187,11 @@ export function createApiHandler(deps) {
     try { req.on?.('close', cleanup); req.on?.('error', cleanup) } catch { /* 兜住 */ }
     try { res.on?.('close', cleanup); res.on?.('error', cleanup) } catch { /* 兜住 */ }
 
-    write({ type: 'hello', seq: hub.seq, serverTime: new Date().toISOString() })
+    // ⭐ hello 只做「连接已建立」确认，**不带 seq**：
+    //    hub 已有数据且不脏时 view() 不自增，首帧 overview 的 seq 与 hub.seq 相同；
+    //    若 hello 把 seq 交给客户端做单调起点，首帧就会被客户端的 seq 守卫丢掉，
+    //    空闲期又没有后续 publish，页面会永远停在空数据态。
+    write({ type: 'hello', serverTime: new Date().toISOString() })
     let env = null
     try { env = hub.view('stream-open') } catch { env = null }
     if (env) write({ type: 'overview', data: env })
@@ -279,6 +283,9 @@ export function createApiHandler(deps) {
           return sendJson(res, 500, { ok: false, error: '写覆盖层失败' })
         }
         // 配置一改，概览信封里的 limits/nextRunAt 就变了：立刻推一帧，别等 2s 轮询
+        // ⭐ 保存配置后必须失效 CLI 探测缓存：dshBin/模型这类字段若被缓存挡住，
+        //    用户改完最长要等 10 分钟才生效（详见 CONSOLE-ISSUES P1-4）。
+        try { deps.resetCliCaches?.() } catch { /* 兜住 */ }
         try { deps.overviewHub?.publish?.('config') } catch { /* 兜住 */ }
         return sendJson(res, 200, { ok: true, ...effectiveConfig(patchConfig(), deps.configFile) })
       }
