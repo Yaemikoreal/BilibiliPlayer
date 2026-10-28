@@ -20,6 +20,8 @@
  *   - 禁用词：任何一条命中即为 warn（基数是 0，「命中」本身就是信号）；命中率 ≥20% → bad。
  *   - n < 5 一律 ok + 「数据不足」，不拿 2 条评论下结论。
  */
+import { hasEmoji } from './text.js'
+
 /** 247 条真人基线（§8.2 拍板值；只读，测试会逐字段锁住）。 */
 export const CHECKUP_BASELINE = Object.freeze({
   medianChars: 27,
@@ -41,7 +43,9 @@ export const CHECKUP_THRESHOLDS = Object.freeze({
 })
 
 const DAY_MS = 86400_000
-const EMOJI_RE = /[\p{Extended_Pictographic}\uFE0F\u20E3]/u
+// ⚠️ 表情口径统一走 text.js（B 站 `[doge]` 标签 + Unicode）。这里是全仓唯一一份正则（text.js `EMOJI_RE`）。
+//    本文件以前自己写了一份只认 Unicode 的版本，导致真实评论（只用标签）的「表情占比」恒为 0%，
+//    2026-10-29 两轮连续误报「你几乎不带表情了」。别再往本文件里加第二份正则。
 
 const asArr = (v) => (Array.isArray(v) ? v : [])
 const round3 = (x) => Math.round((Number(x) || 0) * 1000) / 1000
@@ -127,7 +131,7 @@ export function buildCheckup(o = {}) {
   const n = selected.length
   const charList = selected.map((x) => charsOf(x.text))
   const periodPer = selected.map((x) => countOf(x.text, /。/g))
-  const emojiHits = selected.filter((x) => EMOJI_RE.test(x.text)).length
+  const emojiHits = selected.filter((x) => hasEmoji(x.text)).length
   const questionHits = selected.filter((x) => /[？?]/.test(x.text)).length
   const avoidHits = avoidWords.length
     ? selected.filter((x) => avoidWords.some((w) => x.text.includes(w))).length

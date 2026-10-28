@@ -66,6 +66,18 @@ test('本轮参数：主动接话（硬步骤）+ 已接话清单 + 空账本的
   assert.match(p, /照常逐条判/, '空态要给出正常判重的指令')
 })
 
+/* 2026-10-29 真实日志：配置 followPerRound=40，模型在「先扫哪几个 UP」上反复权衡，
+ * 20 次工具预算先烧掉一截，最后只看了 4 个。注入时收口到 8，并把「配置写了几」明说。 */
+test('本轮参数：每轮抽查 40 收口到 8，并说明是预算收口', () => {
+  const p = buildDutyPrompt({ ...baseCfg, personaPrompt: '', followAuto: true, followPerRound: 40 }, 'R-follow')
+  assert.match(p, /取前 8 个/)
+  assert.match(p, /配置写的是 40/)
+  assert.doesNotMatch(p, /取前 40 个/)
+  // 配置本身不超上限时不该出现收口说明
+  const p8 = buildDutyPrompt({ ...baseCfg, personaPrompt: '', followAuto: true, followPerRound: 8 }, 'R-follow8')
+  assert.doesNotMatch(p8, /配置写的是/)
+})
+
 test('本轮参数：账本里看过的 BV 注入清单，命中纪律完整', () => {
   // buildDutyPrompt 的账本事件由调用方传入（runDuty 传 readEvents(...)）——
   // 两条近 14 天、一条 20 天前（应被窗口滤掉）

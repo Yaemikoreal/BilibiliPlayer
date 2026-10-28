@@ -19,7 +19,7 @@
  *   - 247 条基线（中位 27 字 / 句号 10.9% / 问号 12.6% / 表情 41.7%）进 `baseline` 段，
  *     当前用于把建议写成"人话"，后续 W5-2 体检直接复用这一段，不再抄第二份数字。
  */
-import { jaccard, charLen, stripEmoji } from './text.js'
+import { jaccard, charLen, stripEmoji, countEmoji } from './text.js'
 import { looksCopied, bankOverlap, activeTexts } from './expression.js'
 
 export const LINT_SPEC = 'bili-fenshen.lint-rules/v1'
@@ -66,14 +66,13 @@ export const REDLINE_LEXICONS = Object.freeze({
 
 /* ───────────────────────── 文本小工具（与 text.js 同口径） ───────────────────────── */
 
-/** 与 state.js 的 EMOJI 同口径：B 站表情 token + Unicode emoji。 */
-const EMOJI_RE = /\[[^\]]{1,12}\]|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu
 /** 收尾要剥掉的标点（含收尾引号：`「太强了」` 也算空泛捧场收尾）。 */
 const TAIL_STRIP_RE = /[\s。！!？?～~….,，、:：;；·）」』"”’）)】]+$/u
 const SENTENCE_SPLIT_RE = /[。！？!?；;\n]+/
 const QUOTE_PAIRS = Object.freeze([['「', '」'], ['『', '』'], ['“', '”'], ['"', '"'], ['‘', '’']])
 
-export const countEmoji = (s) => (String(s ?? '').match(EMOJI_RE) || []).length
+// 表情口径只有一份（text.js `EMOJI_RE`）：本文件只 re-export，别再自建第二份正则。
+export { countEmoji }
 
 /** 去掉收尾标点/表情后的尾巴，给 L1 判"最后一句落在哪个词上"。 */
 const trimTail = (s) => stripEmoji(s).replace(TAIL_STRIP_RE, '').trim()

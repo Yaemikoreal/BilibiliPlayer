@@ -114,6 +114,34 @@ test('checkup：表情占比单边拉满 → bad；只有一处轻微偏离 → 
   assert.match(r.verdict.reasons.join(''), /表情占比/)
 })
 
+test('checkup：表情占比认 B 站 `[doge]` 标签（2026-10-29 两轮真实误报的回归）', () => {
+  // 真实数据：12 条评论里 5 条带 `[doge]` 这类标签、0 条用 Unicode emoji ⇒ 按标签算是 0.417 = 基线。
+  // checkup 以前自己写了一份只认 Unicode 的正则，于是这个比例恒为 0%，每轮误报「你几乎不带表情了」。
+  const tags = [
+    comment('2026-10-28T00:00:00.000Z', '一'.repeat(24) + '[doge]'),
+    comment('2026-10-28T00:10:00.000Z', '一'.repeat(26) + '[笑哭]'),
+    comment('2026-10-28T00:20:00.000Z', '一'.repeat(27)),
+    comment('2026-10-28T00:30:00.000Z', '一'.repeat(28)),
+    comment('2026-10-28T00:40:00.000Z', '一'.repeat(29)),
+  ]
+  const r = buildCheckup({ events: tags, now: NOW })
+  assert.equal(r.metrics.emojiRatio, 0.4, '两条带 [doge]/[笑哭] ⇒ 2/5')
+  assert.equal(r.verdict.level, 'ok')
+  assert.doesNotMatch(r.verdict.reasons.join(''), /表情占比/)
+  // 只有 Unicode 也算（口径是「标签 + Unicode」，不是二选一）
+  const uni = buildCheckup({
+    events: [
+      comment('2026-10-28T00:00:00.000Z', '一'.repeat(20) + '😀'),
+      comment('2026-10-28T00:10:00.000Z', '一'.repeat(26)),
+      comment('2026-10-28T00:20:00.000Z', '一'.repeat(27)),
+      comment('2026-10-28T00:30:00.000Z', '一'.repeat(28)),
+      comment('2026-10-28T00:40:00.000Z', '一'.repeat(29)),
+    ],
+    now: NOW,
+  })
+  assert.equal(uni.metrics.emojiRatio, 0.2)
+})
+
 test('checkup：voice.avoid.* 命中 —— 1 条 warn、命中率 ≥20% bad', () => {
   const card = { voice: { avoid: { aiCues: ['显然'], bookish: ['综上所述'], bannedWords: [] } } }
   assert.deepEqual(avoidWordsOf(card), ['显然', '综上所述'])

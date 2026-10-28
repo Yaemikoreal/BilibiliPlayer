@@ -10,7 +10,7 @@
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { charLen, hash32, stripEmoji } from './text.js'
+import { charLen, hash32, stripEmoji, EMOJI_RE } from './text.js'
 import { stateFile } from './store.js'
 
 /** 8 种"今天的状态"。只允许表达**自己的**状态，不许衍生外部事实。 */
@@ -43,7 +43,6 @@ const dayKeyOf = (d = new Date()) => {
 /* ───────────────────────── 形态判定（P1 临时版） ───────────────────────── */
 
 const JUDGE_TAIL = /(得很|死了|这个了|说死了|实在|靠谱|给得足|到位|说透|不错|挺好|厉害|值了|香|省心|够了|服了)$/
-const EMOJI = /\[[^\]]{1,12}\]|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/u
 
 /**
  * 粗分评论形态。P3 会换成 `lib/style.js` 的正式分类器（同一套正则），
@@ -58,12 +57,13 @@ export const formOf = (text) => {
   if (JUDGE_TAIL.test(core)) return 'detail' // 判断收尾不算情绪（关键：否则欠账永远不欠）
   // 第一人称经历优先于"带表情"：否则"我吃晕了[doge]"会被算成玩梗
   if (/我/.test(core) && n >= 8) return 'experience'
-  if (EMOJI.test(raw)) return 'meme'
+  if (hasEmoji(raw)) return 'meme'
   if (n <= 6) return 'reaction'
   return 'detail'
 }
 
-export const hasEmoji = (text) => EMOJI.test(String(text ?? ''))
+// 表情口径只有一份：text.js 的 EMOJI_RE（B 站 `[doge]` 标签 + Unicode）。本文件不再自建正则。
+export const hasEmoji = (text) => EMOJI_RE.test(String(text ?? ''))
 
 /* ───────────────────────── 派生 ───────────────────────── */
 

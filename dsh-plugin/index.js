@@ -26,7 +26,7 @@ import { appendEvents, isDuplicate } from './lib/ledger.js'
 // ⭐ W4-2：账本读收敛成**模块级单实例**（stat 未变 0 次读盘 / size 增长只读增量段 / 轮转自动全量回退）
 import { ledgerReaderFor } from './lib/ledger-index.js'
 import { createUtf8Decoder, keepTail, rotateIfBig, createProbeLogger } from './lib/logsink.js'
-import { parseRoundReport, parseProactiveScan } from './lib/report.js'
+import { parseRoundReport, parseProactiveScan, roundSection, dedupeScans } from './lib/report.js'
 import { createApiHandler } from './lib/api.js'
 import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort } from './lib/config.js'
 import { fetchAccount } from './lib/account.js'
@@ -655,7 +655,19 @@ const backfillFromReport = (roundId) => {
     const day = dayKey()
     const f = join(OUT_DIR, `${day}.md`)
     if (!existsSync(f)) return
-    const text = readFileSync(f, 'utf8')
+    const full = readFileSync(f, 'utf8')
+    // ⭐ 只解析**本轮那一块**：以前按整份日报解析，第二轮回填时把第一轮的「接话扫描」行又补了一遍，
+    //    一轮扫描在账本里记成 2–4 条（概览「今日扫描」翻倍 + 活动页挂错视频，2026-10-29 两轮实测）。
+    const scoped = roundSection(full, roundId)
+    let text = scoped.text
+    if (!scoped.found) {
+      if (scoped.rounds > 1) {
+        // 多个轮次却定位不到本轮 ⇒ 标题没带 round id；宁可这条不补，也别把别人的事件记到本轮头上
+        log(`报告兜底回填跳过：日报里有 ${scoped.rounds} 个轮次，找不到 round=${roundId}（标题缺 round id？）`)
+        return
+      }
+      text = full   // 老格式（整份日报 = 一个轮次）
+    }
     const { views, skips } = parseRoundReport(text, { round: roundId })
     const events = []
     for (const v of views) {
@@ -670,16 +682,20 @@ const backfillFromReport = (roundId) => {
       appendEvents(LEDGER_FILE, fresh)
       log(`报告兜底回填 ${fresh.length} 条事件（round=${roundId}）`)
     }
-    // ⭐ 接话扫描/接话也从报告回填（设计定稿 §3.3）：isDuplicate 的键不含 t，
-    //    同一 BV 的扫描事件不能走它，否则跨轮会被误判成重复而丢掉。
+    // ⭐ 接话扫描/接话也从报告回填（设计定稿 §3.3）。
+    //    去重按**语义**（posted 认 targetRpid / skipped 认 bvid），不再用 `t`：
+    //    回填时间是"现在"、模型写的是轮内时刻，拿 `t` 比永远不相等 ⇒ 以前等于没去重。
     try {
       const scans = parseProactiveScan(text, { round: roundId })
-      const scanEvents = scans.scans
-        .map((sc) => ({ ...sc, round: roundId, type: 'reply-scan', source: 'report' }))
-        .filter((e) => !existing.some((x) => x && x.type === 'reply-scan' && x.round === e.round && x.bvid === e.bvid && x.t === e.t))
+      const scanEvents = dedupeScans(
+        existing,
+        scans.scans.map((sc) => ({ ...sc, round: roundId, type: 'reply-scan', source: 'report' })),
+        roundId,
+      )
       const proactiveEvents = scans.proactive
         .map((p) => ({ ...p, round: roundId, type: 'reply-out', kind: 'proactive', source: 'report' }))
-        .filter((e) => !existing.some((x) => x && x.type === 'reply-out' && x.parent === e.parent && x.bvid === e.bvid))
+        .filter((e) => !existing.some((x) => x && x.type === 'reply-out' && x.round === e.round
+          && x.parent === e.parent && x.bvid === e.bvid))
       const extra = [...scanEvents, ...proactiveEvents]
       if (extra.length) {
         appendEvents(LEDGER_FILE, extra)
@@ -943,11 +959,20 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   ]
   // ⭐ 关注 UP 主：手动 UID 优先；没指定（或额外）时按「最常访问」拉常看的 UP 主
   const followAuto = on(cfg?.followAuto)
-  const followN = cfg?.followPerRound === undefined ? 8 : Math.max(0, Number(cfg.followPerRound) || 0)
+  const followWant = cfg?.followPerRound === undefined ? 8 : Math.max(0, Number(cfg.followPerRound) || 0)
+  // ⭐ 2026-10-29：「每轮抽查」是**想看多少**，不是「本轮必须逐个扫完多少」。
+  //    实测配置写成 40 时，模型在「先扫哪几个 UP」上反复权衡，20 次工具预算里先烧掉一截
+  //    （真实日志：40 个配置 → 只看了 4 个 UP，还多花了 2 次预算在纠结上）。
+  //    所以注入时收口到 8，并把「配置写了几」明说，别让模型自己算「40 个要扫到什么时候」。
+  const FOLLOW_PER_ROUND_MAX = 8
+  const followN = Math.min(followWant, FOLLOW_PER_ROUND_MAX)
   const followParts = []
   if (uids.length) followParts.push(`指定 UID：${uids.join('、')}（优先；用 bili_user_videos 逐个拉最新投稿，order=pubdate）`)
   if (followAuto && followN > 0) {
-    followParts.push(`用 bili_followings 按「最常访问」排序（sort=attention，ps=50）拉我常看的 UP 主，取前 ${followN} 个`
+    const clampNote = followWant > followN
+      ? `（配置写的是 ${followWant}，但每轮工具预算只有 20 次 ⇒ 本轮就按前 ${followN} 个算，别试图扫完全部）`
+      : ''
+    followParts.push(`用 bili_followings 按「最常访问」排序（sort=attention，ps=50）拉我常看的 UP 主，取前 ${followN} 个${clampNote}`
       + '（这些的最新投稿都看过/没有新的，就按顺序往后顺延取），再用 bili_user_videos 逐个拉最新投稿（order=pubdate）')
   }
   const sourceLines = [
