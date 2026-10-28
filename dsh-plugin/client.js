@@ -1197,6 +1197,61 @@ window.__ModuleLoader__.load({
 
     const Sp = () => h('span', { className: 'bf-sp' })
 
+    /* ── W7-2 发言门控：概览卡与人设页共用同一套归一化 ──
+     * 契约 = GET /overview → round.speakGate：null | {mode,decision,reason,suggestedMaxComments,features}。
+     * 三条纪律：① 数据可能整个没有（后端未接线 / 还没跑过带门控的轮）⇒ 返回 null，调用方渲染「暂无数据」；
+     *          ② 字段半截 / 类型不对 ⇒ 逐个兜底，绝不抛错、绝不渲染 undefined；
+     *          ③ mode 缺失或无法识别时按 observe 展示并**明确标注**，绝不谎称「已经在强制拦截」。 */
+    const SPEAK_GATE_MODES = {
+      off: { text: '已关闭', kind: 'like', note: '门控已关闭：本轮不记录节奏。' },
+      observe: { text: '观察中 · 不拦', kind: 'warn', note: '观察档：只记录不强制，别当成已经在拦。' },
+      enforce: { text: '强制', kind: 'cmt', note: '强制档：会按门控收紧本轮评论上限（配额仍是硬上限）。' },
+    }
+    const SPEAK_GATE_DECISIONS = {
+      normal: { text: '正常', kind: 'rep' },
+      throttle: { text: '收紧', kind: 'warn' },
+      forced: { text: '放行', kind: 'cmt' },
+    }
+    const speakGateOf = (raw) => {
+      if (!raw || typeof raw !== 'object') return null
+      const rawMode = String(raw.mode || '')
+      const rawDecision = String(raw.decision || '')
+      // mode 缺失/无法识别 → 按 observe 展示（宁可保守说「不拦」，也不谎称在强制拦截）
+      const mode = SPEAK_GATE_MODES[rawMode] ? rawMode : 'observe'
+      const decision = SPEAK_GATE_DECISIONS[rawDecision] ? rawDecision : 'normal'
+      const f = raw.features && typeof raw.features === 'object' ? raw.features : {}
+      const intOf = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null)
+      const recentWindow = intOf(f.recentWindow)
+      const recentSpoke = intOf(f.recentSpoke)
+      const gap = f.gapMinutes == null ? null : intOf(f.gapMinutes)
+      const feat = []
+      if (recentWindow != null && recentWindow > 0) {
+        feat.push('近 ' + recentWindow + ' 个动作说了 ' + (recentSpoke == null ? 0 : recentSpoke) + ' 次')
+      }
+      if (gap == null) {
+        if (recentWindow != null && recentWindow > 0) feat.push('还没发过言')
+      } else feat.push('距上次 ' + gap + ' 分钟')
+      return {
+        mode, decision,
+        modeText: SPEAK_GATE_MODES[mode].text,
+        modeKind: SPEAK_GATE_MODES[mode].kind,
+        modeNote: SPEAK_GATE_MODES[mode].note,
+        modeKnown: !!SPEAK_GATE_MODES[rawMode],
+        decisionText: SPEAK_GATE_DECISIONS[decision].text,
+        decisionKind: SPEAK_GATE_DECISIONS[decision].kind,
+        enforced: raw.enforced === true,
+        reason: typeof raw.reason === 'string' ? raw.reason : '',
+        suggestedMaxComments: intOf(raw.suggestedMaxComments) || 0,
+        featText: feat.join(' · '),
+      }
+    }
+    /** 门控两枚徽标（模式 + 判定）：概览卡与人设页共用，口径只写一次 */
+    const SpeakGateTags = ({ gate }) => (gate
+      ? h(React.Fragment, null,
+          h(Tag, { kind: gate.modeKind }, gate.modeText),
+          h(Tag, { kind: gate.decisionKind }, gate.decisionText))
+      : null)
+
     /** 页头：唯一 h1 + 一句话 intro + 右侧 ≤2 个主操作 */
     function PageHeader({ title, intro, children }) {
       return h('header', { className: 'bf-page-head' },
@@ -2030,6 +2085,8 @@ window.__ModuleLoader__.load({
       const hist = histRaw && histRaw.ok !== false ? histRaw : null
       const inject = (ovd && ovd.round && ovd.round.personaInject) || null
       const injectTag = (ovd && ovd.round && ovd.round.personaTag) || (inject && inject.personaTag) || ''
+      // W7-2：同一个概览信封里的 round.speakGate，不新增请求（缺失时 injectGate = null ⇒ 渲染「暂无数据」）
+      const injectGate = speakGateOf(ovd && ovd.round && ovd.round.speakGate)
 
       const refreshAll = () => {
         resetGetCache()   // 手动刷新要绕过 W4-4 的 30s 复用
@@ -2294,6 +2351,20 @@ window.__ModuleLoader__.load({
               )
             : h('div', { className: 'bf-note' },
                 ovd ? '这轮账本里还没有 persona-inject 记录（未走卡链路或还没跑完）。' : '正在连接…'),
+          /* W7-2 发言门控一行：解释这轮为什么说 / 不说（与被注入的口径同源，不新增请求） */
+          h('div', {
+            className: 'bf-tools', 'data-block': 'persona-gate',
+            style: { marginTop: 10, paddingTop: 8, borderTop: '.5px solid var(--border-l2)' },
+          },
+            h('span', { className: 'bf-note st' }, '发言门控'),
+            injectGate
+              ? h(React.Fragment, null,
+                  h(SpeakGateTags, { gate: injectGate }),
+                  injectGate.reason ? h('span', { className: 'bf-note' }, '· ' + injectGate.reason) : null,
+                  injectGate.featText ? h('span', { className: 'bf-note' }, '· ' + injectGate.featText) : null,
+                )
+              : h('span', { className: 'bf-note' }, ovd ? '暂无数据' : '正在连接…'),
+          ),
         ),
       )
 
@@ -2966,6 +3037,33 @@ window.__ModuleLoader__.load({
           h(Num, { value: Number(draft.growthAutoPromote ?? 3), label: '每日自动转正', onChange: (v) => set('growthAutoPromote', v) })),
       )
 
+      /* W7-2 发言门控 + 质量门转正（本轮新加的配置项，以前只能改配置文件）。
+       * 纪律：观察中 ≠ 已经拦截 —— 文案必须和概览卡、人设页那一行保持一致，别让主人误以为开了就在拦。 */
+      const qualityGateGroup = h(Group, { title: '人设 / 质量门' },
+        h(Row, {
+          label: '发言门控',
+          help: '默认观察中：只记录、不拦（观察中 ≠ 已经拦截）；建议先跑三天看误杀率，再切强制',
+        },
+          h(Select, {
+            label: '发言门控',
+            value: draft.speakGateMode || 'observe',
+            options: [
+              ['off', '关闭（不记录节奏）'],
+              ['observe', '观察中（只记录、不拦，推荐先跑三天）'],
+              ['enforce', '强制（节奏太密时把本轮评论上限压到 1 条）'],
+            ],
+            onChange: (v) => set('speakGateMode', v),
+          })),
+        h(Row, {
+          label: '只转正已确认的候选',
+          help: '开启后只转正人工确认过（checked）的语料候选；关闭 = 按「每日自动转正」数自动推进',
+        },
+          h(Switch, {
+            checked: draft.growthCheckedOnly === true, label: '只转正已确认的候选',
+            onChange: (v) => set('growthCheckedOnly', v),
+          })),
+      )
+
       const personaPromptGroup = h(Group, { title: '人设直通（legacy）' },
         h(Row, { label: '人设提示词', help: '留空＝中性说话；也可填文件路径（/绝对路径 或 ~/，目录则读其中的 AGENTS.md）', wide: true },
           h('textarea', {
@@ -3007,7 +3105,7 @@ window.__ModuleLoader__.load({
       const body = sub === 'rules'
         ? h('div', { className: 'bf-config' }, rulesGroup, quotaGroup)
         : sub === 'content'
-          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup, personaPromptGroup)
+          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup, qualityGateGroup, personaPromptGroup)
           : h('div', { className: 'bf-config' },
               h(ModelFields, { draft, onChange: setPatch, models, onFollow: followDefault }),
               envGroup,
@@ -3496,6 +3594,48 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 发言门控卡：回答「这轮为什么说 / 不说」（W7-2）。两态：有数据 / 暂无数据。
+     *  数据源就是概览信封的 round.speakGate（口径见 plan §8.5），缺失时退化为「暂无数据」而不是藏掉整块。
+     *  注意后端口径 = currentAcc || lastRound：空闲时这条是**上一轮**的判定，别写成「本轮」。 */
+    function SpeakGateCard({ gate, loaded, running }) {
+      return h('div', { 'data-block': 'overview-speak-gate' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '发言门控'),
+            h('span', { className: 'bf-card-note' },
+              gate ? (running ? '本轮为什么说 / 不说' : '上一轮为什么说 / 不说') : loaded ? '暂无数据' : '正在连接…'),
+            h(Sp),
+            gate ? h(SpeakGateTags, { gate }) : null,
+          ),
+          gate
+            ? h('div', null,
+                gate.reason || gate.featText
+                  ? h('div', { className: 'bf-pf-sub' }, [gate.reason, gate.featText].filter(Boolean).join(' · '))
+                  : h('div', { className: 'bf-note' }, '后端没给理由（只拿到了模式与判定）。'),
+                h('div', { className: 'bf-tools', style: { marginTop: 6 } },
+                  h('span', { className: 'bf-note st' }, '判定'),
+                  h('span', { className: 'bf-strong', style: { fontSize: 13, lineHeight: '20px' } }, gate.decisionText),
+                  gate.decision === 'throttle' && gate.suggestedMaxComments
+                    ? h('span', { className: 'bf-note' }, gate.mode === 'enforce'
+                        ? '· 本轮评论上限压到 ' + gate.suggestedMaxComments + ' 条'
+                        : '· 建议本轮最多 ' + gate.suggestedMaxComments + ' 条（不强制）')
+                    : null,
+                  gate.decision === 'forced'
+                    ? h('span', { className: 'bf-note' }, '· 被回复 / 被 @ 直接放行，仍占配额') : null,
+                ),
+                h('div', { className: 'bf-note', style: { marginTop: 4 } }, gate.modeNote),
+                gate.modeKnown === false
+                  ? h('div', { className: 'bf-note' }, 'mode 字段缺失或无法识别，按观察档显示（不谎称在强制拦截）。')
+                  : null,
+              )
+            : h('div', { className: 'bf-note' },
+                loaded
+                  ? '还没有门控数据：这一轮没跑过带门控的值班，或门控已关闭。'
+                  : '正在连接…'),
+        ),
+      )
+    }
+
     function OverviewPage({ rt, act, persona, live, onRun, onStop, onLogin, onGo }) {
       const data = (rt && rt.data) || {}
       // ⭐ 真正的信封一定有内容；空对象（首帧未到 / 失败兜底）不算「有数据」，
@@ -3514,6 +3654,7 @@ window.__ModuleLoader__.load({
       const mode = (rt && rt.mode) || 'poll'
       const ageMs = (rt && rt.ageMs) || 0
       const err = (rt && rt.error) || ''
+      const speakGate = speakGateOf(round.speakGate)
 
       const statusLine = h('div', { className: 'bf-statusline' },
         running ? h(Pill, { tone: 'ok' }, '运行中') : h(Pill, { tone: 'off' }, '空闲'),
@@ -3541,6 +3682,7 @@ window.__ModuleLoader__.load({
           h(AccountCard, { account, onLogin, loaded: hasData }),
           h(TodayCard, { quota, presence, act, onGo }),
           h(ProactiveCard, { quota, round, act, onGo }),
+          h(SpeakGateCard, { gate: speakGate, loaded: hasData, running }),
           h(RunningDetail, { live, round, onRun, onStop }),
           h(QuotaCard, { quota }),
           h('div', { className: 'bf-grid-2' },

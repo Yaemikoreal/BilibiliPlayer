@@ -92,6 +92,16 @@ export const FIX = {
         guard: { level: 'warn', len: 21000, softMax: 20000, hardMax: 24000 },
         notes: ['P4 用表达库（question，4 条）'],
       },
+      // W7-2 发言门控（buildRoundGate → gateView 形状，见 plan §8.5）：
+      // base 取「观察中 + 收紧」——最容易让主人误判成「已经在拦」的一档，所以 UI 必须写明「不拦」。
+      speakGate: {
+        mode: 'observe',
+        decision: 'throttle',
+        reason: '节奏偏密：最近 5 个动作里说了 3 次（观察中，不强制；建议本轮最多 1 条）',
+        suggestedMaxComments: 1,
+        enforced: false,
+        features: { recentShare: 0.6, recentWindow: 5, recentSpoke: 3, gapMinutes: 12, pendingReplies: 0 },
+      },
       nextRunAt: 1793000000000,
       nextWindowLabel: '中午 12:00（2h54m 后）',
     },
@@ -185,6 +195,8 @@ export const FIX = {
       followAuto: true, followPerRound: 8, avoidList: ['引战'], keywords: ['AI 实测'], followUids: [10000001],
       banPrivacy: true, banImpersonation: true, banControversy: true, banRepeat: true, banReplyRefusal: true,
       dynamicPureText: false, growthEnable: true, growthAutoPromote: 3,
+      // W7-2 / W2-3 本轮新加配置项（设置页「人设 / 质量门」分组）
+      speakGateMode: 'observe', growthCheckedOnly: false,
       personaPrompt: '', reportLevel: 'full', dshBin: '', headlessProfile: 'headless', dutyTools: [],
       modelProvider: '', modelName: '', modelReasoningEffort: '',
     },
@@ -195,6 +207,8 @@ export const FIX = {
       followAuto: true, followPerRound: 8, avoidList: [], keywords: [], followUids: [],
       banPrivacy: true, banImpersonation: true, banControversy: true, banRepeat: true, banReplyRefusal: true,
       dynamicPureText: false, growthEnable: true, growthAutoPromote: 3,
+      // W7-2 / W2-3 本轮新加配置项（设置页「人设 / 质量门」分组）
+      speakGateMode: 'observe', growthCheckedOnly: false,
       personaPrompt: '', reportLevel: 'full', dshBin: '', headlessProfile: 'headless', dutyTools: [],
       modelProvider: '', modelName: '', modelReasoningEffort: '',
     },
@@ -508,5 +522,58 @@ export const NO_PERSONA_INJECT_OVERVIEW = {
     ...FIX['/api/bili-fenshen/overview'].round,
     personaTag: '',
     personaInject: null,
+  },
+}
+
+/* ═══ W7-2 发言门控 fixture：概览信封 round.speakGate 的四种形态 ═══
+ * base FIX 已是 observe+throttle（观察中、不拦）；这里补 null / enforce+normal / forced / 字段半截。
+ * 注意：门控**独立于**人设注入——可能这轮没走卡链路，但门控照样有记录（反之亦然）。 */
+export const NO_SPEAK_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1320,
+  round: { ...FIX['/api/bili-fenshen/overview'].round, speakGate: null },
+}
+
+/** 强制档 + 正常放行：mode=enforce 必须显示「强制」，不能仍写「观察中」。 */
+export const ENFORCE_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1321,
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    speakGate: {
+      mode: 'enforce',
+      decision: 'normal',
+      reason: '节奏正常（近 5 个动作说了 1 次，距上次 42 分钟）',
+      suggestedMaxComments: 2,
+      enforced: false,
+      features: { recentShare: 0.2, recentWindow: 5, recentSpoke: 1, gapMinutes: 42, pendingReplies: 0 },
+    },
+  },
+}
+
+/** 被回复 / 被 @：直接放行（仍占配额）——门控判定 forced。 */
+export const FORCED_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1322,
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    speakGate: {
+      mode: 'enforce',
+      decision: 'forced',
+      reason: '有 2 条回复还没回，优先回（放行且不收紧）',
+      suggestedMaxComments: 2,
+      enforced: false,
+      features: { recentShare: 0.2, recentWindow: 5, recentSpoke: 1, gapMinutes: 30, pendingReplies: 2 },
+    },
+  },
+}
+
+/** 字段半截：只有 decision，mode/reason/features 都缺 ⇒ 必须退化渲染（不抛错、不渲染 undefined）。 */
+export const PARTIAL_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1323,
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    speakGate: { decision: 'throttle' },
   },
 }

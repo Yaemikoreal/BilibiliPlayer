@@ -13,6 +13,7 @@ import vm from 'node:vm'
 import {
   FIX, RUNNING_LIVE, RUNNING_OVERVIEW, MISSING_PROACTIVE_OVERVIEW,
   PERSONA_CHECKUP_EMPTY, PERSONA_HISTORY_EMPTY, NO_PERSONA_INJECT_OVERVIEW,
+  NO_SPEAK_GATE_OVERVIEW, ENFORCE_GATE_OVERVIEW, FORCED_GATE_OVERVIEW, PARTIAL_GATE_OVERVIEW,
 } from './fixtures/console-fixtures.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -192,12 +193,83 @@ expectPage('v4 概览运行中', runningHtml, [
 ])
 // 运行中：状态条 + 主按钮都是「中止」
 if (!runningHtml.includes('中止')) { console.log('✗ FAIL 运行中主操作应为「中止」'); bad++ }
+// 运行中门控卡：跑着的时候这条是「本轮」，观察档同样必须写「不拦」
+expectAll('v4 概览运行中 · 发言门控（本轮）', runningHtml, [
+  'data-block="overview-speak-gate"', '发言门控', '本轮为什么说 / 不说', '观察中 · 不拦',
+])
 
 /* ═════════ ③ 概览 · 接话未扫描（红 chip + 告警） ═════════ */
 const missingHtml = check('ConsolePage（v4 · 概览 · 接话未扫描）', () => render({
   initialData: { ov: MISSING_PROACTIVE_OVERVIEW, act: FIX['/api/bili-fenshen/activity'] },
 }))
 expectPage('v4 接话未扫描', missingHtml, ['接话', '未扫描', '接话扫描'])
+
+/* ═════════ ③b W7-2 概览 · 发言门控（四态） ═════════
+ * 数据源 = overview.round.speakGate（后端本轮新增，可能还没到）。规律：
+ *   - 有数据：mode（观察中/强制/关闭）+ decision（正常/收紧/放行）+ 一句 reason + features 紧凑读法；
+ *   - 没有：卡不能消失、也不能报错，必须给「暂无数据」；
+ *   - ⭐ mode:'observe' 必须出现「观察中」「不拦」——否则主人会以为已经在强制拦截（本轮最容易漏的一条）。 */
+const gateObserve = check('ConsolePage（v4 · 概览 · 发言门控·观察档）', () => render({
+  initialData: { ov: FIX['/api/bili-fenshen/overview'], act: FIX['/api/bili-fenshen/activity'] },
+}))
+expectAll('v4 概览 · 发言门控（观察档·有数据）', gateObserve, [
+  'data-block="overview-speak-gate"', '发言门控', '上一轮为什么说 / 不说',
+  '观察中 · 不拦', '收紧', '节奏偏密：最近 5 个动作里说了 3 次',
+  '近 5 个动作说了 3 次', '距上次 12 分钟', '建议本轮最多 1 条（不强制）',
+])
+// ⭐ 防误判：观察档必须写明「不拦」，且不得出现只有强制档才有的「上限压到」
+if (!gateObserve.includes('观察中') || !gateObserve.includes('不拦')) {
+  console.log('✗ FAIL 观察档没写明「观察中 / 不拦」（主人会误以为已在强制拦截）'); bad++
+}
+if (gateObserve.includes('本轮评论上限压到')) {
+  console.log('✗ FAIL 观察档不得显示强制档的「本轮评论上限压到」'); bad++
+}
+/* 强制档：mode=enforce 必须显示「强制」，且不能再写「观察中」 */
+const gateEnforce = check('ConsolePage（v4 · 概览 · 发言门控·强制档）', () => render({
+  initialData: { ov: ENFORCE_GATE_OVERVIEW, act: FIX['/api/bili-fenshen/activity'] },
+}))
+expectAll('v4 概览 · 发言门控（强制档·正常）', gateEnforce, [
+  'data-block="overview-speak-gate"', '强制', '正常',
+  '节奏正常（近 5 个动作说了 1 次，距上次 42 分钟）', '距上次 42 分钟',
+])
+if (gateEnforce.includes('观察中')) {
+  console.log('✗ FAIL 强制档不应再写「观察中」（主人会以为没在强制）'); bad++
+}
+/* 被回复 / 被 @：判断 forced ⇒ 显示「放行」，并说明仍占配额 */
+const gateForced = check('ConsolePage（v4 · 概览 · 发言门控·被回复放行）', () => render({
+  initialData: { ov: FORCED_GATE_OVERVIEW, act: FIX['/api/bili-fenshen/activity'] },
+}))
+expectAll('v4 概览 · 发言门控（forced 放行）', gateForced, [
+  'data-block="overview-speak-gate"', '放行', '有 2 条回复还没回',
+  '被回复 / 被 @ 直接放行，仍占配额',
+])
+// forced 的 suggestedMaxComments 是原上限（放行不收紧）⇒ 不许渲染成「上限压到 N 条」
+if (gateForced.includes('压到')) {
+  console.log('✗ FAIL forced 时 suggestedMaxComments 是原上限，不该显示「压到 N 条」'); bad++
+}
+/* 无数据：speakGate = null ⇒ 卡在、写「暂无数据」（不许消失、不许崩） */
+const gateNone = check('ConsolePage（v4 · 概览 · 发言门控·暂无数据）', () => render({
+  initialData: { ov: NO_SPEAK_GATE_OVERVIEW, act: FIX['/api/bili-fenshen/activity'] },
+}))
+expectAll('v4 概览 · 发言门控（暂无数据）', gateNone, [
+  'data-block="overview-speak-gate"', '发言门控', '暂无数据', '还没有门控数据',
+])
+/* 字段半截：只有 decision ⇒ 退化渲染（不抛错、不渲染 undefined/NaN） */
+const gatePartial = check('ConsolePage（v4 · 概览 · 发言门控·字段缺失）', () => render({
+  initialData: { ov: PARTIAL_GATE_OVERVIEW, act: FIX['/api/bili-fenshen/activity'] },
+}))
+expectAll('v4 概览 · 发言门控（字段缺失退化）', gatePartial, [
+  'data-block="overview-speak-gate"', '发言门控', '收紧', 'mode 字段缺失或无法识别',
+])
+for (const [label, html] of [
+  ['观察档', gateObserve], ['强制档', gateEnforce], ['forced', gateForced],
+  ['暂无数据', gateNone], ['字段缺失', gatePartial],
+]) {
+  // 「数据 刚刚」在拿到新鲜信封时是**正确**文案，不在此处回归；空数据/首帧的那两条既有断言已单独守着它。
+  for (const bogus of ['找不到 dsh CLI', 'undefined']) {
+    if (html.includes(bogus)) { console.log(`✗ FAIL 发言门控（${label}）误报「${bogus}」`); bad++ }
+  }
+}
 
 /* ═════════ ④ 活动 · 生命周期（默认视图） ═════════ */
 const actHtml = check('ConsolePage（v4 · 活动 · 生命周期）', () => render({
@@ -363,6 +435,11 @@ expectAll('v4 人设 · 换卡对比（有数据）', personaBlocks, [
   'whale@2.0.0', '3 轮 · 赞 7', 'elaina@2.0.0', '1 轮 · 赞 0',
   '封面能不能好好做？', '这句真的是设计师本命',
 ])
+// W7-2：门控行放在「本轮实际注入」块内（同一个 speakGate，不新增请求）；观察档必须写「不拦」
+expectAll('v4 人设 · 发言门控行（有数据）', personaBlocks, [
+  'data-block="persona-gate"', '发言门控', '观察中 · 不拦', '收紧',
+  '节奏偏密：最近 5 个动作里说了 3 次',
+])
 
 /* 无数据态（端点已就绪但没数据 / 概览里没有 persona-inject）：
  * 必须给「暂无数据」，不许崩、不许说「未找到」。 */
@@ -391,6 +468,21 @@ expectAll('v4 人设 · 体检（无数据）', personaBlocksNoInject, [
 expectAll('v4 人设 · 换卡对比（无数据）', personaBlocksNoInject, [
   'data-block="persona-history"', '换卡对比', '暂无数据',
   '还没有 persona-inject 归因数据',
+])
+
+/* W7-2：门控独立于注入——这封概览信封里有人设注入、但 speakGate=null 时，门控行必须给「暂无数据」。 */
+const personaGateNone = check('ConsolePage（v4 · 人设 · 门控行暂无数据）', () => render({
+  initialTab: 'persona',
+  initialData: {
+    ov: NO_SPEAK_GATE_OVERVIEW,
+    personaPage: {
+      persona: FIX['/api/bili-fenshen/persona'],
+      preview: FIX['/api/bili-fenshen/persona/preview'],
+    },
+  },
+}))
+expectAll('v4 人设 · 发言门控行（暂无数据）', personaGateNone, [
+  'data-block="persona-gate"', '发言门控', '暂无数据',
 ])
 
 /* 字段缺失 / 半截数据：契约字段缺失时必须退化成占位，而不是 SSR 直接抛错 */
@@ -435,6 +527,10 @@ expectAll('v4 人设 · 体检（正在连接）', personaBlocksNoInit, [
 expectAll('v4 人设 · 换卡对比（正在连接）', personaBlocksNoInit, [
   'data-block="persona-history"', '换卡对比', '正在连接…',
 ])
+// W7-2：门控行首帧也必须「正在连接…」（不许消失，也不许说「暂无数据」这种假结论）
+expectAll('v4 人设 · 发言门控行（正在连接）', personaBlocksNoInit, [
+  'data-block="persona-gate"', '发言门控', '正在连接…',
+])
 for (const bogus of ['找不到 dsh CLI', '数据 刚刚', '未找到', 'undefined']) {
   if (personaBlocksNoInit.includes(bogus)) { console.log(`✗ FAIL 人设页首帧误报「${bogus}」`); bad++ }
 }
@@ -453,6 +549,17 @@ expectPage('v4 设置', settingsRules, [
 ])
 // 行式排版：label + help 同行结构
 expectAll('v4 设置行式', settingsRules, ['class="bf-row-main"', 'class="bf-row-ctl"', 'class="bf-row-help"'])
+/* W7-2 / W2-3：本轮新加的两个配置项必须有入口（以前只能改配置文件），
+ * 且文案必须写明「观察中 ≠ 已经拦截」——与概览卡那条「观察中 · 不拦」保持一致。 */
+const settingsContent = check('ConsolePage（v4 · 设置 · 内容与禁令）', () => render({
+  initialTab: 'settings', initialSub: 'content', initialData: { config: FIX['/api/bili-fenshen/config'] },
+}))
+expectPage('v4 设置内容', settingsContent, [
+  '内容与禁令', '人设 / 质量门',
+  '发言门控', '观察中（只记录、不拦，推荐先跑三天）', '强制（节奏太密时把本轮评论上限压到 1 条）',
+  '观察中 ≠ 已经拦截',
+  '只转正已确认的候选',
+])
 
 /* ═════════ ⑬ settings.section 入口 ═════════ */
 const settingsHtml = check('SettingsEntry 静态壳', () => renderToString(React.createElement(settingsComp)))
