@@ -133,9 +133,11 @@ test('编译 modes：80 字楼中楼按 40 判超限（P3 与尾注都钉 40）'
 
 /* ───────────────────────── W1-3：卡内 render.budget / render.position ───────────────────────── */
 
-test('预算：读卡优先，缺项回落 budget.js 缺省；三张内置卡与缺省同值 ⇒ 行为不变', () => {
+test('预算：读卡优先，缺项回落 budget.js 缺省；内置卡显式覆盖项生效', () => {
   assert.deepEqual({ ...resolveBudget(smokeCard()) }, { ...BUDGET })
-  assert.deepEqual({ ...resolveBudget(whaleCard()) }, { ...BUDGET })
+  // v3「豆腐」卡：见闻从 3 条扩到 7 条，还要留下「调 bili_persona_lore 取正文」那行提示，
+  // lore 预算显式提到 450（缺省仍是 300；其它块不变）。见 whale.card.json 的 render.budget。
+  assert.deepEqual({ ...resolveBudget(whaleCard()) }, { ...BUDGET, lore: 450 })
   const custom = smokeCard()
   custom.render.budget = { ...custom.render.budget, core: 120 }
   const eff = resolveBudget(custom)

@@ -129,6 +129,65 @@ test('模型字段 effectiveConfig：patch 默认 + override 优先，来源正�
   assert.equal(merged.sources.modelReasoningEffort, 'override')
 })
 
+/* ── 自动值班排班字段：白名单 + 值域（非法模式/间隔越界/非法 HH:MM/星期越界都要 400） ── */
+
+import { normalizeScheduleFields } from '../lib/config.js'
+
+test('排班字段进入白名单：类型正确、非法模式 400、类型错误优先', () => {
+  const patch = {
+    dutyScheduleMode: 'interval', dutyIntervalMinutes: 60,
+    dutyDailyTimes: ['08:30'], dutyWeekdays: [1, 3, 5],
+    dutyActiveStart: '09:00', dutyActiveEnd: '23:00',
+  }
+  assert.deepEqual(defaultsOf(patch), patch)
+  assert.equal(validateFields(patch).ok, true)
+  assert.equal(validateFields({ dutyScheduleMode: 'windows' }).ok, true)
+  const badMode = validateFields({ dutyScheduleMode: 'hourly' })
+  assert.equal(badMode.ok, false)
+  assert.equal(badMode.field, 'dutyScheduleMode')
+  assert.match(badMode.error, /windows \/ interval \/ daily/)
+  // 类型错误优先报类型（enum 校验不该掩盖类型问题）
+  assert.equal(validateFields({ dutyScheduleMode: 1 }).ok, false)
+})
+
+test('排班字段值域：间隔 10..1440、HH:MM 格式、最多 8 个时间、星期 1..7', () => {
+  assert.equal(validateFields({ dutyIntervalMinutes: 10 }).ok, true)
+  assert.equal(validateFields({ dutyIntervalMinutes: 1440 }).ok, true)
+  assert.equal(validateFields({ dutyIntervalMinutes: 9 }).ok, false)
+  assert.equal(validateFields({ dutyIntervalMinutes: 1441 }).ok, false)
+  assert.equal(validateFields({ dutyIntervalMinutes: '60' }).ok, false)
+  assert.equal(validateFields({ dutyDailyTimes: ['08:30', '23:59'] }).ok, true)
+  assert.equal(validateFields({ dutyDailyTimes: [] }).ok, true)
+  assert.equal(validateFields({ dutyDailyTimes: ['8:30'] }).ok, false)
+  assert.equal(validateFields({ dutyDailyTimes: ['24:00'] }).ok, false)
+  assert.equal(validateFields({ dutyDailyTimes: ['08:30', '08:31', '08:32', '08:33', '08:34', '08:35', '08:36', '08:37', '08:38'] }).ok, false)
+  assert.equal(validateFields({ dutyDailyTimes: '08:30' }).ok, false)
+  assert.equal(validateFields({ dutyDailyTimes: [830] }).ok, false)
+  assert.equal(validateFields({ dutyWeekdays: [1, 7] }).ok, true)
+  assert.equal(validateFields({ dutyWeekdays: [] }).ok, true)
+  assert.equal(validateFields({ dutyWeekdays: [0] }).ok, false)
+  assert.equal(validateFields({ dutyWeekdays: [8] }).ok, false)
+  assert.equal(validateFields({ dutyWeekdays: [1.5] }).ok, false)
+  assert.equal(validateFields({ dutyWeekdays: '1' }).ok, false)
+  assert.equal(validateFields({ dutyActiveStart: '22:00', dutyActiveEnd: '06:00' }).ok, true)
+  assert.equal(validateFields({ dutyActiveStart: '22:00', dutyActiveEnd: '6:00' }).ok, false)
+  assert.equal(validateFields({ dutyActiveStart: 2200 }).ok, false)
+})
+
+test('normalizeScheduleFields：时间/星期去重排序后落盘，其他字段原样，缺失不硬造', () => {
+  assert.deepEqual(
+    normalizeScheduleFields({
+      autoDuty: true, dutyDailyTimes: ['20:00', '08:30', '20:00'], dutyWeekdays: [7, 1, 7], perDay: 3,
+    }),
+    { autoDuty: true, dutyDailyTimes: ['08:30', '20:00'], dutyWeekdays: [1, 7], perDay: 3 },
+  )
+  assert.deepEqual(normalizeScheduleFields({ autoDuty: false }), { autoDuty: false })
+  assert.equal(
+    normalizeScheduleFields({ dutyDailyTimes: ['01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '07:00', '08:00', '09:00'] }).dutyDailyTimes.length,
+    8,
+  )
+})
+
 /* ── extractConfigBlock：overlay 里的 provider 段抽取（正则回溯事故的回归测试） ── */
 
 import { extractConfigBlock } from '../lib/config.js'

@@ -3,7 +3,7 @@
  * 返回的 handler 签名是 Node 原始风格 (req, res)；handler.closeSse() 供插件卸载时关掉所有实时流连接。
  */
 import { existsSync, readFileSync } from 'node:fs'
-import { effectiveConfig, validateFields, writeOverride } from './config.js'
+import { effectiveConfig, validateFields, writeOverride, normalizeScheduleFields } from './config.js'
 import { toActivities, groupByDay } from './activity.js'
 
 const PREFIX = '/api/bili-fenshen'
@@ -289,11 +289,22 @@ export function createApiHandler(deps) {
         return sendJson(res, 200, { ok: true, account: await deps.fetchAccount() })
       }
       if (method === 'POST' && path === `${PREFIX}/duty`) {
+        /* 旧用法：{autoDuty: boolean}；新用法：排班字段一起传（只传排班字段也可以）。
+         * 校验口径与 POST /config 一致（validateFields），未知字段/非法值 400，不静默回落。
+         * 兼容策略：不带排班字段时仍按旧错误文案「autoDuty 必须是 boolean」返回。 */
         const body = await readBody(req)
-        if (typeof body.autoDuty !== 'boolean') {
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          return sendJson(res, 400, { ok: false, error: '请求体必须是对象' })
+        }
+        const keys = Object.keys(body)
+        if (!keys.length) return sendJson(res, 400, { ok: false, error: 'autoDuty 必须是 boolean' })
+        const hasSchedule = keys.some((k) => k !== 'autoDuty')
+        if (!hasSchedule && typeof body.autoDuty !== 'boolean') {
           return sendJson(res, 400, { ok: false, error: 'autoDuty 必须是 boolean' })
         }
-        return sendJson(res, 200, { ok: true, ...deps.setDuty(body.autoDuty) })
+        const check = validateFields(body)
+        if (!check.ok) return sendJson(res, 400, { ok: false, error: check.error, field: check.field })
+        return sendJson(res, 200, { ok: true, ...deps.setDuty(normalizeScheduleFields(body)) })
       }
       if (method === 'POST' && path === `${PREFIX}/run`) {
         // runDuty 现在可能返回 Promise（spawn 前要异步校验模型推理强度），统一 await 后再回包
@@ -310,8 +321,10 @@ export function createApiHandler(deps) {
         const body = await readBody(req)
         const check = validateFields(body)
         if (!check.ok) return sendJson(res, 400, { ok: false, error: check.error, field: check.field })
+        // 排班字段落盘前归一化（时间/星期去重排序），其余字段原样
+        const patch = normalizeScheduleFields(body)
         const cur = effectiveConfig(patchConfig(), deps.configFile)
-        const next = { ...cur.values, ...body }
+        const next = { ...cur.values, ...patch }
         if (!writeOverride(deps.configFile, next)) {
           return sendJson(res, 500, { ok: false, error: '写覆盖层失败' })
         }

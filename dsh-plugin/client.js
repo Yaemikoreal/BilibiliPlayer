@@ -3052,13 +3052,94 @@ window.__ModuleLoader__.load({
         models.refresh?.()
       }
 
+      /* 值班节奏：自动值班 + 排班方式（谷时窗口 / 固定间隔 / 指定时间）+ 星期多选。
+       * 老配置没有新字段 ⇒ 按 windows 渲染（逐屏与旧版一致），因此所有新字段都必须有兜底值。
+       * 不新增依赖：复用现有 Switch / Num / Select / Btn / ChipsInput / Row / Group。 */
+      const SCHEDULE_MODES = ['windows', 'interval', 'daily']
+      const scheduleMode = SCHEDULE_MODES.includes(draft.dutyScheduleMode) ? draft.dutyScheduleMode : 'windows'
+      // ⚠️ 不能用 `length ? … : 全选`：空数组是「每天」的合法配置，回填成全选会让「取消最后一个」永远退不回去。
+      const activeWeekdays = Array.isArray(draft.dutyWeekdays)
+        ? draft.dutyWeekdays.filter((n) => Number.isInteger(n) && n >= 1 && n <= 7)
+        : [1, 2, 3, 4, 5, 6, 7]
+      const toggleWeekday = (n) => {
+        const cur = new Set(activeWeekdays)
+        if (cur.has(n)) cur.delete(n)
+        else cur.add(n)
+        set('dutyWeekdays', [...cur].sort((a, b) => a - b))
+      }
+      const weekdayRow = h(Row, { label: '星期', help: '只在勾选的星期触发；全部取消勾选 = 每天', wide: true },
+        h('div', {
+          className: 'bf-weekdays', role: 'group', 'aria-label': '允许触发的星期',
+          style: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+        }, ['一', '二', '三', '四', '五', '六', '日'].map((name, i) => {
+          const n = i + 1
+          const on = activeWeekdays.includes(n)
+          return h(Btn, {
+            key: name, small: true, variant: on ? 'primary' : 'default',
+            'aria-pressed': String(on), 'aria-label': `周${name}`,
+            onClick: () => toggleWeekday(n),
+          }, `周${name}`)
+        })))
+      const intervalValue = Math.min(1440, Math.max(10, Math.round(Number(draft.dutyIntervalMinutes) || 180)))
+      const intervalRows = scheduleMode === 'interval'
+        ? [
+            h(Row, { key: 'interval', label: '间隔分钟', help: '两轮之间至少隔多少分钟（10–1440，默认 180）' },
+              h(Num, {
+                value: intervalValue, min: 10, max: 1440, label: '间隔分钟',
+                onChange: (v) => set('dutyIntervalMinutes', v),
+              })),
+            h(Row, { key: 'active', label: '活跃时段', help: '只在此时段内触发；开始 > 结束表示跨夜（如 22:00–06:00）', wide: true },
+              h('div', { className: 'bf-time-range', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                h('input', {
+                  type: 'time', className: 'bf-input', style: { width: 120 },
+                  value: draft.dutyActiveStart || '00:00', 'aria-label': '活跃时段开始',
+                  onChange: (e) => set('dutyActiveStart', e.target.value),
+                }),
+                h('span', { className: 'bf-note' }, '至'),
+                h('input', {
+                  type: 'time', className: 'bf-input', style: { width: 120 },
+                  value: draft.dutyActiveEnd || '23:59', 'aria-label': '活跃时段结束',
+                  onChange: (e) => set('dutyActiveEnd', e.target.value),
+                }))),
+          ]
+        : []
+      // 指定时间：手输 8:30 也认，统一成 '08:30'（后端还会再校验一次，非法值 400）
+      const timeChip = (x) => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(String(x ?? '').trim())
+        if (!m) return ''
+        const hh = Number(m[1])
+        const mm = Number(m[2])
+        if (hh > 23 || mm > 59) return ''
+        return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+      }
+      const dailyRows = scheduleMode === 'daily'
+        ? [h(Row, { key: 'daily', label: '指定时间', help: '每天这些点各跑一轮（HH:MM，最多 8 个；晚到 20 分钟内补跑）', wide: true },
+            h(ChipsInput, {
+              values: Array.isArray(draft.dutyDailyTimes) ? draft.dutyDailyTimes : [],
+              onChange: (v) => set('dutyDailyTimes', [...new Set(v.map(timeChip).filter(Boolean))].sort().slice(0, 8)),
+              placeholder: '08:30',
+            }))]
+        : []
       const rulesGroup = h(Group, { title: '值班节奏' },
-        h(Row, { label: '自动值班', help: '开启后在谷时窗口自动拉起一轮；关闭后只能手动触发' },
+        h(Row, { label: '自动值班', help: '开启后按下面的排班方式自动拉起一轮；关闭后只能手动触发' },
           h(Switch, { checked: !!draft.autoDuty, label: '自动值班', onChange: (v) => set('autoDuty', v) })),
-        h(Row, { label: '中午窗口', help: '12:00 – 14:00' },
-          h(Switch, { checked: !!draft.noon, label: '中午窗口', onChange: (v) => set('noon', v) })),
-        h(Row, { label: '晚间窗口', help: '18:00 – 次日 09:00' },
-          h(Switch, { checked: !!draft.night, label: '晚间窗口', onChange: (v) => set('night', v) })),
+        h(Row, { label: '排班方式', help: '谷时窗口 = 旧版中午/晚间两个窗口；也可以固定间隔或每天指定时间' },
+          h(Select, {
+            label: '排班方式', value: scheduleMode,
+            onChange: (v) => set('dutyScheduleMode', v),
+            options: [['windows', '谷时窗口'], ['interval', '固定间隔'], ['daily', '指定时间']],
+          })),
+        ...(scheduleMode === 'windows'
+          ? [
+              h(Row, { key: 'noon', label: '中午窗口', help: '12:00 – 14:00' },
+                h(Switch, { checked: !!draft.noon, label: '中午窗口', onChange: (v) => set('noon', v) })),
+              h(Row, { key: 'night', label: '晚间窗口', help: '18:00 – 次日 09:00' },
+                h(Switch, { checked: !!draft.night, label: '晚间窗口', onChange: (v) => set('night', v) })),
+            ]
+          : []),
+        ...intervalRows,
+        ...dailyRows,
+        weekdayRow,
       )
 
       const quotaGroup = h(Group, { title: '配额', note: '0 = 关闭该项' },

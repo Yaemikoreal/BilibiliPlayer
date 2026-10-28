@@ -6,7 +6,7 @@
 // 只要窗口内输出跟全量输出有任何字段不一致，就说明优化改了语义 —— 必须当场红。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildOverview, windowPool, countToday, DEFAULT_WINDOW_DAYS } from '../lib/overview.js'
+import { buildOverview, windowPool, countToday, DEFAULT_WINDOW_DAYS, nextWindow, nextWindowLabel } from '../lib/overview.js'
 import { dayKeyOf } from '../lib/activity.js'
 
 const DAY = 86400_000
@@ -132,4 +132,62 @@ test('W4-2b：窗口化不改 daily / presence 的窗口内结果', () => {
   assert.deepEqual(windowed.quota.comments, full.quota.comments)
   assert.deepEqual(windowed.presence, full.presence)
   assert.deepEqual(windowed.quota.perRound, full.quota.perRound)
+})
+
+/* ───────── 排班模式：windows 与旧实现逐字对拍 + interval / daily 的「下一轮」 ───────── */
+
+test('buildOverview · duty：windows 模式的 nextWindowLabel/nextRunAt 与旧 nextWindow 逐字对拍', () => {
+  const cfgW = { ...cfg } // 无排班字段 = 默认 windows（老配置/老测试的形状）
+  const times = [
+    '2026-10-28T10:00:00', '2026-10-28T12:30:00', '2026-10-28T13:59:00',
+    '2026-10-28T14:00:00', '2026-10-28T15:00:00', '2026-10-28T17:30:00',
+    '2026-10-28T18:00:00', '2026-10-29T02:00:00', '2026-10-29T09:00:00',
+  ]
+  for (const t of times) {
+    const now = new Date(t)
+    const out = buildOverview({ cfg: cfgW, state: {}, events: [], now })
+    assert.equal(out.duty.nextWindowLabel, nextWindowLabel(cfgW, now), t)
+    const old = nextWindow(cfgW, now)
+    assert.equal(out.duty.nextRunAt, old ? old.at : null, t)
+    // round 与 duty 同步（客户端状态条两个字段都可能读）
+    assert.equal(out.round.nextWindowLabel, out.duty.nextWindowLabel, t)
+    assert.equal(out.round.nextRunAt, out.duty.nextRunAt, t)
+    assert.equal(out.duty.scheduleMode, 'windows')
+    assert.equal(out.duty.scheduleLabel, '谷时窗口')
+  }
+})
+
+test('buildOverview · duty：interval 模式按上次运行算「下一轮」，autoDuty 关只影响 nextRunAt', () => {
+  const now = new Date('2026-10-28T10:00:00')
+  const cfgI = {
+    ...cfg, dutyScheduleMode: 'interval', dutyIntervalMinutes: 180,
+    dutyActiveStart: '09:00', dutyActiveEnd: '23:00',
+  }
+  const state = { lastAutoRunAt: new Date(now.getTime() - 100 * 60_000).toISOString() }
+  const out = buildOverview({ cfg: cfgI, state, events: [], now })
+  assert.equal(out.duty.scheduleMode, 'interval')
+  assert.equal(out.duty.scheduleLabel, '间隔 3 小时')
+  assert.equal(out.duty.nextWindowLabel, '每 3 小时（1h20m 后）')
+  assert.equal(out.duty.nextRunAt, now.getTime() + 80 * 60_000)
+  assert.equal(out.round.nextWindowLabel, '每 3 小时（1h20m 后）')
+  assert.equal(out.round.nextRunAt, out.duty.nextRunAt)
+  // 旧行为：标签照给（排班方式与总开关无关），nextRunAt 跟随 autoDuty
+  const off = buildOverview({ cfg: { ...cfgI, autoDuty: false }, state, events: [], now })
+  assert.equal(off.duty.nextRunAt, null)
+  assert.equal(off.duty.nextWindowLabel, '每 3 小时（1h20m 后）')
+})
+
+test('buildOverview · duty：daily 模式多槽位，跑过的槽位顺延到明天', () => {
+  const now = new Date('2026-10-28T10:00:00')
+  const cfgD = { ...cfg, dutyScheduleMode: 'daily', dutyDailyTimes: ['08:30', '12:30'] }
+  const out = buildOverview({ cfg: cfgD, state: {}, events: [], now })
+  assert.equal(out.duty.scheduleMode, 'daily')
+  assert.equal(out.duty.scheduleLabel, '每天 08:30、12:30')
+  assert.equal(out.duty.nextWindowLabel, '每天 12:30（2h30m 后）')
+  assert.equal(out.duty.nextRunAt, new Date('2026-10-28T12:30:00').getTime())
+  // 今天 12:30 已跑 ⇒ 明天 08:30
+  const used = { scheduleRuns: { 'daily:2026-10-28:12:30': true } }
+  const next = buildOverview({ cfg: cfgD, state: used, events: [], now })
+  assert.equal(next.duty.nextWindowLabel, '每天 08:30（22h30m 后）')
+  assert.equal(next.duty.scheduleMode, 'daily')
 })

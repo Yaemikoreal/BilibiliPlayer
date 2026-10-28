@@ -28,12 +28,14 @@ import { ledgerReaderFor } from './lib/ledger-index.js'
 import { createUtf8Decoder, keepTail, rotateIfBig, createProbeLogger } from './lib/logsink.js'
 import { parseRoundReport, parseProactiveScan, roundSection, dedupeScans } from './lib/report.js'
 import { createApiHandler } from './lib/api.js'
-import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort } from './lib/config.js'
+import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort, normalizeScheduleFields, FIELDS } from './lib/config.js'
 import { fetchAccount } from './lib/account.js'
 import { fetchReplyNotifs, toReplyIn, roundIdForReply, proactiveTargetsFromLedger } from './lib/replies.js'
 import { seenListFromLedger } from './lib/seen.js'
 import { buildOverview as buildOverviewData, countToday, windowPool } from './lib/overview.js'
 import { createOverviewHub } from './lib/realtime.js'
+// ⭐ 自动值班排班（纯逻辑）：tick 的「该不该现在跑」与概览的「下一轮」共用同一套口径
+import { dueNow, pruneScheduleRuns, scheduleLabel } from './lib/schedule.js'
 import { roundAccounting } from './lib/round.js'
 import { loadPersona } from './lib/persona.js'
 import {
@@ -167,6 +169,20 @@ export const Config = !z ? undefined : z.object({
   noon: z.boolean().default(true),
   /** 晚间窗口 18:00–次日 09:00 */
   night: z.boolean().default(true),
+  /**
+   * 自动值班排班方式：windows=谷时窗口（默认，老配置行为完全不变）· interval=固定间隔 · daily=指定时间。
+   * ⚠️ 与 speakGateMode 同理：宿主注入的 z 没有 `.enum()`，值域由 lib/config.js 的 validateFields 收口。
+   */
+  dutyScheduleMode: z.string().default('windows'),
+  /** interval 模式：每隔多少分钟拉一轮（10..1440） */
+  dutyIntervalMinutes: z.number().default(180),
+  /** daily 模式：每天哪些 HH:MM 触发（最多 8 个，去重排序） */
+  dutyDailyTimes: z.array(z.string()).default([]),
+  /** 允许触发的星期几（ISO：周一=1…周日=7；空数组 = 每天） */
+  dutyWeekdays: z.array(z.natural()).default([1, 2, 3, 4, 5, 6, 7]),
+  /** interval 模式：活跃时段 'HH:MM'（start > end 表示跨夜，如 22:00–06:00） */
+  dutyActiveStart: z.string().default('00:00'),
+  dutyActiveEnd: z.string().default('23:59'),
   /** 每天最多挑几条（全天总量；0 = 只手动且不挑） */
   perDay: z.natural().default(5),
   /** 每天最多几条评论 */
@@ -456,15 +472,7 @@ const quotaFromLedger = () => {
   }
 }
 
-const WINDOWS = {
-  noon: { start: 12 * 60, end: 14 * 60 },
-  night: { start: 18 * 60, end: 33 * 60 }, // 跨午夜：18:00–次日 09:00
-}
-const inWindow = (d, w) => {
-  const m = d.getHours() * 60 + d.getMinutes()
-  const x = m < 12 * 60 ? m + 24 * 60 : m // 午夜前归前一天
-  return x >= w.start && x < w.end
-}
+/* 谷时窗口（noon/night）的判定已搬进 lib/schedule.js：调度器与概览共用同一套口径。 */
 
 /* ───────────────────────── dsh CLI 探测（移植 resolveDsh/findDshCli） ───────────────────────── */
 
@@ -1411,7 +1419,11 @@ const verifyRecentSafe = async (why) => {
   } catch { /* 兜住 */ }
 }
 
-/* ───────────────────────── 调度器（谷时窗口；全部兜死） ───────────────────────── */
+/* ───────────────────────── 调度器（排班：谷时窗口 / 固定间隔 / 指定时间；全部兜死） ─────────────────────────
+ * 「该不该现在跑」全部交给 lib/schedule.js 的 dueNow（纯逻辑、可单测），这里只做三件事：
+ *   ① autoDuty 开关 + 今日配额守卫（口径与旧版一致）；② 记账（scheduleRuns / lastAutoRunAt，旧 windows 字段保留）；
+ *   ③ 拉起 runDuty。任何异常都兜死 —— 调度器这一跳出错绝不能影响宿主。
+ */
 
 const tick = () => {
   try {
@@ -1419,17 +1431,19 @@ const tick = () => {
     if (!cfg?.autoDuty) return
     const now = new Date()
     const st = readJson(STATE_FILE, {})
-    const today = dayKey(now)
     if (quotaFromLedger().picked >= Math.max(0, Number(cfg?.perDay) || 0)) return
-    for (const k of ['noon', 'night']) {
-      if (!cfg?.[k]) continue
-      if (!inWindow(now, WINDOWS[k])) continue
-      const key = `${today}:${k}`
-      if (st.windows?.[key]) continue
-      bumpState({ windows: { ...(st.windows || {}), [key]: true } })
-      runDuty(`window:${k}`).catch((e) => log(`定时值班触发失败（已兜住）：${e?.message ?? e}`))
-      return
+    // starting = spawn 前的异步准备（模型能力查询）窗口：与 running 一样不重复触发
+    const due = dueNow(cfg, now, st, running || starting)
+    if (!due) return
+    // ⭐ 先记账再触发：同一槽位（窗口/间隔分钟/指定时间）只跑一次；记账失败也不阻断本轮
+    const runs = pruneScheduleRuns({ ...(st.scheduleRuns || {}), [due.slotKey]: true }, now)
+    const patch = { scheduleRuns: runs, lastAutoRunAt: now.toISOString() }
+    // 旧字段 state.windows 保留读写兼容：windows 模式继续写（回滚到旧版本也能正确判重）
+    if (due.reason.startsWith('window:')) {
+      patch.windows = { ...(st.windows || {}), [due.slotKey]: true }
     }
+    bumpState(patch)
+    runDuty(due.reason).catch((e) => log(`定时值班触发失败（已兜住）：${e?.message ?? e}`))
   } catch (e) {
     log(`定时器这一跳出错（已兜住，不影响宿主）：${e?.stack ?? e}`)
   }
@@ -2186,12 +2200,25 @@ export function apply(ctx, config) {
           // ⭐ 保存配置后失效 CLI 探测缓存（否则改 dshBin 最长 10 分钟不生效）
           resetCliCaches,
           quotaPerRound,
-          setDuty: (v) => {
+          setDuty: (patch) => {
+            /* 旧调用只传 boolean（autoDuty）；新调用传 patch 对象（autoDuty + 排班字段）。
+             * 合并写覆盖层：只覆盖传进来的字段，其余保持原值。 */
+            const body = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : { autoDuty: !!patch }
+            const clean = {}
+            for (const [k, v] of Object.entries(normalizeScheduleFields(body) || {})) {
+              if (k in FIELDS) clean[k] = v
+            }
             const cur = effectiveConfig(cfgSnapshot || {}, CONFIG_FILE)
-            writeOverride(CONFIG_FILE, { ...cur.values, autoDuty: v })
-            log(`自动值班 ${v ? '开启' : '关闭'}（操作台）`)
+            const next = { ...cur.values, ...clean }
+            writeOverride(CONFIG_FILE, next)
+            const scheduleKeys = ['dutyScheduleMode', 'dutyIntervalMinutes', 'dutyDailyTimes', 'dutyWeekdays', 'dutyActiveStart', 'dutyActiveEnd']
+            const parts = []
+            if ('autoDuty' in clean) parts.push(`自动值班 ${clean.autoDuty ? '开启' : '关闭'}`)
+            else if (Object.keys(clean).length) parts.push('值班排班更新')
+            if (scheduleKeys.some((k) => k in clean)) parts.push(`排班：${scheduleLabel(next)}`)
+            log(`${parts.join('；') || '值班设置更新'}（操作台）`)
             try { overviewHub.publish('duty') } catch { /* 兜住 */ }
-            return { autoDuty: v }
+            return { autoDuty: !!next.autoDuty, ...clean }
           },
           runDuty: () => runDuty('web'),
           stopDuty,

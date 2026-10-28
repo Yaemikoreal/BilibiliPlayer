@@ -3,11 +3,23 @@
  * 白名单 + 类型校验；原子写；脏数据静默忽略。
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { parseHHMM } from './schedule.js'
 
 export const FIELDS = {
   autoDuty: 'boolean',
   noon: 'boolean',
   night: 'boolean',
+  // 自动值班排班方式：windows=谷时窗口（默认，老配置行为不变）/ interval=固定间隔 / daily=指定时间
+  dutyScheduleMode: 'string',
+  // interval 模式的间隔分钟（10..1440）
+  dutyIntervalMinutes: 'number',
+  // daily 模式的槽位时间列表（'HH:MM'，最多 8 个，去重排序）
+  dutyDailyTimes: 'array',
+  // 允许触发的星期几（ISO：周一=1…周日=7；空数组 = 每天）
+  dutyWeekdays: 'array',
+  // interval 模式的活跃时段（支持跨午夜：start > end 表示跨夜）
+  dutyActiveStart: 'string',
+  dutyActiveEnd: 'string',
   perDay: 'number',
   commentsPerDay: 'number',
   commentsPerRound: 'number',
@@ -166,7 +178,43 @@ export function pickReasoningEffort(effort, supported) {
  */
 export const ENUM_FIELDS = Object.freeze({
   speakGateMode: ['off', 'observe', 'enforce'],
+  dutyScheduleMode: ['windows', 'interval', 'daily'],
 })
+
+/* 排班字段的值域校验（类型校验通过后逐个收口；写错立刻 400，不做静默 clamp） */
+const HHMM_TEXT = /^([01]\d|2[0-3]):([0-5]\d)$/
+const SCHEDULE_RULES = {
+  dutyIntervalMinutes(v) {
+    if (!Number.isFinite(v) || v < 10 || v > 1440) {
+      return '字段 dutyIntervalMinutes 必须在 10..1440 分钟之间'
+    }
+    return ''
+  },
+  dutyDailyTimes(v) {
+    if (v.length > 8) return '字段 dutyDailyTimes 最多 8 个时间'
+    for (const x of v) {
+      if (!HHMM_TEXT.test(String(x))) {
+        return `字段 dutyDailyTimes 的元素必须是 HH:MM（00:00–23:59）：${String(x)}`
+      }
+    }
+    return ''
+  },
+  dutyWeekdays(v) {
+    for (const x of v) {
+      const n = Number(x)
+      if (!Number.isInteger(n) || n < 1 || n > 7) {
+        return `字段 dutyWeekdays 的元素必须是 1..7（周一=1…周日=7）：${String(x)}`
+      }
+    }
+    return ''
+  },
+  dutyActiveStart(v) {
+    return HHMM_TEXT.test(String(v)) ? '' : `字段 dutyActiveStart 必须是 HH:MM（00:00–23:59）：${String(v)}`
+  },
+  dutyActiveEnd(v) {
+    return HHMM_TEXT.test(String(v)) ? '' : `字段 dutyActiveEnd 必须是 HH:MM（00:00–23:59）：${String(v)}`
+  },
+}
 
 export function validateFields(fields) {
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
@@ -180,6 +228,36 @@ export function validateFields(fields) {
     if (allowed && !allowed.includes(String(v))) {
       return { ok: false, error: `字段 ${k} 只能是：${allowed.join(' / ')}`, field: k }
     }
+    const rule = SCHEDULE_RULES[k]
+    const bad = rule ? rule(v) : ''
+    if (bad) return { ok: false, error: bad, field: k }
   }
   return { ok: true }
+}
+
+/**
+ * 排班字段落盘前归一化：dutyDailyTimes 去重 + 升序 + 最多 8 个，dutyWeekdays 去重 + 升序。
+ * 只动这两个字段，其他字段原样返回（保持「保存即写入用户原值」的旧语义）。
+ */
+export function normalizeScheduleFields(fields) {
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return fields
+  const out = { ...fields }
+  const fmt = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+  if (Array.isArray(out.dutyDailyTimes)) {
+    const set = new Set()
+    for (const x of out.dutyDailyTimes) {
+      const m = parseHHMM(x)
+      if (m != null) set.add(m)
+    }
+    out.dutyDailyTimes = [...set].sort((a, b) => a - b).slice(0, 8).map(fmt)
+  }
+  if (Array.isArray(out.dutyWeekdays)) {
+    const set = new Set()
+    for (const x of out.dutyWeekdays) {
+      const n = Number(x)
+      if (Number.isInteger(n) && n >= 1 && n <= 7) set.add(n)
+    }
+    out.dutyWeekdays = [...set].sort((a, b) => a - b)
+  }
+  return out
 }

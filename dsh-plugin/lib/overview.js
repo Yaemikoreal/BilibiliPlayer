@@ -9,6 +9,8 @@
  */
 import { dayKeyOf } from './activity.js'
 import { roundAccounting, lastRoundFrom, presenceFrom } from './round.js'
+// ⭐ 排班口径统一在 lib/schedule.js：windows 模式的 nextWindow/nextWindowLabel 在这里保留为兼容导出
+import { normalizeSchedule, nextRunAt as scheduleNextRunAt, scheduleLabel } from './schedule.js'
 
 const DAY_MS = 86400_000
 
@@ -244,7 +246,11 @@ export function buildOverview(o = {}) {
         }
       : { roundId: null, picked: 0, comments: 0, likes: 0, dynamics: 0, proactive: 0, scans: 0, replies: 0, personaTag: '' }
 
-  const win = nextWindow(cfg, now)
+  // 排班：windows 模式与旧版 nextWindow 逐字一致（含 '中午 12:00（2h00m 后）' 格式）；
+  // interval / daily 由 lib/schedule.js 算，duty.scheduleMode/scheduleLabel 供客户端展示。
+  const sched = normalizeSchedule(cfg)
+  const nextRun = scheduleNextRunAt(cfg, now, state)
+  const nextLabel = nextRun ? nextRun.label : '—'
   const presence = o.presence || presenceFrom(presencePool, { now: now.getTime() })
   const pendingReply = pendingReplyCount(pool)
 
@@ -254,8 +260,11 @@ export function buildOverview(o = {}) {
     duty: {
       autoDuty: !!cfg.autoDuty,
       windows: { noon: !!cfg.noon, night: !!cfg.night },
-      nextWindowLabel: nextWindowLabel(cfg, now),
-      nextRunAt: cfg.autoDuty && win ? win.at : null,
+      nextWindowLabel: nextLabel,
+      nextRunAt: cfg.autoDuty && nextRun ? nextRun.at : null,
+      // 新增：当前排班方式 + 一句话（间隔 3 小时 / 每天 12:30 / 谷时窗口）
+      scheduleMode: sched.mode,
+      scheduleLabel: scheduleLabel(cfg),
     },
     quota: {
       ...daily,
@@ -286,8 +295,8 @@ export function buildOverview(o = {}) {
       lastCode: state.lastCode ?? null,
       lastDurationMs: state.lastDurationMs ?? null,
       lastRound,
-      nextRunAt: cfg.autoDuty && win ? win.at : null,
-      nextWindowLabel: nextWindowLabel(cfg, now),
+      nextRunAt: cfg.autoDuty && nextRun ? nextRun.at : null,
+      nextWindowLabel: nextLabel,
       scanSince,
     },
     inbox: {

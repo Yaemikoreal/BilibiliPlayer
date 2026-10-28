@@ -148,12 +148,13 @@ test('见闻正文写读回环；路径穿越被拒', () => {
   assert.equal(bad.ok, false)
 })
 
-test('预设卡（whale 2.2.0）本身可过整卡校验且内容符合主人决策', async () => {
+test('预设卡（whale 3.0.0「豆腐」）本身可过整卡校验且内容符合主人决策', async () => {
   const { validateCard, SPEC } = await import('../lib/persona/card.js')
   const { presetPath } = await import('../lib/persona/store.js')
   const whale = JSON.parse(readFileSync(presetPath('whale'), 'utf8'))
   assert.equal(whale.spec, SPEC)
-  assert.equal(whale.version, '2.2.0')
+  assert.equal(whale.version, '3.0.0')
+  assert.equal(whale.name, '豆腐', '2026-10-29 起人设名改为豆腐（大肥鱼只留作别人叫错时的冲突点）')
   const v = validateCard(whale)
   assert.deepEqual(v.errors, [], 'whale 预设卡应通过校验：' + JSON.stringify(v.errors))
 
@@ -163,6 +164,13 @@ test('预设卡（whale 2.2.0）本身可过整卡校验且内容符合主人决
   assert.ok(whale.redlines[0].instead && !/^(不|别|禁止)/.test(whale.redlines[0].instead), 'instead 必须是正向动作')
   assert.ok(!Array.isArray(whale.taste.avoid) || whale.taste.avoid.length === 0, 'taste.avoid 应删除或为空')
   assert.ok(Array.isArray(whale.taste.watch) && whale.taste.watch.length > 0, '初始口味保留')
+
+  // 2026-10-29「豆腐」：前 3 条性格要能常驻注入；canon 不能超过 pickCanon 的 6 条上限（多写的永不注入）
+  assert.deepEqual(whale.mindset.traits.slice(0, 3).map((t) => t.name), ['活泼开朗', '小淘气', '爱操心'])
+  assert.ok(whale.canon.length <= 6, `canon 最多 6 条（当前 ${whale.canon.length}）`)
+  assert.ok(whale.loreIndex.length >= 6 && whale.loreIndex.length <= 8, '见闻索引 6–8 条')
+  assert.ok(whale.loreIndex.some((l) => l.id === 'white-rice'), '大白饭见闻应在索引里')
+  assert.ok(whale.loreIndex.some((l) => l.id === 'small-temper'), '小脾气见闻应在索引里')
 
   // 2026-10-28 补卡（W1-6 切链路前置）：能力边界与自我保护进 boundaries，不占红线位
   const boundaries = whale.identity.boundaries.join('\n')

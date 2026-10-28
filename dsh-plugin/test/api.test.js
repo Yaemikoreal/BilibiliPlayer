@@ -35,7 +35,11 @@ function deps(over = {}) {
       { t: new Date(Date.now() - 3500_000).toISOString(), round: 'r1', type: 'comment', bvid: 'BV1', text: 'c', rpid: 1 },
     ],
     overview: () => ({ duty: { autoDuty: false }, quota: { picked: 1 }, round: { running: false }, health: { cred: true } }),
-    setDuty: (v) => ({ ok: true, autoDuty: v }),
+    // 兼容旧调用（boolean）与新调用（patch 对象）：排班字段要原样透传，方便测试断言
+    setDuty: (patch) => {
+      const p = patch && typeof patch === 'object' ? patch : { autoDuty: !!patch }
+      return { ok: true, autoDuty: 'autoDuty' in p ? p.autoDuty : false, ...p }
+    },
     runDuty: () => ({ started: true }),
     stopDuty: () => ({ ok: true, stopped: true }),
     fetchAccount: async () => ({ loggedIn: false }),
@@ -71,6 +75,80 @@ test('POST /duty 切换开关', async () => {
   const r = await call(h, 'POST', '/api/bili-fenshen/duty', { autoDuty: true })
   assert.equal(r.status, 200)
   assert.equal(r.json.autoDuty, true)
+})
+
+/* ───────── 自动值班排班：POST /duty 接受排班字段，非法值 400（不静默回落） ───────── */
+
+test('POST /duty 排班字段：透传 setDuty，时间/星期去重排序后落盘', async () => {
+  const seen = []
+  const h = createApiHandler(deps({ setDuty: (patch) => { seen.push(patch); return { ok: true, ...patch } } }))
+  const r = await call(h, 'POST', '/api/bili-fenshen/duty', {
+    autoDuty: true,
+    dutyScheduleMode: 'daily',
+    dutyDailyTimes: ['20:00', '08:30', '20:00'],
+    dutyWeekdays: [7, 1, 7],
+  })
+  assert.equal(r.status, 200)
+  assert.equal(r.json.autoDuty, true)
+  assert.deepEqual(seen, [{
+    autoDuty: true, dutyScheduleMode: 'daily',
+    dutyDailyTimes: ['08:30', '20:00'], dutyWeekdays: [1, 7],
+  }])
+})
+
+test('POST /duty 只传排班字段也合法（不必同时开关总开关）', async () => {
+  const seen = []
+  const h = createApiHandler(deps({ setDuty: (patch) => { seen.push(patch); return { ok: true, ...patch } } }))
+  const r = await call(h, 'POST', '/api/bili-fenshen/duty', {
+    dutyScheduleMode: 'interval', dutyIntervalMinutes: 60,
+    dutyActiveStart: '09:00', dutyActiveEnd: '23:00',
+  })
+  assert.equal(r.status, 200)
+  assert.deepEqual(seen[0], {
+    dutyScheduleMode: 'interval', dutyIntervalMinutes: 60,
+    dutyActiveStart: '09:00', dutyActiveEnd: '23:00',
+  })
+})
+
+test('POST /duty 非法排班值 400：模式/间隔/时间/星期/未知字段', async () => {
+  const h = createApiHandler(deps())
+  const cases = [
+    [{ dutyScheduleMode: 'hourly' }, 'dutyScheduleMode'],
+    [{ dutyIntervalMinutes: 5 }, 'dutyIntervalMinutes'],
+    [{ dutyIntervalMinutes: 1441 }, 'dutyIntervalMinutes'],
+    [{ dutyDailyTimes: ['8:30'] }, 'dutyDailyTimes'],
+    [{ dutyDailyTimes: ['08:30', '08:31', '08:32', '08:33', '08:34', '08:35', '08:36', '08:37', '08:38'] }, 'dutyDailyTimes'],
+    [{ dutyWeekdays: [8] }, 'dutyWeekdays'],
+    [{ dutyActiveStart: '25:00' }, 'dutyActiveStart'],
+    [{ dutyActiveEnd: '6:00' }, 'dutyActiveEnd'],
+    [{ unknownField: 1 }, 'unknownField'],
+  ]
+  for (const [body, field] of cases) {
+    const r = await call(h, 'POST', '/api/bili-fenshen/duty', body)
+    assert.equal(r.status, 400, JSON.stringify(body))
+    assert.equal(r.json.field, field, JSON.stringify(body))
+  }
+})
+
+test('POST /duty 旧语义：空对象 / autoDuty 非 boolean 仍是 400', async () => {
+  const h = createApiHandler(deps())
+  const empty = await call(h, 'POST', '/api/bili-fenshen/duty', {})
+  assert.equal(empty.status, 400)
+  assert.match(empty.json.error, /autoDuty 必须是 boolean/)
+  const bad = await call(h, 'POST', '/api/bili-fenshen/duty', { autoDuty: 'yes' })
+  assert.equal(bad.status, 400)
+  assert.match(bad.json.error, /autoDuty 必须是 boolean/)
+})
+
+test('POST /config 排班字段落盘前归一化（时间/星期去重排序）', async () => {
+  const h = createApiHandler(deps())
+  const r = await call(h, 'POST', '/api/bili-fenshen/config', {
+    dutyDailyTimes: ['20:00', '08:30', '20:00'], dutyWeekdays: [7, 1, 7],
+  })
+  assert.equal(r.status, 200)
+  const again = await call(h, 'GET', '/api/bili-fenshen/config')
+  assert.deepEqual(again.json.values.dutyDailyTimes, ['08:30', '20:00'])
+  assert.deepEqual(again.json.values.dutyWeekdays, [1, 7])
 })
 
 test('POST /stop 与 /run 透传', async () => {
