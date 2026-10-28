@@ -213,4 +213,60 @@ test('故障注入⑦（W3-6）：spawn 后挂死 ⇒ 硬超时强杀、round-en
   }
 })
 
+/* ───────── ⑧ spawn 立即退出：不许空跑无声（W3-6 / 同时验 W2-1、W7-2 的落账） ─────────
+ * 方案里第 7 例就是「spawn 立即退出」：模型进程一起就 404/崩溃时，宿主最容易"什么都没发生"地过一轮。
+ * 这里同时钉住两件归因：卡链路成功 ⇒ `persona-inject` 必落；轮级门控 ⇒ `speak-decision` 必落
+ * （observe 档也要记，否则"观察三天"根本观察不到东西）。
+ */
+
+test('故障注入⑧（W2-1/W7-2）：spawn 立即退出 ⇒ round-end 如实记退出码，归因与门控事件仍落账本', async () => {
+  try { rmSync(P('headless-overlay.yml'), { recursive: true, force: true }) } catch { /* 上个用例的残骸 */ }
+  const { smokeCard } = await import('./fixtures/persona/smoke-card.js')
+  mkdirSync(P('persona'), { recursive: true })
+  writeFileSync(P('persona', 'card.json'), JSON.stringify(smokeCard(), null, 2), 'utf8')
+  writeFileSync(P('persona', 'active.json'), JSON.stringify({ mode: 'file', path: P('persona', 'card.json') }), 'utf8')
+  const fakeBin = P('fake-dsh-exit.js')
+  writeFileSync(fakeBin, 'process.exit(3)\n', 'utf8')
+
+  const { dispose, postRun } = await bootPlugin({
+    autoDuty: false, dshBin: fakeBin, perDay: 5, commentsPerRound: 2, speakGateMode: 'observe',
+  })
+  try {
+    const out = await postRun()
+    assert.equal(out?.started, true, '假 dsh 存在 ⇒ 这一轮应该真的起来')
+
+    const deadline = Date.now() + 15_000
+    let ledger = []
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100))
+      ledger = readEvents(P('ledger.jsonl'))
+      // 这个 HOME 里前一个用例（⑦ 挂死超时）也落过 round-end，所以要**按本轮 roundId** 取
+      if (ledger.some((e) => e.type === 'round-end' && e.round === out.roundId)) break
+    }
+
+    const end = ledger.find((e) => e.type === 'round-end' && e.round === out.roundId)
+    assert.ok(end, 'spawn 立即退出也要落 round-end（不許空跑无声）')
+    assert.equal(end.code, 3, '退出码要如实记录（不许记成 0/null）')
+
+    const inject = ledger.find((e) => e.type === 'persona-inject' && e.round === out.roundId)
+    assert.ok(inject, '卡链路走到 spawn ⇒ persona-inject 必须落账本')
+    assert.equal(inject.personaTag, 'smoke@2.0.0')
+
+    const gate = ledger.find((e) => e.type === 'speak-decision' && e.scope === 'round' && e.round === out.roundId)
+    assert.ok(gate, '轮级门控事件必须落账本（observe 档也要记）')
+    assert.equal(gate.mode, 'observe')
+    assert.ok(['normal', 'throttle', 'forced'].includes(gate.decision), gate.decision)
+    assert.equal(typeof gate.features?.recentShare, 'number', 'features 要可解释')
+
+    // 概览要能读到（控制台展示的就是这一份）
+    const { buildOverview } = await import('../lib/overview.js')
+    const ov = buildOverview({ cfg: {}, state: {}, events: ledger })
+    assert.ok(ov.round.speakGate, '概览 round.speakGate 要能读到门控')
+    assert.equal(ov.round.speakGate.mode, 'observe')
+    assert.ok(ov.round.personaInject, '概览 round.personaInject 要能读到归因')
+  } finally {
+    dispose()
+  }
+})
+
 /* TODO（剩余验收）：规则文件缺失 ⇒ 放行 + 告警（W2-2 lint.js 的 Python 侧，见 mcp_server.py 测试）。 */

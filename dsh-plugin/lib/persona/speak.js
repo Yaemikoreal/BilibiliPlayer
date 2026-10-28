@@ -189,8 +189,167 @@ export const speakDecisionEvent = (d, { round = '', t = null } = {}) => {
   }
 }
 
-/** 供 W7-3/体检用：近 N 天"该说但没说"的占比（越低越健康）。 */
-export const skipRateFromLedger = (events, { days = 7, now = new Date() } = {}) => {
+/* ───────────────────────── 轮级节奏闸（W7-2 接线用） ─────────────────────────
+ *
+ * 为什么需要"轮级"而不是只用候选级：门控的**执行点**在宿主，而候选是在子进程里才拉到的
+ * （编译期只有账本）。宿主能确定知道的只有三件事：我最近说了多少、离上次多久、有没有人回我
+ * —— 这三件恰好是 §8.5 里能"只收紧不放宽"的部分。
+ *
+ * 档位（默认 observe，与质量门先 warn 三天同一个方法论）：
+ *   off     = 完全不门控（老行为，逃生门）
+ *   observe = 只算、只记、只提示，**不强制**（默认；页面必须标"观察中"）
+ *   enforce = 节奏太密时**真的**把本轮评论上限压到 1 条（绝不放大）
+ */
+
+/** 门控档位（按"越来越收紧"排序）。 */
+export const GATE_MODES = ['off', 'observe', 'enforce']
+export const DEFAULT_GATE_MODE = 'observe'
+
+/** "节奏太密"的判据（§8.5 的近 5 条占比）：动作数 ≥3 且说话占比 ≥0.6。 */
+export const DENSE_MIN_ACTIONS = 3
+export const DENSE_SHARE = 0.6
+
+/** "刚说过"的判据：距上次发言 < 30 分钟。 */
+export const TOO_SOON_MINUTES = 30
+
+/** 有人回我但还没回 —— 门控必须让路（§8.5：被回复直接放行）。 */
+/** "没回的回复"只看近 N 天：真实账本里躺着 2026-04 的 5 条旧回复，
+ *  不设窗口的话门控会被它们永久判成 forced（永远不收紧 ⇒ W7-2 等于没接）。 */
+export const PENDING_REPLY_DAYS = 7
+
+export const pendingReplyCount = (events, { days = PENDING_REPLY_DAYS, now = Date.now() } = {}) => {
+  const nowMs = Number.isFinite(msOf(now)) ? msOf(now) : Date.now()
+  const since = nowMs - Math.max(1, Number(days) || PENDING_REPLY_DAYS) * DAY_MS
+  const answered = new Set()
+  for (const e of asArr(events)) {
+    if (e && e.type === 'reply-out' && e.parent != null) answered.add(String(e.parent))
+  }
+  let n = 0
+  for (const e of asArr(events)) {
+    if (!e || e.type !== 'reply-in' || e.rpid == null) continue
+    if (answered.has(String(e.rpid))) continue
+    const t = msOf(e.t)
+    if (Number.isFinite(t) && t < since) continue // 陈年回复不算"待回复"
+    n++
+  }
+  return n
+}
+
+/**
+ * 轮级节奏闸。
+ *
+ * @param {object} o
+ * @param {Array} [o.events] 账本事件
+ * @param {Date|number|string} [o.now]
+ * @param {object} [o.cfg] 生效配置（只看 `speakGateMode` / `commentsPerRound`）
+ * @param {number} [o.quotaLeft] 剩余配额（<=0 时门控不再有意义，直接 normal）
+ * @returns {{mode:string, decision:'normal'|'throttle'|'forced', enforced:boolean,
+ *            reason:string, suggestedMaxComments:number|null, features:object}}
+ */
+export const buildRoundGate = ({ events = [], now = new Date(), cfg = {}, quotaLeft = Infinity } = {}) => {
+  const nowMs = Number.isFinite(msOf(now)) ? msOf(now) : Date.now()
+  const mode = GATE_MODES.includes(String(cfg?.speakGateMode)) ? String(cfg.speakGateMode) : DEFAULT_GATE_MODE
+  const recent = recentSpeakShare(events)
+  const gapMin = minutesSinceLastSpeak(events, nowMs)
+  const baseCap = Math.max(0, Number(cfg?.commentsPerRound) || 0)
+  const pending = pendingReplyCount(events, { now: nowMs })
+  const features = {
+    recentShare: round3(recent.share),
+    recentWindow: recent.n,
+    recentSpoke: recent.spoke,
+    gapMinutes: gapMin === null ? null : Math.round(gapMin),
+    pendingReplies: pending,
+  }
+
+  if (mode === 'off') {
+    return { mode, decision: 'normal', enforced: false, reason: '门控已关闭（本轮不记录节奏）', suggestedMaxComments: null, features }
+  }
+  if (Number.isFinite(Number(quotaLeft)) && Number(quotaLeft) <= 0) {
+    return { mode, decision: 'normal', enforced: false, reason: '配额已用完（配额是硬上限，节奏闸不再干预）', suggestedMaxComments: 0, features }
+  }
+  // 有人回我：直接放行且**不由节奏闸收紧**（但仍占配额）
+  if (pending > 0) {
+    return {
+      mode, decision: 'forced', enforced: false,
+      reason: `有 ${pending} 条回复还没回，优先回（放行且不收紧）`,
+      suggestedMaxComments: baseCap, features,
+    }
+  }
+
+  const tooDense = recent.n >= DENSE_MIN_ACTIONS && recent.share >= DENSE_SHARE
+  const tooSoon = gapMin !== null && gapMin < TOO_SOON_MINUTES
+  if (!tooDense && !tooSoon) {
+    const why = gapMin === null
+      ? '还没发过言，节奏正常'
+      : `节奏正常（近 ${recent.n} 个动作说了 ${recent.spoke} 次，距上次 ${Math.round(gapMin)} 分钟）`
+    return { mode, decision: 'normal', enforced: false, reason: why, suggestedMaxComments: baseCap, features }
+  }
+
+  const reason = tooDense
+    ? `节奏偏密：最近 ${recent.n} 个动作里说了 ${recent.spoke} 次`
+    : `刚说过：距上次发言只有 ${Math.round(gapMin)} 分钟`
+  // 只收紧不放宽：最多压到 1 条；baseCap 本来就 <1 时保持 baseCap
+  const suggested = Math.min(baseCap, 1)
+  const enforced = mode === 'enforce'
+  return {
+    mode, decision: 'throttle', enforced,
+    reason: enforced ? `${reason}（已把本轮评论上限压到 ${suggested} 条）` : `${reason}（观察中，不强制；建议本轮最多 ${suggested} 条）`,
+    suggestedMaxComments: suggested,
+    features,
+  }
+}
+
+/** 一行可读解释（页面/日志用）。 */
+export const describeRoundGate = (g) => {
+  if (!g) return ''
+  const modeLabel = g.mode === 'enforce' ? '强制' : g.mode === 'observe' ? '观察中（不拦）' : '关闭'
+  const decisionLabel = g.decision === 'throttle' ? '收紧' : g.decision === 'forced' ? '放行' : '正常'
+  return `发言门控：${modeLabel} · ${decisionLabel} —— ${g.reason}`
+}
+
+/** 轮级门控的账本事件（`scope:'round'`；候选级将来若接 C3 用 `scope:'candidate'`）。 */
+export const roundGateEvent = (g, { round = '', t = null } = {}) => {
+  if (!g) return null
+  return {
+    t: t ? String(t) : new Date().toISOString(),
+    round: String(round || ''),
+    type: 'speak-decision',
+    scope: 'round',
+    score: null,
+    decision: g.decision,
+    mode: g.mode,
+    enforced: g.enforced === true,
+    reason: g.reason,
+    suggestedMaxComments: g.suggestedMaxComments,
+    features: g.features,
+  }
+}
+
+/** 从账本里读某一轮的门控记录（没有就 null）。 */
+export const roundGateOf = (events, roundId) => {
+  let found = null
+  for (const e of asArr(events)) {
+    if (!e || e.type !== 'speak-decision' || e.scope !== 'round') continue
+    if (roundId && e.round !== roundId) continue
+    if (!found || String(e.t || '') >= String(found.t || '')) found = e
+  }
+  return found
+}
+
+/** 账本事件 → overview 用的精简结构（与前端契约一致）。 */
+export const gateView = (ev) => {
+  if (!ev) return null
+  return {
+    mode: String(ev.mode || DEFAULT_GATE_MODE),
+    decision: String(ev.decision || 'normal'),
+    reason: String(ev.reason || ''),
+    suggestedMaxComments: Number(ev.suggestedMaxComments) || 0,
+    enforced: ev.enforced === true,
+    features: ev.features || {},
+  }
+}
+
+/** 供 W7-3/体检用：近 N 天"该说但没说"的占比（越低越健康）。 */export const skipRateFromLedger = (events, { days = 7, now = new Date() } = {}) => {
   const nowMs = Number.isFinite(msOf(now)) ? msOf(now) : Date.now()
   const since = nowMs - days * DAY_MS
   let total = 0

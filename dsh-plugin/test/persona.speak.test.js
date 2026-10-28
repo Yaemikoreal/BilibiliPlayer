@@ -12,7 +12,11 @@ import {
   SPEAK_WEIGHTS, SPEAK_THRESHOLD, recentSpeakShare, minutesSinceLastSpeak,
   freshnessOf, isMediaOnly, scoreSpeakDecision, describeSpeakDecision,
   speakDecisionEvent, skipRateFromLedger,
+  GATE_MODES, DEFAULT_GATE_MODE, DENSE_SHARE, TOO_SOON_MINUTES,
+  pendingReplyCount, buildRoundGate, describeRoundGate, roundGateEvent, roundGateOf, gateView,
 } from '../lib/persona/speak.js'
+import { roundAccounting, lastRoundFrom } from '../lib/round.js'
+import { buildOverview } from '../lib/overview.js'
 
 const NOW = new Date('2026-10-28T12:00:00.000Z')
 const ago = (m) => new Date(NOW.getTime() - m * 60_000).toISOString()
@@ -125,4 +129,126 @@ test('skipRateFromLedger：近 7 天"该说没说"的占比（体检用）', () 
   assert.equal(r.skipped, 1)
   assert.equal(r.rate, 0.333)
   assert.deepEqual(skipRateFromLedger([], { now: NOW }), { total: 0, skipped: 0, rate: 0 })
+})
+
+/* ───────────────────── W7-2 接线：轮级节奏闸 ───────────────────── */
+
+const dense = () => [ev('view', 40), ev('comment', 3), ev('comment', 2), ev('comment', 1)]
+const quiet = () => [ev('comment', 180), ev('view', 120), ev('view', 90), ev('view', 60), ev('view', 30)]
+
+test('轮级门控：档位常量与默认 observe（先观察，不强制）', () => {
+  assert.deepEqual(GATE_MODES, ['off', 'observe', 'enforce'])
+  assert.equal(DEFAULT_GATE_MODE, 'observe')
+  const g = buildRoundGate({ events: quiet(), now: NOW, cfg: {} })
+  assert.equal(g.mode, 'observe', '没配 speakGateMode 时必须是 observe')
+  assert.equal(g.enforced, false)
+})
+
+test('pendingReplyCount：只数"还没回"的 reply-in，且**陈年回复不算**', () => {
+  const fresh = [
+    { t: ago(60), type: 'reply-in', rpid: 11 },
+    { t: ago(120), type: 'reply-in', rpid: 22 },
+    { t: ago(30), type: 'reply-out', parent: 11 },
+  ]
+  assert.equal(pendingReplyCount(fresh, { now: NOW }), 1, '22 还没回 ⇒ 1 条')
+  assert.equal(pendingReplyCount([], { now: NOW }), 0)
+
+  // 真实账本里躺着 2026-04 的旧回复：不设窗口会把门控永久判成 forced
+  const stale = [{ t: '2026-04-03T10:44:17.000Z', type: 'reply-in', rpid: 33 }]
+  assert.equal(pendingReplyCount(stale, { now: NOW }), 0, '7 天前的不算"待回复"')
+  const g = buildRoundGate({ events: stale, now: NOW, cfg: { speakGateMode: 'enforce', commentsPerRound: 5 } })
+  assert.notEqual(g.decision, 'forced', '陈年回复不能把门控永久钉成放行')
+  assert.equal(g.features.pendingReplies, 0)
+})
+
+test('轮级门控：节奏太密 ⇒ throttle；observe 只提示、enforce 才压上限', () => {
+  const base = { events: dense(), now: NOW, cfg: { commentsPerRound: 5 } }
+  const obs = buildRoundGate({ ...base, cfg: { ...base.cfg, speakGateMode: 'observe' } })
+  assert.equal(obs.decision, 'throttle')
+  assert.equal(obs.enforced, false)
+  assert.equal(obs.suggestedMaxComments, 1)
+  assert.match(obs.reason, /观察中，不强制/)
+  assert.ok(obs.features.recentShare >= DENSE_SHARE)
+
+  const enf = buildRoundGate({ ...base, cfg: { ...base.cfg, speakGateMode: 'enforce' } })
+  assert.equal(enf.decision, 'throttle')
+  assert.equal(enf.enforced, true)
+  assert.match(enf.reason, /已把本轮评论上限压到 1 条/)
+})
+
+test('轮级门控：刚说过（<30min）也收紧；但绝不会放大上限', () => {
+  const events = [ev('comment', 5), ev('view', 3), ev('view', 2)]
+  const g = buildRoundGate({ events, now: NOW, cfg: { commentsPerRound: 5, speakGateMode: 'enforce' } })
+  assert.equal(g.decision, 'throttle')
+  assert.match(g.reason, /刚说过|节奏偏密/)
+  assert.ok(g.suggestedMaxComments <= 5, '门控只能收紧')
+  assert.ok(TOO_SOON_MINUTES === 30)
+})
+
+test('轮级门控：有人回我 ⇒ forced 放行（不收紧，但仍占配额）', () => {
+  const events = [...dense(), { t: ago(2), type: 'reply-in', rpid: 99, parent: 5 }]
+  const g = buildRoundGate({ events, now: NOW, cfg: { commentsPerRound: 5, speakGateMode: 'enforce' } })
+  assert.equal(g.decision, 'forced')
+  assert.equal(g.enforced, false)
+  assert.equal(g.suggestedMaxComments, 5, 'forced 不压上限')
+  assert.match(g.reason, /回复还没回/)
+})
+
+test('轮级门控：off 档 / 配额用完 / 节奏正常 三种 normal', () => {
+  const off = buildRoundGate({ events: dense(), now: NOW, cfg: { speakGateMode: 'off', commentsPerRound: 5 } })
+  assert.equal(off.mode, 'off')
+  assert.equal(off.decision, 'normal')
+  assert.equal(off.suggestedMaxComments, null, 'off 档不参与')
+  assert.match(off.reason, /门控已关闭/)
+
+  const noQuota = buildRoundGate({ events: dense(), now: NOW, cfg: { speakGateMode: 'enforce', commentsPerRound: 5 }, quotaLeft: 0 })
+  assert.equal(noQuota.decision, 'normal')
+  assert.match(noQuota.reason, /配额已用完/)
+
+  const ok = buildRoundGate({ events: quiet(), now: NOW, cfg: { commentsPerRound: 5 } })
+  assert.equal(ok.decision, 'normal')
+  assert.match(ok.reason, /节奏正常/)
+})
+
+test('describeRoundGate / 事件 / 视图：契约字段就是前端读的那几个', () => {
+  const g = buildRoundGate({ events: dense(), now: NOW, cfg: { commentsPerRound: 5, speakGateMode: 'observe' } })
+  assert.match(describeRoundGate(g), /发言门控：观察中（不拦） · 收紧 —— /)
+  assert.equal(describeRoundGate(null), '')
+
+  const e = roundGateEvent(g, { round: 'r1', t: NOW.toISOString() })
+  assert.equal(e.type, 'speak-decision')
+  assert.equal(e.scope, 'round', '候选级事件将来用 scope:candidate 共存')
+  assert.equal(e.round, 'r1')
+  assert.equal(e.decision, 'throttle')
+  assert.equal(e.mode, 'observe')
+  assert.equal(typeof e.reason, 'string')
+  assert.equal(e.score, null, '轮级没有候选，不编分数')
+  assert.ok(e.features && typeof e.features.recentShare === 'number')
+
+  const v = gateView(e)
+  assert.deepEqual(Object.keys(v).sort(), ['decision', 'enforced', 'features', 'mode', 'reason', 'suggestedMaxComments'])
+  assert.equal(gateView(null), null)
+})
+
+test('账本 → roundAccounting → overview.round.speakGate 全链路可查', () => {
+  const g = buildRoundGate({ events: dense(), now: NOW, cfg: { commentsPerRound: 5, speakGateMode: 'observe' } })
+  const events = [
+    { t: NOW.toISOString(), round: 'r1', type: 'view', bvid: 'BV1' },
+    roundGateEvent(g, { round: 'r1', t: NOW.toISOString() }),
+    { t: NOW.toISOString(), round: 'r1', type: 'round-end', code: 0, durationMs: 1000 },
+  ]
+  const acc = roundAccounting(events, 'r1')
+  assert.equal(acc.speakGate.mode, 'observe')
+  assert.equal(acc.speakGate.decision, 'throttle')
+
+  const last = lastRoundFrom(events)
+  assert.equal(last.speakGate.decision, 'throttle')
+
+  const ov = buildOverview({ cfg: {}, state: {}, events, now: NOW })
+  assert.equal(ov.round.speakGate.mode, 'observe')
+  assert.match(ov.round.speakGate.reason, /节奏偏密/)
+  // 没有门控记录 ⇒ null（页面显示「暂无数据」，而不是假装正常）
+  const none = buildOverview({ cfg: {}, state: {}, events: [{ t: NOW.toISOString(), round: 'r1', type: 'view', bvid: 'BV1' }], now: NOW })
+  assert.equal(none.round.speakGate, null)
+  assert.equal(roundGateOf(events, 'r-none'), null)
 })

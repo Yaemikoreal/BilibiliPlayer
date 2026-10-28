@@ -274,6 +274,9 @@ export function buildOverview(o = {}) {
       // W2-1：这轮实际注入的人设版本（控制台页头 / 人设页「本轮实际注入」都读它）
       personaTag: perRound.personaTag || '',
       personaInject: currentAcc?.personaInject || lastRound?.personaInject || null,
+      // W7-2：发言门控（mode=观察中/强制/关闭 + decision=正常/收紧/放行 + features）。
+      //   null = 还没跑过带门控的轮 / 门控关闭 ⇒ 页面显示「暂无数据」，不要假装"正常"。
+      speakGate: currentAcc?.speakGate || lastRound?.speakGate || null,
       startedAt: running ? String(live?.startedAt || state.lastRunStartedAt || '') : String(state.lastRunStartedAt || ''),
       elapsedMs: running ? Number(live?.elapsedMs) || 0 : 0,
       phase: live?.phase || { key: 'think', label: '思考' },

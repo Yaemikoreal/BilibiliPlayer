@@ -8,6 +8,7 @@
  */
 import { dayKeyOf } from './activity.js'
 import { personaInjectOf } from './persona/attribution.js'
+import { roundGateOf, gateView } from './persona/speak.js'
 
 const DAY_MS = 86400_000
 
@@ -63,6 +64,8 @@ export function roundAccounting(events, roundId, opts = {}) {
   const startMs = roundStartOf(roundId) || Date.parse(startedAt) || 0
   // W2-1 归因：这一轮吃的是哪版人设、砍了什么（账本里有 persona-inject 才有）
   const personaInject = personaInjectOf(mine, roundId)
+  // W7-2：这一轮的节奏闸判定（speak-decision scope:'round'；observe 档也会记）
+  const speakGateEv = roundGateOf(mine, roundId)
   // 只有在「真读过内容」（有 view）时才要求扫描——整轮只发动态/什么都拉不到的不算违规
   const missing = counts.views > 0 && counts.scans === 0 && counts.proactive === 0
   const judged = startMs >= scanSince
@@ -83,6 +86,8 @@ export function roundAccounting(events, roundId, opts = {}) {
     reason,
     personaTag: String(personaInject?.personaTag || ''),
     personaInject,
+    // W7-2：门控精简视图（overview / 控制台直接用；没有记录时 null）
+    speakGate: gateView(speakGateEv),
   }
 }
 
@@ -134,6 +139,8 @@ export function lastRoundFrom(events, opts = {}) {
     // W2-1：概览页头「这个号现在是谁」直接读这里（没有注入记录时是空串）
     personaTag: acc.personaTag || '',
     personaInject: acc.personaInject || null,
+    // W7-2：最近一轮的节奏闸判定（控制台展示「观察中 / 收紧 / 放行」）
+    speakGate: acc.speakGate || null,
   }
 }
 

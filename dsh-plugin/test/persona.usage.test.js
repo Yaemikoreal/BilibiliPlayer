@@ -14,7 +14,7 @@ import { join } from 'node:path'
 const HOME = mkdtempSync(join(tmpdir(), 'bf-persona-usage-'))
 process.env.BILI_FENSHEN_HOME = HOME
 
-const { buildDutyPrompt, commitPendingUsage, getLastPersonaInject } = await import('../index.js')
+const { buildDutyPrompt, commitPendingUsage, getLastPersonaInject, getLastSpeakGate } = await import('../index.js')
 const { smokeCard } = await import('./fixtures/persona/smoke-card.js')
 const {
   compilePersona, recordUsage, loadState, saveState, deriveState, resolveLoreIndex,
@@ -213,4 +213,64 @@ test('W2-1：legacy 直通 ⇒ 不产出 persona-inject 事件、也不加报告
   const info = getLastPersonaInject()
   assert.equal(info.personaRes.mode, 'legacy')
   assert.equal(info.injectEvent, null, 'legacy 不落 persona-inject')
+})
+
+/* ───────── W7-2：轮级发言门控接进 buildDutyPrompt（observe 只提示、enforce 才压上限） ───────── */
+
+// 用真实的「现在」构造事件：门控按 now 算"距上次发言多少分钟"，写死日期会让阈值失效
+const minsAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
+const denseEvents = () => [
+  { t: minsAgo(40), type: 'view', bvid: 'BV1' },
+  { t: minsAgo(3), type: 'comment', bvid: 'BV1', text: 'a' },
+  { t: minsAgo(2), type: 'comment', bvid: 'BV1', text: 'b' },
+  { t: minsAgo(1), type: 'comment', bvid: 'BV1', text: 'c' },
+]
+const quietEvents = () => [
+  { t: minsAgo(180), type: 'comment', bvid: 'BV1', text: 'a' },
+  { t: minsAgo(120), type: 'view', bvid: 'BV2' },
+  { t: minsAgo(90), type: 'view', bvid: 'BV3' },
+  { t: minsAgo(60), type: 'view', bvid: 'BV4' },
+  { t: minsAgo(30), type: 'view', bvid: 'BV5' },
+]
+
+const ensureCard = () => {
+  const cardFile = join(HOME, 'persona', 'card.json')
+  mkdirSync(join(HOME, 'persona'), { recursive: true })
+  writeFileSync(cardFile, JSON.stringify(smokeCard(), null, 2), 'utf8')
+  writeFileSync(join(HOME, 'persona', 'active.json'), JSON.stringify({ mode: 'file', path: cardFile }), 'utf8')
+  writeFileSync(join(HOME, 'persona', 'state.json'), '{}', 'utf8')
+}
+
+test('W7-2 observe（默认）：节奏太密只在 prompt 里提示，**不**压评论上限', () => {
+  ensureCard()
+  const prompt = buildDutyPrompt({ ...cardCfg(), commentsPerRound: 2 }, 'R-gate-obs', denseEvents())
+  assert.match(prompt, /- 发言节奏（宿主算好、别自己数）：发言门控：观察中（不拦） · 收紧 —— /)
+  assert.match(prompt, /本轮最多 2 条/, 'observe 不改上限')
+  assert.ok(!/门控压过/.test(prompt), 'observe 不该出现"压过"字样')
+  const info = getLastSpeakGate()
+  assert.equal(info.roundId, 'R-gate-obs')
+  assert.equal(info.gate.mode, 'observe')
+  assert.equal(info.gate.decision, 'throttle')
+  assert.equal(info.gate.enforced, false)
+})
+
+test('W7-2 enforce：节奏太密时真的把本轮评论上限压到 1 条（且写明压过）', () => {
+  ensureCard()
+  const prompt = buildDutyPrompt({ ...cardCfg(), commentsPerRound: 2, speakGateMode: 'enforce' }, 'R-gate-enf', denseEvents())
+  assert.match(prompt, /本轮最多 1 条（门控压过：原 2 → 1）/)
+  assert.match(prompt, /已把本轮评论上限压到 1 条/)
+  assert.equal(getLastSpeakGate().gate.enforced, true)
+})
+
+test('W7-2 节奏正常 / off 档：上限与文案都按原样', () => {
+  ensureCard()
+  const normal = buildDutyPrompt({ ...cardCfg(), commentsPerRound: 2 }, 'R-gate-ok', quietEvents())
+  assert.match(normal, /发言门控：观察中（不拦） · 正常/)
+  assert.match(normal, /本轮最多 2 条/)
+  assert.ok(!/门控压过/.test(normal))
+
+  const off = buildDutyPrompt({ ...cardCfg(), commentsPerRound: 2, speakGateMode: 'off' }, 'R-gate-off', denseEvents())
+  assert.match(off, /发言门控：关闭 · 正常/)
+  assert.match(off, /本轮最多 2 条/)
+  assert.equal(getLastSpeakGate().gate.mode, 'off')
 })
