@@ -38,7 +38,7 @@
 
 | 指标 | 值 | 出处 |
 |---|---|---|
-| 测试 | **219 pass**（本稿基线）→ **327 pass / 0 fail**（W0–W4 之后实测） | `npm test` |
+| 测试 | **219 pass**（本稿基线）→ **410 pass / 0 fail**（W0–W7 之后实测） | `npm test` |
 | 人设编译体量 | whale **1,404** / elaina 1,356 / generic 1,464 字符 | 实测 `compilePersona` |
 | 分块体量 | core 885–1010 / lore 0–195 / state 157 / samples 72 / tail 95–117 | 同上 |
 | 注入两段 | before ≈1010–1118（章程前）、after ≈324–346（末尾） | `index.js:82-91`（行号已漂移，见 §4.5） |
@@ -273,15 +273,15 @@ B 的三条契约风险（实施时逐条守）：
 | **W2-1** | 归因 `persona-inject` + 报告/概览 `personaTag` | A-§11 / B-B1-4 | ✅ 完成（账本事件 + 报告头照抄行 + 概览字段） |
 | **W2-2** | 质量门 lint（JS 规则 + Python 哑执行） | A-§8 / B-B1-5 | ✅ 代码完成（默认 warn；**上线前需跑一次 `node scripts/export-lint-rules.mjs`** 生成规则文件） |
 | **W2-3** | 语料治理（origin 三分 + 反抄 + situation/style） | A-§8 | ✅ lib 完成（生产接线待补：`bili_persona_note` 缺 `originalText`、`review`/`growthCheckedOnly` 未接 config） |
-| **W3-1~6** | 稳定性 6 项（overlay/轮询/素材/原子写/路径/超时） | B-B2-1,6,7,8,9,10 | ⏳ 3/6：轮询超时退避 ✅、state 原子写 ✅、故障注入基线 8 例 ✅；overlay 中止 / 素材留痕回收 / spawn 硬超时 / `personaPrompt` 表示法待做 |
+| **W3-1~6** | 稳定性 6 项（overlay/轮询/素材/原子写/路径/超时） | B-B2-1,6,7,8,9,10 | ✅ 全部：overlay 失败中止本轮 + `lastError` / 轮询超时退避 / 素材 `.bak`×3+软删+孤儿扫描 / 两处 state.json 原子写 / `personaPrompt` 支持 `preset:` 与相对根 / spawn 20 分钟硬超时 + 进程树 kill |
 | **W3-7~8** | dshBin 缓存、日志治理 | B-B2-2,3,4,5 | ✅（含轮转 2 代） |
-| **W4-0~4** | 性能：bench → 增量读 → 一次读多处用 → tick 降频 → 客户端合并 | B-B3-0~4 | ⏳ 2/5：bench ✅（前后数字见 `docs/analysis/bench-before.md`/`bench-after.md`）、`lib/ledger-index.js` ✅、概览 O(n²) 修复 ✅；11 处调用点收敛 / tick 降频 / 请求合并待做 |
-| **W5-1~4** | 人设页三块 + 页头 | A-§10/§11 / B-B4 | ⏳ |
-| **W6-1** | C3 路径 A：`bili_persona_lore(keyword)` | A-§6 路径A | ⏳（`layers.c3Hints` 结构已就位） |
-| **W6-2** | C3 路径 B：companion（**有条件**） | A-§6 路径B | ⏸ 暂缓 |
-| **W7-1** | 记忆：聚合 + 重要度 + 7 天半衰期 + 限量注入 | A-§7 | ⏳ |
-| **W7-2** | 发言门控：6 特征打分 + `speak-decision` | A-§9 | ⏳ |
-| **W7-3** | 体检超阈值 → 下一轮自纠 | A-§10 | ⏳ |
+| **W4-0~4** | 性能：bench → 增量读 → 一次读多处用 → tick 降频 → 客户端合并 | B-B3-0~4 | ✅ **指标达标**：10 万行概览 p95 94.6→**4.68ms**（≤5）、单帧全流程 **5.02ms**（≤30）、11 处 `readEvents` 收敛为 1 个 reader（稳态读 bytesRead +0）、tick 空闲 0 帧、人设页 6 个 GET 30s 复用 |
+| **W5-1~4** | 人设页三块 + 页头 | A-§10/§11 / B-B4 | ✅ 四块（页头 / 本轮实际注入 / 体检 / 换卡对比）各「有数据·无数据·正在连接」三态 + 断言 |
+| **W6-1** | C3 路径 A：`bili_persona_lore(keyword)` | A-§6 路径A | ✅ 工具落地（24 例）+ 提示词侧已切换 + `dutyTools` 白名单 |
+| **W6-2** | C3 路径 B：companion（**有条件**） | A-§6 路径B | ⏸ 暂缓（§6.1 三条门槛未变） |
+| **W7-1** | 记忆：聚合 + 重要度 + 7 天半衰期 + 限量注入 | A-§7 | ✅（C2 注入 ≤2 条 ≤300 字；通道迁 C3 可等 W6-2） |
+| **W7-2** | 发言门控：6 特征打分 + `speak-decision` | A-§9 | ⏳ 打分核心 + 测试 ✅（`lib/persona/speak.js`，10 例）；**尚未接进 `buildDutyPrompt`**（建议先 observe 模式只记录不拦） |
+| **W7-3** | 体检超阈值 → 下一轮自纠 | A-§10 | ✅（超阈值才加一句动作；结论写进 `persona-inject.checkup`） |
 
 ### 5.2 W0 · 补尾巴 + 收尾提交（0.4 人日）
 
@@ -659,4 +659,49 @@ lintComment({ text, mode, card, rules, bank }) → { ok, level:'block'|'warn', c
 2. **质量门何时从 `warn` 切 `block`**：现状是 warn；建议按 §6.3 观察 3 天、误杀 <5% 再切。
 3. **W6-2 companion 插件**：仍按 §6.1 三条门槛挂起。
 4. **记忆半衰期 7 天 / 体检基线**：等 W7 开工前再确认一次。
+
+---
+
+## 13 进度快照·第二轮（2026-10-28 夜 → 29 凌晨）
+
+> 第二轮把 §12.4 的 6 条全部做完（除 W6-2 门槛项），另加 W7 三件。
+> 测试基线 327 → **410 pass / 0 fail**；四个 smoke 入口 exit=0。
+
+### 13.1 第二轮交付（6 个提交）
+
+| 提交 | 内容 |
+|---|---|
+| `16cb3b5` | W7-1 记忆（`lib/memory.js`）/ W7-3 体检自纠（`selfcorrect.js`）/ W7-2 打分核心（`speak.js`）/ W3-5 `personaPrompt` 表示法 / W3-3 软删除 lib 半 / W6-1 提示词侧切换 |
+| `cbc50f0` | W5 人设页四块 + W4-4 请求 30s 复用 + 软删除回收站 UI + `checkup.js` / `tagstats.js` |
+| `d9730e2` | W4 账本收敛 + 概览窗口化 + tick 去重 + W3 余 4 项 + W5 服务端端点 + W2 收尾接线 |
+| `e84cd62` | W6-1 `bili_persona_lore` 工具 + `bili_persona_note` 的 `originalText` |
+
+### 13.2 性能：方案指标全部达标
+
+| 场景（10 万行账本） | 轮一末 | 轮二末 | 方案目标 |
+|---|---:|---:|---|
+| `buildOverview` 纯计算 p95 | 94.63ms | **4.68ms** | ≤5ms ✅ |
+| 单帧全流程（稳态读 + 概览）p95 | 100.31ms | **5.02ms** | ≤30ms ✅ |
+| 稳态读（文件没变） | 0.09ms | 0.08ms | 0 次读盘 ✅（500 次连读 `bytesRead +0B`） |
+
+手段：11 处 `readEvents` 收敛成 1 个 `ledgerReaderFor` 实例 + 概览 14 天窗口单遍粗筛
+（`windowDays:0` 留旧口径逃生门，与旧实现对拍 `deepEqual`）。
+
+### 13.3 本轮新增的两个"可解释"能力
+
+1. **记忆**：`persona-inject.memory = {injected, pool, relevant, fallbackToRecent}` ⇒ 能查"为什么这轮提了旧事"。
+2. **体检**：`persona-inject.checkup = {level, n, reasons, selfCorrect}` ⇒ 能查"为什么这轮被要求收短"。
+3. **发言门控**（仅打分）：`speak-decision {score, decision, reason, features}` ⇒ 未来能查"为什么没说"。
+
+### 13.4 下一轮（按依赖）
+
+1. **W7-2 接线**：把 `scoreSpeakDecision` 接进 `buildDutyPrompt` 的候选判定，**先 observe（只记不拦）**，
+   观察 3 天误杀率再决定 enforced；同时把 `speak-decision` 接进人设页/活动页。
+2. **`saveCard` → 重导 `lint-rules.json`**：§6.3 要求"卡一改就重导"，现在还得手动跑脚本。
+3. **W6-2 companion**（仍受 §6.1 门槛约束）；门槛之一"账户连续 3 天值班无回归"取决于主人是否放开真机跑。
+4. **真机验收**：§10.1 的 6 条真人验证（账本出现 `persona-inject` / 同日两轮不重复见闻 / "太强了"被拦 /
+   楼中楼 ≤40 字 / 人设页四块可读 / `duty.log` 无 U+FFFD）——全部需要主人点头跑一轮。
+5. 已知小尾巴（都不阻塞）：`/persona/history` 全量扫描（10 万行 5–8ms，30s 轮询可接受）；
+   14 天窗口化后"永远显示上一轮"不可得（有意）；`scripts/snapshot-console.mjs` 未补新端点数据。
+
 
