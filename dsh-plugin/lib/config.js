@@ -37,6 +37,8 @@ export const FIELDS = {
   growthAutoPromote: 'number',
   // W2 收尾：人工位（只转正人工确认过的候选；= 麦麦 checked_only）
   growthCheckedOnly: 'boolean',
+  // W7-2 发言门控档位（off / observe / enforce；默认 observe = 只记不拦）
+  speakGateMode: 'string',
   reportLevel: 'string',
   dshBin: 'string',
   headlessProfile: 'string',

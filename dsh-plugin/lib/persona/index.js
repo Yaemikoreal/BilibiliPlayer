@@ -11,8 +11,9 @@
  *   - `after` ：P3 今日状态 + P4 语料样本 + P5 最后一公里 —— 放在整轮 prompt 的最末尾。
  *   这样"事实"在前、"行为"贴生成点，符合酒馆 depth 注入的结论。
  */
-import { join } from 'node:path'
-import { loadCard, readActive, writeActive, readAssetJson, assetDir, homeDir, PRESETS_DIR, listPresets, saveCard, seedIfEmpty, listVersions, readVersion, materializeUserCopy, saveBank, writeLoreBody, loadBank } from './store.js'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { loadCard, readActive, writeActive, readAssetJson, assetDir, homeDir, personaDir, PRESETS_DIR, listPresets, saveCard, seedIfEmpty, listVersions, readVersion, materializeUserCopy, saveBank, writeLoreBody, loadBank } from './store.js'
 import { compilePersona, buildCore, renderPersonaText } from './compile.js'
 import { buildLayers, resolvePosition } from './layers.js'
 import { deriveState, loadState, saveState, recordUsage, debtLine, formOf, timeOfDayOf, hasEmoji } from './state.js'
@@ -21,6 +22,7 @@ import { validateCard, l0Checks, migrateLegacyMarkdown, injectedText, SPEC } fro
 import { normalizeBank, bankStats, BUCKETS } from './expression.js'
 import { renderLoreIndex, resolveLoreIndex, lorePath, validateLoreEntry } from './lore.js'
 import { charLen } from './text.js'
+import { buildLintRules, LINT_SPEC, DEFAULT_ROLLOUT, normalizeRollout, ROLLOUT_MODES } from './lint.js'
 import { guardPrompt, resolveBudget, resolveModes, normalizeModes, effectiveModes, degradationPlan, FALLBACK_MODES } from './budget.js'
 import { processGrowth, appendPending, vetCorpus, vetLore, pruneBucket, GROWTH_LIMITS } from './growth.js'
 import { buildMemory, filterMemoryRelevant, renderMemory, MEMORY_C2_ENTRIES, MEMORY_C2_CHARS } from '../memory.js'
@@ -198,8 +200,71 @@ export const previewPersona = ({ card = null, events = [], roundId = 'preview', 
   }
 }
 
-/** 保存卡（校验 + 版本快照 + 切 active 到 file）。 */
-export const savePersonaCard = (card) => saveCard(card)
+/* ─────────────────── 质量门规则重导（§6.3-3「卡一改就重导」/ §8.1 单一事实来源，W2-2 收尾） ─────────────────── */
+
+/** 规则文件路径：`<家目录>/persona/lint-rules.json`（与 `scripts/export-lint-rules.mjs` 同源）。 */
+const lintRulesFile = () => join(personaDir(), 'lint-rules.json')
+
+/** 读已有规则文件里的 mode（文件缺失 / 坏 JSON / 坏档位一律当没有）：重导默认不覆盖用户手切的档位。 */
+const existingLintMode = (file) => {
+  try {
+    if (!existsSync(file)) return ''
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    const m = String(raw?.mode ?? '').trim().toLowerCase()
+    return ROLLOUT_MODES.includes(m) ? m : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 卡 / 语料库一改就重导质量门规则文件（§6.3-3：挂"保存卡"同一路径；§8.1：判据只有 JS 这一份）。
+ *
+ * 口径与 `scripts/export-lint-rules.mjs` 完全一致：同一个 `buildLintRules`、同一份"保留已有 mode"规则、
+ * 同一个原子写（tmp + rename）——同一份输入落出来的 JSON 除 `generatedAt` 时间戳外逐字段相同，
+ * 脚本（既有验收口径）跑一遍也不会把门面写的结果改掉。
+ *
+ * 纪律（§6.3-1：绝不因规则坏了全线停摆）：**本函数不抛**。写不出来只回 `ok:false` + 原因，
+ * 调用方照旧返回保存成功（`saved.ok` 保持 true）。
+ *
+ * @param {{card?:object|null, bank?:object|null, mode?:string}} [opts]
+ *   mode 显式指定时优先（off/warn/block）；否则保留规则文件里已有的档位；都没有 → warn。
+ * @returns {{ok:boolean, path:string, mode:string, version:string, written:boolean, error?:string}}
+ */
+export const exportLintRules = ({ card = null, bank = null, mode = '' } = {}) => {
+  const file = lintRulesFile()
+  // 档位解析不依赖磁盘成功与否：读文件失败也只是回落到 warn。
+  const picked = normalizeRollout(mode || existingLintMode(file) || DEFAULT_ROLLOUT)
+  try {
+    const rules = buildLintRules({ card, bank, mode: picked }) // 判据 / 阈值 / 词表只有 lint.js 这一份
+    const version = String(rules.spec || LINT_SPEC)
+    mkdirSync(dirname(file), { recursive: true })
+    const tmp = `${file}.${process.pid}.tmp`
+    try {
+      writeFileSync(tmp, JSON.stringify(rules, null, 2) + '\n', 'utf8')
+      renameSync(tmp, file) // 原子替换：Python 侧不会读到半截 JSON
+    } catch (e) {
+      try { unlinkSync(tmp) } catch { /* tmp 没写出来 / 删不掉都不影响结果 */ }
+      throw e
+    }
+    return { ok: true, path: file, mode: rules.mode, version, written: true }
+  } catch (e) {
+    return {
+      ok: false, path: file, mode: picked, version: LINT_SPEC, written: false,
+      error: String(e?.message ?? e),
+    }
+  }
+}
+
+/** 保存卡（校验 + 版本快照 + 切 active 到 file），成功后自动重导质量门规则文件。 */
+export const savePersonaCard = (card) => {
+  const saved = saveCard(card)
+  // 保存失败 → 原样返回（不碰规则文件）；成功后重导，重导失败也不影响 saved.ok（§6.3-1）。
+  if (!saved.ok) return saved
+  // 与导出脚本读同一份生效卡 / 同一份语料库，保证两条写路径落出来的规则一致。
+  const act = readActive()
+  return { ...saved, lintRules: exportLintRules({ card: loadCard(act).card || card, bank: loadBank(act) }) }
+}
 
 /** 语料库条目的键（normalizeBank 的同一份桶表）。 */
 const BANK_FORMS = BUCKETS
@@ -280,6 +345,9 @@ export const editExpressionBank = ({ action, form, id, text, source, heat, statu
     // W3-3：remove 是**软删除**（可 restore / purge）；同时报禁用条数，控制台能显示"回收站里有几条"
     soft: action === 'remove', disabled,
     materialized: saved.materialized, active: saved.active,
+    // §8.1：`bank.active` 是 L4 反抄快照的输入 —— 语料库一改就重导，Python 侧不会还在比旧库。
+    // 同样只加字段不改原行为；写不出来只回 lintRules.ok=false，不影响上面已成功的保存。
+    lintRules: exportLintRules({ card: loadCard(readActive()).card, bank: norm }),
   }
 }
 

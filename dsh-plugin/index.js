@@ -44,6 +44,7 @@ import {
   processGrowth, degradationPlan, resolveBudget,
 } from './lib/persona/index.js'
 import { buildPersonaInjectEvent, describePersonaInject } from './lib/persona/attribution.js'
+import { buildRoundGate, describeRoundGate, roundGateEvent } from './lib/persona/speak.js'
 import { runDiagnose, formatDiagnoseText } from './lib/diagnose.js'
 import { createLiveStream } from './lib/live.js'
 
@@ -206,6 +207,11 @@ export const Config = !z ? undefined : z.object({
   growthAutoPromote: z.natural().default(3),
   /** W2 收尾：人工位 —— true 时只转正「人工确认过（checked=true）」的候选（= 麦麦 checked_only） */
   growthCheckedOnly: z.boolean().default(false),
+  /**
+   * W7-2 发言门控档位：off=不门控（老行为）｜observe=只算只记不强制（默认）｜enforce=节奏太密时压上限。
+   * 默认 observe：与质量门先 warn 三天同一个方法论 —— 先让数据跑出来，再谈拦。
+   */
+  speakGateMode: z.enum(['off', 'observe', 'enforce']).default('observe'),
   /** 日报形态：full=完整 · brief=薄版 · off=不写 */
   reportLevel: z.string().default('full'),
   /** dsh 的 bin.js 路径（不填自动探测） */
@@ -871,6 +877,16 @@ const growthReview = (entry) => {
 let lastPersonaInjectRecord = null
 export const getLastPersonaInject = () => lastPersonaInjectRecord
 
+/**
+ * 最近一次 buildDutyPrompt 的**轮级发言门控**（W7-2）。
+ *
+ * 与 `getLastPersonaInject` 同一个理由：buildDutyPrompt 的返回值必须是字符串，
+ * 而"这轮节奏闸判了什么、有没有真的压上限"只有它自己知道；runDuty 取来落账本，
+ * 控制台据此解释"这轮为什么只发了 1 条 / 为什么没被拦"。
+ */
+let lastSpeakGateRecord = null
+export const getLastSpeakGate = () => lastSpeakGateRecord
+
 export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   const charter = (() => {
     try { return readFileSync(join(PROMPTS_DIR, 'duty.md'), 'utf8').split('<家目录>').join(HOME) } catch { return '' }
@@ -939,6 +955,18 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
       + '\n  命中规则：BV 号完全相同 / UP 主名或 UID 命中 / 标题包含该词（不区分大小写）。'
     : '不看清单：（空）'
 
+  // ⭐ W7-2 发言门控（轮级节奏闸）
+  //    宿主确定知道的只有「我最近说了多少 / 离上次多久 / 有没有人回我」——这三件恰好是 §8.5 里
+  //    能"只收紧不放宽"的部分；候选级打分（问号/纯媒体/新鲜度）要等 C3 通道拿到候选再用。
+  //    默认 observe：只算、只记、只提示，**不拦**（与质量门先 warn 三天同一个方法论）。
+  const gateAt = new Date()
+  const speakGate = buildRoundGate({ events: ledgerEvents, now: gateAt, cfg, quotaLeft: left })
+  const cfgCommentCap = Math.max(0, Number(cfg?.commentsPerRound) || 0)
+  // 只有 enforce 且判定 throttle 时才真的压上限；其余一律保持原上限（门控永不放宽）
+  const commentCap = speakGate.enforced && speakGate.decision === 'throttle'
+    ? Math.min(cfgCommentCap, Number(speakGate.suggestedMaxComments) || cfgCommentCap)
+    : cfgCommentCap
+
   // 章程 + 本轮参数：与人设无关，先算好；人设降级后直接复用（不重算、不重读章程）
   const head = `你是这个账号的用户本人——一个独立、有自己判断的普通网友。现在按自己的兴趣刷一轮B站，看到值得的留下点痕迹。`
   const rest = (charter
@@ -948,10 +976,11 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
     + `- 记账：本轮 round id = ${roundId}（账本 ${LEDGER_FILE} 事件的 round 字段用这个值）；账本绝对路径 = ${LEDGER_FILE}。\n`
     + `- 报告：${report}\n`
     + `- 配额（全天总量）：挑中 ${quota} 条（今天已挑 ${picked} ⇒ 本轮最多再挑 ${left} 条）；`
-    + `评论 ${Math.max(0, Number(cfg?.commentsPerDay) || 0)} 条/天（今天已 ${q.comments}），本轮最多 ${Math.max(0, Number(cfg?.commentsPerRound) || 0)} 条；`
+    + `评论 ${Math.max(0, Number(cfg?.commentsPerDay) || 0)} 条/天（今天已 ${q.comments}），本轮最多 ${commentCap} 条${commentCap < cfgCommentCap ? `（门控压过：原 ${cfgCommentCap} → ${commentCap}）` : ''}；`
     + `点赞 ${Math.max(0, Number(cfg?.likesPerDay) || 0)} 个/天（今天已 ${q.likes}）；`
     + `动态 ${Math.max(0, Number(cfg?.dynamicsPerDay) || 0)} 条/天（今天已 ${q.dynamics}）；`
     + `跟进回复本轮最多 ${Math.max(0, Number(cfg?.repliesPerRound) || 0)} 条。\n`
+    + `- 发言节奏（宿主算好、别自己数）：${describeRoundGate(speakGate)}\n`
     + `- ⭐ 主动接话（**每轮硬步骤** + 可发 0..${Math.max(0, Number(cfg?.replyOthersPerRound ?? 2))} 条）：`
     + `本轮**必须先做一次「接话扫描」**——从已拉到的热评里评估 ≥1 条能不能接，`
     + `把结论写进报告的一行「接话扫描：…」，并向账本追加一条 reply-scan 事件；`
@@ -1050,6 +1079,8 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
 
   // W2-1 归因的原始素材：这轮吃了哪版人设、块体量、守卫结果、降级动作
   lastPersonaInjectRecord = { roundId, personaRes, guard, degraded, droppedBefore, injectEvent, at: new Date().toISOString() }
+  // W7-2：轮级节奏闸的原始素材（runDuty 在 spawn 前落一条 speak-decision 事件）
+  lastSpeakGateRecord = { roundId, gate: speakGate, at: gateAt.toISOString() }
   return prompt
 }
 
@@ -1122,6 +1153,16 @@ const runDuty = async (why = 'manual') => {
         log(`人设归因：本轮走 ${mode}，没有卡链路注入可记（legacy/missing 不落 persona-inject）`)
       }
     } catch (e) { log(`写 persona-inject 失败（不影响本轮）：${e?.message ?? e}`) }
+    // ⭐ W7-2 归因：节奏闸的判定也落账本（`scope:'round'`）——控制台据此解释
+    //    "这轮为什么只发 1 条 / 为什么没被拦"，而不是让主人猜。observe 档同样记（这就是它存在的意义）。
+    try {
+      const gateInfo = getLastSpeakGate()
+      const gateEv = roundGateEvent(gateInfo?.gate, { round: roundId })
+      if (gateEv) {
+        appendEvents(LEDGER_FILE, [gateEv])
+        log(describeRoundGate(gateInfo.gate))
+      }
+    } catch (e) { log(`写 speak-decision 失败（不影响本轮）：${e?.message ?? e}`) }
     args.push(dutyPrompt)
     log(`值班轮开跑（${why}）：profile=${profile} cli=${cli}`)
     log(`值班轮 spawn 调试：execPath=${process.execPath} resourcesPath=${process.resourcesPath || '（无）'}`)
@@ -1951,12 +1992,15 @@ export function apply(ctx, config) {
             const out = editExpressionBank(body || {})
             if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error || '语料库更新失败' })
             log(`语料库已更新（${out.action} / ${out.form}）：共 ${out.total} 条${out.soft ? `，回收站 ${out.disabled ?? 0} 条（可 restore）` : ''}`)
+            // 语料库的 bank.active 是 L4 反抄快照的输入 ⇒ 改了库就重导规则文件（同样失败不拖垮）
+            if (out.lintRules && out.lintRules.ok === false) log(`⚠️ 质量门规则重导失败（语料库已更新）：${out.lintRules.error}`)
             return sendJson(res, 200, {
               ok: true, action: out.action, form: out.form,
               total: out.total, buckets: out.buckets, updatedAt: out.updatedAt,
               // W3-3：remove = 软删除（客户端据此显示「已移入回收站（可恢复）」）；disabled = 回收站条数
               soft: out.soft === true, disabled: Number(out.disabled) || 0,
               materialized: out.materialized, active: out.active,
+              lintRules: out.lintRules || null,
             })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
@@ -2011,7 +2055,13 @@ export function apply(ctx, config) {
             const out = savePersonaCard(card)
             if (!out.ok) return sendJson(res, 400, { ok: false, errors: out.errors || [], warnings: out.warnings || [] })
             log('人设卡已保存（控制台）')
-            return sendJson(res, 200, { ok: true, warnings: out.warnings || [], snapshot: out.snapshot || '', active: readActive() })
+            // W2-2 收尾：保存卡会**顺带重导** lint-rules.json（§6.3「卡一改就重导」）。
+            // 规则写失败绝不能拖垮保存，但必须留痕 —— 否则规则坏了是静默放行，没人知道。
+            if (out.lintRules && out.lintRules.ok === false) log(`⚠️ 质量门规则重导失败（卡已保存，Python 侧仍用旧规则）：${out.lintRules.error}`)
+            return sendJson(res, 200, {
+              ok: true, warnings: out.warnings || [], snapshot: out.snapshot || '', active: readActive(),
+              lintRules: out.lintRules || null,
+            })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
         if (req.method === 'POST' && path === '/api/bili-fenshen/persona/versions/restore') {
@@ -2022,7 +2072,8 @@ export function apply(ctx, config) {
             const out = savePersonaCard(snap)
             if (!out.ok) return sendJson(res, 400, { ok: false, errors: out.errors || [] })
             log('人设版本已回滚：' + String(body?.name || ''))
-            return sendJson(res, 200, { ok: true, snapshot: out.snapshot || '', active: readActive() })
+            if (out.lintRules && out.lintRules.ok === false) log(`⚠️ 质量门规则重导失败（版本已回滚，Python 侧仍用旧规则）：${out.lintRules.error}`)
+            return sendJson(res, 200, { ok: true, snapshot: out.snapshot || '', active: readActive(), lintRules: out.lintRules || null })
           } catch (e) { return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }) }
         }
         if (req.method === 'POST' && path === '/api/bili-fenshen/persona/preset') {
