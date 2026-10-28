@@ -103,6 +103,7 @@ export function buildOverview(o = {}) {
         proactive: currentAcc.counts.proactive,
         scans: currentAcc.counts.scans,
         replies: currentAcc.counts.replies,
+        personaTag: currentAcc.personaTag || '',
       }
     : lastRound
       ? {
@@ -114,8 +115,9 @@ export function buildOverview(o = {}) {
           proactive: lastRound.counts.proactive,
           scans: lastRound.counts.scans,
           replies: lastRound.counts.replies,
+          personaTag: lastRound.personaTag || '',
         }
-      : { roundId: null, picked: 0, comments: 0, likes: 0, dynamics: 0, proactive: 0, scans: 0, replies: 0 }
+      : { roundId: null, picked: 0, comments: 0, likes: 0, dynamics: 0, proactive: 0, scans: 0, replies: 0, personaTag: '' }
 
   const win = nextWindow(cfg, now)
   const presence = o.presence || presenceFrom(events, { now: now.getTime() })
@@ -147,6 +149,9 @@ export function buildOverview(o = {}) {
     round: {
       running,
       roundId,
+      // W2-1：这轮实际注入的人设版本（控制台页头 / 人设页「本轮实际注入」都读它）
+      personaTag: perRound.personaTag || '',
+      personaInject: currentAcc?.personaInject || lastRound?.personaInject || null,
       startedAt: running ? String(live?.startedAt || state.lastRunStartedAt || '') : String(state.lastRunStartedAt || ''),
       elapsedMs: running ? Number(live?.elapsedMs) || 0 : 0,
       phase: live?.phase || { key: 'think', label: '思考' },

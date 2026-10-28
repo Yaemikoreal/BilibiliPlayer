@@ -7,6 +7,7 @@
  * - 接话扫描是否发生，也必须能从账本算出来（proactiveMissing），否则「没接」和「没想」分不清。
  */
 import { dayKeyOf } from './activity.js'
+import { personaInjectOf } from './persona/attribution.js'
 
 const DAY_MS = 86400_000
 
@@ -60,6 +61,8 @@ export function roundAccounting(events, roundId, opts = {}) {
     }
   }
   const startMs = roundStartOf(roundId) || Date.parse(startedAt) || 0
+  // W2-1 归因：这一轮吃的是哪版人设、砍了什么（账本里有 persona-inject 才有）
+  const personaInject = personaInjectOf(mine, roundId)
   // 只有在「真读过内容」（有 view）时才要求扫描——整轮只发动态/什么都拉不到的不算违规
   const missing = counts.views > 0 && counts.scans === 0 && counts.proactive === 0
   const judged = startMs >= scanSince
@@ -78,37 +81,59 @@ export function roundAccounting(events, roundId, opts = {}) {
     proactiveMissing,
     proactiveJudged: judged,
     reason,
+    personaTag: String(personaInject?.personaTag || ''),
+    personaInject,
   }
 }
 
 /** 最近一轮（按 round-end 时间，其次按 round id）。没有任何轮次返回 null。 */
 export function lastRoundFrom(events, opts = {}) {
   const list = Array.isArray(events) ? events : []
-  const ids = []
-  const seen = new Set()
+  // ⭐ W4 性能：**单遍**聚合每个轮次的「首事件时间 / 末个 round-end 时间 / 首次出现序号」，
+  //    只对胜出的那一轮跑一次完整 roundAccounting。
+  //    旧实现是 `ids.map(id => roundAccounting(list, id))` —— 每轮都过滤一遍全量账本，
+  //    复杂度 O(轮次 × 事件)。实测 8k 事件 × 67 轮 ≈ 7ms，10 万行账本（几百轮）会到几十 ms，
+  //    而概览每帧（SSE tick）都要重算它。轮次排序键与旧实现逐字段一致，见下方 sort 计算。
+  const byRound = new Map()
+  let appear = 0
   for (const e of list) {
     if (!e || !e.round || typeof e.round !== 'string') continue
-    if (seen.has(e.round)) continue
-    seen.add(e.round)
-    ids.push(e.round)
+    appear += 1
+    const t = String(e.t || '')
+    let r = byRound.get(e.round)
+    if (!r) {
+      r = { roundId: e.round, firstAppear: appear, firstT: t, endedT: '' }
+      byRound.set(e.round, r)
+    }
+    if (t && (!r.firstT || t < r.firstT)) r.firstT = t
+    // 同一轮多个 round-end 时，数组顺序里靠后的那个生效（与 roundAccounting 的循环一致）
+    if (e.type === 'round-end' && t) r.endedT = t
   }
-  if (!ids.length) return null
-  const scored = ids.map((id) => {
-    const acc = roundAccounting(list, id, opts)
-    const endMs = Date.parse(acc.endedAt) || 0
-    const startMs = acc.startMs || 0
-    return { acc, sort: endMs || startMs }
-  })
-  scored.sort((a, b) => b.sort - a.sort)
-  const best = scored[0].acc
+  if (!byRound.size) return null
+
+  let best = null
+  for (const r of byRound.values()) {
+    const startMs = roundStartOf(r.roundId) || Date.parse(r.firstT) || 0
+    const sort = Date.parse(r.endedT) || startMs
+    // 旧实现用稳定 sort + 首次出现顺序决定并列，这里显式复刻同一口径
+    if (!best || sort > best.sort || (sort === best.sort && r.firstAppear < best.r.firstAppear)) {
+      best = { r, sort }
+    }
+  }
+  if (!best) return null
+
+  const acc = roundAccounting(list, best.r.roundId, opts)
   return {
-    roundId: best.roundId,
-    startedAt: best.startedAt || (best.startMs ? new Date(best.startMs).toISOString() : ''),
-    endedAt: best.endedAt,
-    code: best.code,
-    durationMs: best.durationMs,
-    counts: best.counts,
-    proactiveMissing: best.proactiveMissing,
+    roundId: acc.roundId,
+    startedAt: acc.startedAt || (acc.startMs ? new Date(acc.startMs).toISOString() : ''),
+    endedAt: acc.endedAt,
+    code: acc.code,
+    durationMs: acc.durationMs,
+    counts: acc.counts,
+    proactiveMissing: acc.proactiveMissing,
+    // W2-1：概览页头「这个号现在是谁」直接读这里（没有注入记录时是空串）
+    personaTag: acc.personaTag || '',
+    personaInject: acc.personaInject || null,
   }
 }
 

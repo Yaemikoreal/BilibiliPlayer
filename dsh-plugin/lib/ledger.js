@@ -62,16 +62,18 @@ const salvageObjects = (line) => {
   return out
 }
 
-export function readEvents(file) {
-  let text = ''
-  try {
-    if (!existsSync(file)) return []
-    text = readFileSync(file, 'utf8')
-  } catch {
-    return []
-  }
+/** 账本事件的统一排序口径（时间字符串升序；Node 的 sort 是稳定排序）。 */
+export const sortEvents = (list) => [...list].sort((a, b) => String(a.t || '').localeCompare(String(b.t || '')))
+
+/**
+ * 把一段账本文本解析成事件数组（**不排序**）。
+ *
+ * 单独抽出来是为了让增量读（lib/ledger-index.js）与全量读共用**同一套解析器**：
+ * 两套解析逻辑早晚会漂移，而账本里每一行都可能是「一行塞多个对象」的脏数据。
+ */
+export const parseLedgerText = (text) => {
   const out = []
-  for (const raw of text.split('\n')) {
+  for (const raw of String(text ?? '').split('\n')) {
     const line = raw.trim()
     if (!line) continue
     let one = null
@@ -81,8 +83,18 @@ export function readEvents(file) {
       if (ev && typeof ev === 'object' && typeof ev.type === 'string') out.push(ev)
     }
   }
-  out.sort((a, b) => String(a.t || '').localeCompare(String(b.t || '')))
   return out
+}
+
+export function readEvents(file) {
+  let text = ''
+  try {
+    if (!existsSync(file)) return []
+    text = readFileSync(file, 'utf8')
+  } catch {
+    return []
+  }
+  return sortEvents(parseLedgerText(text))
 }
 
 export function isDuplicate(existing, candidate) {
