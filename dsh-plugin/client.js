@@ -2025,6 +2025,68 @@ window.__ModuleLoader__.load({
     const PF_HIT_LABEL = { lore: '见闻', canon: '被问到', expression: '语料' }
     const pctText = (x) => Math.round((Number(x) || 0) * 100) + '%'
 
+    /**
+     * 回滚出口：legacy 直通（旧 `personaPrompt`）。
+     *
+     * 这个字段原先在「设置 → 内容与禁令」里有一个编辑框 —— 但人设内容已经在本页有完整的
+     * 卡 / 素材 / 版本编辑入口，同一个字段两处能改只会让人分不清哪边生效（2026-10-28 主人指正：
+     * 「设置里那个没什么意义」）。所以设置页只管运行参数，这里只留**应急回滚**：
+     *   - 填回一段正文 / 一个文件路径 ⇒ 本轮注入回到 v1（legacy 直通，行为一字不差）；
+     *   - 清空 ⇒ 立刻回到人设卡链路。
+     * 收起时不发请求（enabled=open），展开才读 /config；写完刷新人设页的取数。
+     */
+    function LegacyFallback({ legacy, onChanged }) {
+      const [open, setOpen] = React.useState(!!legacy)   // legacy 生效时默认展开：这时它是本页唯一有用的东西
+      const [text, setText] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [msg, setMsg] = React.useState('')
+      const cfg = usePoll(React.useCallback(() => cachedGet('/config'), []), 30000, open)
+      const cfgVals = (cfg.data && cfg.data.values) || null
+      const cur = cfgVals && typeof cfgVals.personaPrompt === 'string' ? cfgVals.personaPrompt : ''
+      const val = text == null ? cur : text
+      const save = async (next) => {
+        setBusy(true); setMsg('')
+        try {
+          const r = await apiPost('/config', { personaPrompt: next })
+          if (r && r.ok) {
+            setText(null)
+            setMsg(next ? '已切到 legacy 直通（下一轮生效）' : '已清空：下一轮回人设卡')
+            cfg.refresh()
+            if (onChanged) onChanged()
+          } else {
+            const first = r && Array.isArray(r.errors) && r.errors[0]
+            setMsg('保存失败：' + ((r && (r.error || (first && (first.msg || first.path)))) || '未知错误'))
+          }
+        } catch (e) { setMsg('保存失败：' + String(e && e.message != null ? e.message : e)) } finally { setBusy(false) }
+      }
+      return h('details', {
+        className: 'bf-group', open,
+        onToggle: (e) => {
+          const o = !!(e && e.currentTarget && e.currentTarget.open)
+          if (o !== open) setOpen(o)
+        },
+      },
+        h('summary', null, '回滚出口：legacy 直通（旧 personaPrompt）'),
+        h('div', { style: { marginTop: 8 } },
+          h('div', { className: 'bf-note', style: { marginBottom: 8 } },
+            '人设内容只在本页维护。这里留一个应急出口：卡链路整体不对劲时，把旧提示词填回来，'
+            + '本轮注入就回到 v1 的做法（一字不差）；清空即回到人设卡。'),
+          legacy ? h('div', { className: 'bf-banner warn', style: { marginBottom: 8 } },
+            h('span', null, '当前生效中：legacy 直通。本页的人设卡与编译预览不生效。')) : null,
+          h('textarea', {
+            value: val, 'aria-label': '旧人设提示词（legacy）',
+            placeholder: '一段正文，或一个文件路径（/绝对路径、~/…、Windows 盘符、preset:whale；填目录则读其中的 AGENTS.md）',
+            onChange: (e) => setText(e.target.value),
+          }),
+          h('div', { className: 'bf-edit-actions' },
+            h(Btn, { variant: 'primary', disabled: busy || val === cur, onClick: () => save(val) }, '保存并生效'),
+            h(Btn, { variant: 'ghost', disabled: busy || !cur, onClick: () => save('') }, '清空：回到人设卡'),
+            msg ? h('span', { className: 'bf-note' }, msg) : null,
+          ),
+        ),
+      )
+    }
+
     function PersonaPage({ persona, initial, initialTab, ov }) {
       const prevHook = usePoll(React.useCallback(() => cachedGet('/persona/preview'), []), 60000)
       const exprHook = usePoll(React.useCallback(() => cachedGet('/persona/expression'), []), 60000)
@@ -2555,6 +2617,7 @@ window.__ModuleLoader__.load({
               '保存会校验 schema + L0 前六条（红线三件套/禁止句/手段表/词频/矛盾/示例），失败返回字段级错误。'),
           ),
         ),
+        h(LegacyFallback, { legacy, onChanged: refreshAll }),
       )
 
       /* ── ② 素材库（语料 + 见闻） ── */
@@ -2852,7 +2915,8 @@ window.__ModuleLoader__.load({
         head,
         h('div', { className: 'bf-pagemain' },
           legacy ? h('div', { className: 'bf-banner warn' },
-            h('span', null, '配置里填了 personaPrompt：本轮走 legacy 直通，本页的卡与编译预览不生效；切预设只改 active.json，不会覆盖配置。')) : null,
+            h('span', null, '配置里填了 personaPrompt：本轮走 legacy 直通，本页的卡与编译预览不生效；切预设只改 active.json，不会覆盖配置。'
+              + '要回到人设卡，去「人设卡 → 回滚出口」点「清空：回到人设卡」。')) : null,
           mode === 'missing' ? h('div', { className: 'bf-banner error' },
             h('span', null, '人设卡读不到：' + (health.detail || '未知原因') + '，可切一个内置预设恢复。')) : null,
           err ? h('div', { className: 'bf-banner error' }, h('span', null, '读取失败：' + err)) : null,
@@ -2945,8 +3009,16 @@ window.__ModuleLoader__.load({
       const cfgData = cfg.data || initial || null
       const models = useModels(sub === 'env')
       const diag = useDiagnose()
-      const [draft, setDraft] = React.useState(initial ? { ...initial.values } : null)
-      React.useEffect(() => { if (cfgData && !draft) setDraft({ ...cfgData.values }) }, [cfgData, draft])
+      /* 人设内容不归设置页管（唯一入口在「人设 → 人设卡 → 回滚出口」）：
+       * personaPrompt **不进 draft**，所以设置页既不会显示它、也不会把它写回去
+       * ——否则在本页点一次「恢复默认」就会静默清掉人设页设的回滚开关，且用户看不见。 */
+      function noPersona(o) {
+        const x = { ...(o || {}) }
+        delete x.personaPrompt
+        return x
+      }
+      const [draft, setDraft] = React.useState(initial ? noPersona(initial.values) : null)
+      React.useEffect(() => { if (cfgData && !draft) setDraft(noPersona(cfgData.values)) }, [cfgData, draft])
       const [msg, setMsg] = React.useState('')
       if (!draft) return h('div', { className: 'bf-note' }, '加载中…')
 
@@ -2967,7 +3039,7 @@ window.__ModuleLoader__.load({
       const resetDefault = () => {
         if (typeof window !== 'undefined' && window.confirm
           && !window.confirm('恢复默认会把 ' + dirtyKeys.length + ' 处字段改回默认值（还没保存）。继续？')) return
-        setDraft({ ...cfgData?.defaults })
+        setDraft(noPersona(cfgData?.defaults))
       }
       const followDefault = async () => {
         const patch = { modelProvider: '', modelName: '', modelReasoningEffort: '' }
@@ -3064,16 +3136,6 @@ window.__ModuleLoader__.load({
           })),
       )
 
-      const personaPromptGroup = h(Group, { title: '人设直通（legacy）' },
-        h(Row, { label: '人设提示词', help: '留空＝中性说话；也可填文件路径（/绝对路径 或 ~/，目录则读其中的 AGENTS.md）', wide: true },
-          h('textarea', {
-            value: draft.personaPrompt || '',
-            placeholder: '例如：二十五六岁，喜欢硬件测评和游戏，说话短、不客套，偶尔自嘲。',
-            'aria-label': '人设提示词',
-            onChange: (e) => set('personaPrompt', e.target.value),
-          })),
-      )
-
       const cliPath = ov?.data?.health?.cli
       const envGroup = h(Group, { title: '运行环境' },
         h(Row, {
@@ -3105,7 +3167,9 @@ window.__ModuleLoader__.load({
       const body = sub === 'rules'
         ? h('div', { className: 'bf-config' }, rulesGroup, quotaGroup)
         : sub === 'content'
-          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup, qualityGateGroup, personaPromptGroup)
+          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup, qualityGateGroup,
+              h('div', { className: 'bf-note', style: { marginTop: 12 } },
+                '人设内容（身份 / 口吻 / 素材 / 回滚）统一在「人设」页维护；设置页只放运行参数与默认禁令。'))
           : h('div', { className: 'bf-config' },
               h(ModelFields, { draft, onChange: setPatch, models, onFollow: followDefault }),
               envGroup,

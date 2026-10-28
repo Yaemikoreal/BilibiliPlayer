@@ -397,6 +397,8 @@ const personaLegacy = check('ConsolePage（v4 · 人设 · legacy）', () => ren
 }))
 expectPage('v4 人设 legacy', personaLegacy, [
   'legacy 直通', '人设卡（当前未生效）', '本轮走 legacy 直通', '不会覆盖配置',
+  // 2026-10-28：回滚出口从「设置 → 内容与禁令」搬到人设页（人设内容只有一个编辑入口）
+  '回滚出口：legacy 直通（旧 personaPrompt）', '当前生效中：legacy 直通', '清空：回到人设卡',
 ])
 
 /* ═════════ ⑫ W5 人设页四块：页头 / 本轮注入 / 体检 / 换卡对比（各两态） ═════════ */
@@ -439,6 +441,10 @@ expectAll('v4 人设 · 换卡对比（有数据）', personaBlocks, [
 expectAll('v4 人设 · 发言门控行（有数据）', personaBlocks, [
   'data-block="persona-gate"', '发言门控', '观察中 · 不拦', '收紧',
   '节奏偏密：最近 5 个动作里说了 3 次',
+])
+// 2026-10-28：卡模式下回滚出口也在（收起但不消失），文案必须写明「人设内容只在本页维护」
+expectAll('v4 人设 · 回滚出口（卡模式）', personaBlocks, [
+  '回滚出口：legacy 直通（旧 personaPrompt）', '人设内容只在本页维护', '清空：回到人设卡',
 ])
 
 /* 无数据态（端点已就绪但没数据 / 概览里没有 persona-inject）：
@@ -559,6 +565,16 @@ expectPage('v4 设置内容', settingsContent, [
   '发言门控', '观察中（只记录、不拦，推荐先跑三天）', '强制（节奏太密时把本轮评论上限压到 1 条）',
   '观察中 ≠ 已经拦截',
   '只转正已确认的候选',
+])
+/* 2026-10-28：人设内容只能有一个编辑入口（人设页）。设置页不再重复放 personaPrompt 编辑框
+ * ——同一个字段两处能改，会让人分不清哪边生效；但必须写清楚「去哪改」，别让人找不到。 */
+for (const gone of ['人设直通（legacy）', 'aria-label="人设提示词"']) {
+  if (settingsContent.includes(gone)) {
+    console.log(`✗ FAIL 设置页仍在重复人设编辑入口「${gone}」`); bad++
+  }
+}
+expectAll('v4 设置 · 人设入口指向人设页', settingsContent, [
+  '人设内容（身份 / 口吻 / 素材 / 回滚）统一在「人设」页维护',
 ])
 
 /* ═════════ ⑬ settings.section 入口 ═════════ */
