@@ -38,7 +38,7 @@
 
 | 指标 | 值 | 出处 |
 |---|---|---|
-| 测试 | **219 pass**（本稿基线）→ **410 pass / 0 fail**（W0–W7 之后实测） | `npm test` |
+| 测试 | **219 pass**（本稿基线）→ **432 pass / 0 fail**（W0–W7 之后实测） | `npm test` |
 | 人设编译体量 | whale **1,404** / elaina 1,356 / generic 1,464 字符 | 实测 `compilePersona` |
 | 分块体量 | core 885–1010 / lore 0–195 / state 157 / samples 72 / tail 95–117 | 同上 |
 | 注入两段 | before ≈1010–1118（章程前）、after ≈324–346（末尾） | `index.js:82-91`（行号已漂移，见 §4.5） |
@@ -271,7 +271,7 @@ B 的三条契约风险（实施时逐条守）：
 | **W1-4** | L0 与注入口径统一（3 项） | A-P0-⑤ / B-B1-3 | ✅（另：judgement/quota 定论不注入、尾注病句修复、canon 4→6） |
 | **W1-5** | 降级接线（保尾注） | A-P0-④ / B-B1-6 | ✅（二次编译 + state:drop + 兜底砍前段保尾注） |
 | **W2-1** | 归因 `persona-inject` + 报告/概览 `personaTag` | A-§11 / B-B1-4 | ✅ 完成（账本事件 + 报告头照抄行 + 概览字段） |
-| **W2-2** | 质量门 lint（JS 规则 + Python 哑执行） | A-§8 / B-B1-5 | ✅ 代码完成（默认 warn；**上线前需跑一次 `node scripts/export-lint-rules.mjs`** 生成规则文件） |
+| **W2-2** | 质量门 lint（JS 规则 + Python 哑执行） | A-§8 / B-B1-5 | ✅ 完成：默认 warn + Python 哑执行 + **保存卡/语料库即重导规则文件**（保留人工 mode，失败不拖垮保存）+ 三个写接口透传 `lintRules`；规则文件已导到真实家目录 |
 | **W2-3** | 语料治理（origin 三分 + 反抄 + situation/style） | A-§8 | ✅ lib 完成（生产接线待补：`bili_persona_note` 缺 `originalText`、`review`/`growthCheckedOnly` 未接 config） |
 | **W3-1~6** | 稳定性 6 项（overlay/轮询/素材/原子写/路径/超时） | B-B2-1,6,7,8,9,10 | ✅ 全部：overlay 失败中止本轮 + `lastError` / 轮询超时退避 / 素材 `.bak`×3+软删+孤儿扫描 / 两处 state.json 原子写 / `personaPrompt` 支持 `preset:` 与相对根 / spawn 20 分钟硬超时 + 进程树 kill |
 | **W3-7~8** | dshBin 缓存、日志治理 | B-B2-2,3,4,5 | ✅（含轮转 2 代） |
@@ -280,7 +280,7 @@ B 的三条契约风险（实施时逐条守）：
 | **W6-1** | C3 路径 A：`bili_persona_lore(keyword)` | A-§6 路径A | ✅ 工具落地（24 例）+ 提示词侧已切换 + `dutyTools` 白名单 |
 | **W6-2** | C3 路径 B：companion（**有条件**） | A-§6 路径B | ⏸ 暂缓（§6.1 三条门槛未变） |
 | **W7-1** | 记忆：聚合 + 重要度 + 7 天半衰期 + 限量注入 | A-§7 | ✅（C2 注入 ≤2 条 ≤300 字；通道迁 C3 可等 W6-2） |
-| **W7-2** | 发言门控：6 特征打分 + `speak-decision` | A-§9 | ⏳ 打分核心 + 测试 ✅（`lib/persona/speak.js`，10 例）；**尚未接进 `buildDutyPrompt`**（建议先 observe 模式只记录不拦） |
+| **W7-2** | 发言门控：6 特征打分 + `speak-decision` | A-§9 | ✅ 完成：`lib/persona/speak.js`（候选级 6 特征打分 + 轮级节奏闸）；默认 **observe 只记不拦**，`enforce` 才压上限；`speak-decision` 落账本、概览 `round.speakGate`、控制台三处可读 |
 | **W7-3** | 体检超阈值 → 下一轮自纠 | A-§10 | ✅（超阈值才加一句动作；结论写进 `persona-inject.checkup`） |
 
 ### 5.2 W0 · 补尾巴 + 收尾提交（0.4 人日）
@@ -703,5 +703,60 @@ lintComment({ text, mode, card, rules, bank }) → { ok, level:'block'|'warn', c
    楼中楼 ≤40 字 / 人设页四块可读 / `duty.log` 无 U+FFFD）——全部需要主人点头跑一轮。
 5. 已知小尾巴（都不阻塞）：`/persona/history` 全量扫描（10 万行 5–8ms，30s 轮询可接受）；
    14 天窗口化后"永远显示上一轮"不可得（有意）；`scripts/snapshot-console.mjs` 未补新端点数据。
+
+---
+
+## 14 进度快照·第三轮（2026-10-29 凌晨）
+
+> 第三轮把 §13.4 的 1、2 两条做完，并把"控制台可解释"与"demo 数据"补齐。
+> 测试基线 410 → **432 pass / 0 fail**；四个 smoke exit=0；真实 `duty.log` 490KB / 4,338 行 / **0 个 U+FFFD**。
+
+### 14.1 第三轮交付（3 个提交）
+
+| 提交 | 内容 |
+|---|---|
+| `8781806` | W7-2 发言门控接线：轮级节奏闸（off/observe/enforce，默认 observe）、`speak-decision` 落账本、概览 `round.speakGate`；含方案第 7 例「spawn 立即退出」故障注入 |
+| `b17cc18` | W2-2 收尾：保存卡/语料库**即重导** `lint-rules.json`（保留人工 mode、失败不拖垮保存）+ 三个写接口透传 `lintRules` + `speakGateMode` 配置项 |
+| `1877f5f` | 控制台三处门控展现（概览卡 / 人设页行 / 设置项）+ 门控 5 份 fixture + 4 条硬守卫断言 + demo 数据补齐 |
+
+### 14.2 本轮实测发现的两个真问题（都被修掉了）
+
+1. **陈年回复会把门控永久钉成"放行"**：真实账本里躺着 2026-04 的 5 条未回 reply-in，
+   不设窗口的话轮级闸每轮都判 `forced`（永不收紧）⇒ W7-2 等于没接。
+   修法：`pendingReplyCount` 只看**近 7 天**；补了「陈年回复不算待回复」的用例。
+2. **假响应体导致"看起来跑了两轮"**：一次性探针的 fake `res` 没实现 `writableEnded`，
+   外层路由把 `api()` 已处理的请求又跑了一遍（真实 HTTP 有 `writableEnded/headersSent`，不会发生）。
+   已把这条坑写进探针注释 —— 免得后人把探针 bug 当成产品 bug 去改。
+
+### 14.3 端到端干跑（临时家目录 + 真实 whale 卡 + 真实配置形状 + 秒退假 dsh）
+
+```
+POST /run => started:true（roundId 2026-10-28T15:36:31.038Z）
+round-end      => { code: 0, durationMs: 69 }
+persona-inject => { tag: whale@2.2.0, layers: 5, total: 2037, degraded: [], hits: 13,
+                    memoryInjected: 1, checkup: 'ok', selfCorrect: '' }
+speak-decision => { scope: 'round', mode: 'observe', decision: 'normal',
+                    reason: '节奏正常（近 2 个动作说了 1 次，距上次 1560 分钟）',
+                    features: { recentShare: 0.5, recentWindow: 2, recentSpoke: 1, gapMinutes: 1560, pendingReplies: 0 } }
+```
+—— 不联网、不发评论、不碰真实家目录。这一步取代了"真机冷启动一轮"里**除了模型发言**以外的全部链路验证。
+
+### 14.4 §10.1 全局 DoD 现状
+
+| # | 项 | 现状 |
+|---|---|---|
+| 1 | `npm test` ≥225 + 四入口 exit=0 | ✅ 432 / 四入口 0 |
+| 2 | bench 有前后数字 | ✅ `docs/analysis/bench-before.md` / `bench-after.md` / `bench-round2.md` |
+| 3 | 真机各一次（6 条） | ⏳ **只差"真跑一轮"**：`duty.log` 无 U+FFFD ✅已验、楼中楼 ≤40 ✅已对齐、人设页四块 ✅render-smoke；剩下 3 条（账本出现 `persona-inject`、同日两轮不重复见闻、"太强了"被拦）需要主人点一次「跑一轮」（会真实发评论、占配额） |
+| 4 | 每 wave 可回滚 | ✅ W1=`personaPrompt`/`modes`/`degrade`；W2=`lint-rules.json` 的 `mode`；W7-2=`speakGateMode:off`；W6=overlay 插行 |
+| 5 | `duty.log` 无新 U+FFFD/ERROR | ✅ 实测 0 个 U+FFFD |
+
+### 14.5 下一轮（收尾清单）
+
+1. **等主人点一次「跑一轮」**（唯一阻塞项）：跑完就能把 §10.1-3 的三条真人验证勾掉，
+   同时给 §6.1 的 W6-2 第一条门槛"连续 3 天值班无回归"起算。
+2. 观察 3 天后按需把 `speakGateMode` 切 `enforce`、把 lint 的 `mode` 从 `warn` 切 `block`（都只需改配置）。
+3. 小尾巴：`/persona/history` 可考虑窗口化；`console-demo-v3.html`（旧静态稿）不消费新字段，
+   若还要 demo 截图，数据源用 `snapshot-console.mjs`。
 
 
