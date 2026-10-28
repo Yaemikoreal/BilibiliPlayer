@@ -751,12 +751,27 @@ speak-decision => { scope: 'round', mode: 'observe', decision: 'normal',
 | 4 | 每 wave 可回滚 | ✅ W1=`personaPrompt`/`modes`/`degrade`；W2=`lint-rules.json` 的 `mode`；W7-2=`speakGateMode:off`；W6=overlay 插行 |
 | 5 | `duty.log` 无新 U+FFFD/ERROR | ✅ 实测 0 个 U+FFFD |
 
-### 14.5 下一轮（收尾清单）
+### 14.5 接下来（只剩主人动作）
 
-1. **等主人点一次「跑一轮」**（唯一阻塞项）：跑完就能把 §10.1-3 的三条真人验证勾掉，
+1. **等主人点一次「跑一轮」**：这一项**没有任何开发工作**，只是让真模型说一次话。
+   §10.1-3 的六条已经在真代码路径上全部验过（见 14.6），但「模型按卡说话」只能真跑一轮看到。
    同时给 §6.1 的 W6-2 第一条门槛"连续 3 天值班无回归"起算。
-2. 观察 3 天后按需把 `speakGateMode` 切 `enforce`、把 lint 的 `mode` 从 `warn` 切 `block`（都只需改配置）。
+2. 观察 3 天后按需把 `speakGateMode` 切 `enforce`、把 lint 的 `mode` 从 `warn` 切 `block`
+   （都只需改配置或点设置页，不用改代码）。
 3. 小尾巴：`/persona/history` 可考虑窗口化；`console-demo-v3.html`（旧静态稿）不消费新字段，
    若还要 demo 截图，数据源用 `snapshot-console.mjs`。
+
+### 14.6 §10.1-3「真机六条」的逐条证据（全部在真代码路径上，临时家目录）
+
+| # | 项 | 证据 |
+|---|---|---|
+| 1 | 账本出现 `persona-inject` | 干跑两轮：账本 `{persona-inject:2, speak-decision:2, round-end:2}`，两条 tag 都是 `whale@2.2.0` |
+| 2 | **同日两轮不重复见闻** | 轮一末 `state.loreUsed = {wuchang-ranked, food-wedding, night-owl}`；轮二 P2 出现「今天用过了：wuchang-ranked、food-wedding、night-owl」且 `used.loreIds = []`；日志「人设用量已转正（lore 3 / canon 6 / 语料 4）」 |
+| 3 | **「太强了」被拦** | 用**真实规则文件副本**跑 `mcp_server._lint_precheck`：`mode=warn` → 放行 + `codes:['L1']`；`mode=block` → `blocked:true, codes:['L1']`（comment 与 reply 都拦）；正常评论不被误杀 |
+| 4 | `duty.log` 无乱码 | 真实 `duty.log` 490,003 字节 / 4,338 行 / **U+FFFD = 0** |
+| 5 | 楼中楼 ≤40 字 | 卡 `voice.modes.reply=40` + 章程 `duty.md` ≤40 + P3/P5 同口径（深夜三者都压到 40） |
+| 6 | 人设页三块可读 | render-smoke 四块 × 「有数据/无数据/正在连接」断言 + `snapshot-console.mjs` 实跑产物含四块有数据态 |
+
+唯一**没有**被覆盖的是"模型真的按卡说话"这件事本身 —— 那需要一次真机值班轮（会真实发评论、占配额）。
 
 
