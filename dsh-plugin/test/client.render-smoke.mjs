@@ -10,7 +10,10 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
-import { FIX, RUNNING_LIVE, RUNNING_OVERVIEW, MISSING_PROACTIVE_OVERVIEW } from './fixtures/console-fixtures.mjs'
+import {
+  FIX, RUNNING_LIVE, RUNNING_OVERVIEW, MISSING_PROACTIVE_OVERVIEW,
+  PERSONA_CHECKUP_EMPTY, PERSONA_HISTORY_EMPTY, NO_PERSONA_INJECT_OVERVIEW,
+} from './fixtures/console-fixtures.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginDir = dirname(here)
@@ -38,9 +41,14 @@ globalThis.document = {
   body: { style: {} },
   activeElement: null,
 }
+/** W4-4：统计 fetch 次数，用来断言 30s 内同一 key 不重复打。 */
+let fetchCount = 0
 globalThis.fetch = async (path) => {
-  const key = String(path).replace(/^\/api\/bili-fenshen/, '').split('?')[0]
-  const data = FIX[key]
+  fetchCount++
+  const clean = String(path).split('?')[0]
+  const key = clean.replace(/^\/api\/bili-fenshen/, '')
+  // FIX 的 key 带 /api/bili-fenshen 前缀；两种都查，保证真发请求的路径也能取到数据
+  const data = FIX[clean] ?? FIX[key]
   return { json: async () => data ?? {}, ok: true }
 }
 // navigator 在 Node 22 是只读 getter —— 用 defineProperty 覆盖（client.js 只在 LogPane 里用到）
@@ -48,7 +56,7 @@ Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText
 
 // ── 加载 client.js ──
 const code = (await import('node:fs')).readFileSync(join(pluginDir, 'client.js'), 'utf8')
-const sandbox = { window: globalThis.window, console, setInterval, clearInterval, setTimeout, clearTimeout, fetch: globalThis.fetch, navigator: globalThis.navigator }
+const sandbox = { window: globalThis.window, console, setInterval, clearInterval, setTimeout, clearTimeout, fetch: globalThis.fetch, navigator: globalThis.navigator, document: globalThis.document, __BF_TEST__: true }
 vm.createContext(sandbox)
 vm.runInContext(code, sandbox)
 const plugin = globalThis.__plugin
@@ -279,6 +287,10 @@ expectPage('v4 人设素材库', personaMaterials, [
   '语料库', '封面能不能好好做？', '桶：question',
   '见闻库', 'wuchang-ranked', '正文内容',
 ])
+/* ⭐ W3-3 软删除：disabled:true 的条目必须渲染成「已删除」态 + 恢复（不能删了既看不见也恢复不了） */
+expectAll('v4 人设素材库 · 回收站（有数据）', personaMaterials, [
+  '这是被软删的语料', 'old-meme', '已删除', '恢复', '彻底删除', '回收站 1',
+])
 
 /* ═════════ ⑩ 人设 · 预览与质量 ═════════ */
 const personaPreview = check('ConsolePage（v4 · 人设 · 预览与质量）', () => render({
@@ -315,6 +327,118 @@ expectPage('v4 人设 legacy', personaLegacy, [
   'legacy 直通', '人设卡（当前未生效）', '本轮走 legacy 直通', '不会覆盖配置',
 ])
 
+/* ═════════ ⑫ W5 人设页四块：页头 / 本轮注入 / 体检 / 换卡对比（各两态） ═════════ */
+/* 有数据：/persona 给页头、概览 round.personaInject 给「本轮注入」、
+ * 两个新端点给「体检」「换卡对比」。四块的数据源都是分钟级变化 ⇒ 走 30s 复用。 */
+const personaBlocks = check('ConsolePage（v4 · 人设 · 四块有数据）', () => render({
+  initialTab: 'persona',
+  initialData: {
+    ov: FIX['/api/bili-fenshen/overview'],
+    personaPage: {
+      persona: FIX['/api/bili-fenshen/persona'],
+      preview: FIX['/api/bili-fenshen/persona/preview'],
+      checkup: FIX['/api/bili-fenshen/persona/checkup'],
+      history: FIX['/api/bili-fenshen/persona/history'],
+    },
+  },
+}))
+expectPage('v4 人设四块', personaBlocks, ['人设', '这个号是谁、说话像不像它'])
+expectAll('v4 人设 · 页头一行（有数据）', personaBlocks, [
+  'data-block="persona-who"', '现在是谁', '蓝色大肥鱼 @2.0.0', '卡（生效）',
+  '上轮注入', 'whale@2.0.0',
+])
+expectAll('v4 人设 · 本轮实际注入（有数据）', personaBlocks, [
+  'data-block="persona-inject"', '本轮实际注入', '合计 1913 / 3000 字符',
+  'P1 常驻核心', '1281/1500', '见闻 wuchang-ranked', '被问到 问是不是 AI',
+  '降级 lore:shrink', '守卫：warn',
+])
+expectAll('v4 人设 · 体检（有数据）', personaBlocks, [
+  'data-block="persona-checkup"', '体检', '近 12 条 vs 247 条基线', '有偏离',
+  '中位字数', '24 字', '基线 27 字', '句号 / 条', '0.083', '表情占比', '75%',
+  '基线 41.7%', '禁用词命中 0%（基线 0）', '表情占比 75%（基线 42%',
+  '原来不是打码，是他自己秒切的屏',
+])
+expectAll('v4 人设 · 换卡对比（有数据）', personaBlocks, [
+  'data-block="persona-history"', '换卡对比', '2 组人设',
+  'whale@2.0.0', '3 轮 · 赞 7', 'elaina@2.0.0', '1 轮 · 赞 0',
+  '封面能不能好好做？', '这句真的是设计师本命',
+])
+
+/* 无数据态（端点已就绪但没数据 / 概览里没有 persona-inject）：
+ * 必须给「暂无数据」，不许崩、不许说「未找到」。 */
+const personaBlocksNoInject = check('ConsolePage（v4 · 人设 · 四块暂无数据）', () => render({
+  initialTab: 'persona',
+  initialData: {
+    ov: NO_PERSONA_INJECT_OVERVIEW,
+    personaPage: {
+      persona: FIX['/api/bili-fenshen/persona'],
+      preview: FIX['/api/bili-fenshen/persona/preview'],
+      checkup: PERSONA_CHECKUP_EMPTY,
+      history: PERSONA_HISTORY_EMPTY,
+    },
+  },
+}))
+expectAll('v4 人设 · 页头一行（无数据）', personaBlocksNoInject, [
+  'data-block="persona-who"', '现在是谁', '上轮注入', '暂无数据',
+])
+expectAll('v4 人设 · 本轮实际注入（无数据）', personaBlocksNoInject, [
+  'data-block="persona-inject"', '本轮实际注入', '暂无数据',
+  '这轮账本里还没有 persona-inject 记录',
+])
+expectAll('v4 人设 · 体检（无数据）', personaBlocksNoInject, [
+  'data-block="persona-checkup"', '体检', '暂无数据', '数据不足',
+])
+expectAll('v4 人设 · 换卡对比（无数据）', personaBlocksNoInject, [
+  'data-block="persona-history"', '换卡对比', '暂无数据',
+  '还没有 persona-inject 归因数据',
+])
+
+/* 字段缺失 / 半截数据：契约字段缺失时必须退化成占位，而不是 SSR 直接抛错 */
+const ovPartial = {
+  ...FIX['/api/bili-fenshen/overview'],
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    personaInject: { personaTag: 'x@1', total: 10, layers: null, hits: null, degraded: null, notes: null },
+  },
+}
+const personaBlocksPartial = check('ConsolePage（v4 · 人设 · 四块字段缺失）', () => render({
+  initialTab: 'persona',
+  initialData: {
+    ov: ovPartial,
+    personaPage: {
+      persona: FIX['/api/bili-fenshen/persona'],
+      checkup: { ok: true, windowDays: 7, n: 6, metrics: {}, verdict: { level: 'bad' }, samples: null },
+      history: { ok: true, tags: [{ personaTag: 'x@1', samples: null }] },
+    },
+  },
+}))
+expectAll('v4 人设 · 字段缺失退化', personaBlocksPartial, [
+  '本轮实际注入', 'whale@2.0.0 · 合计 10 / 0 字符',
+  '这轮没有分块统计', '无降级', '这版人设还没有评论样本。',
+  '暂无数据',                            // 体检 metrics 半截 → 不假装体检过
+])
+
+/* 首帧未到（initialData 全空）：四块统一「正在连接…」，且不回归误报文案。 */
+const personaBlocksNoInit = check('ConsolePage（v4 · 人设 · 四块正在连接）', () => render({
+  initialTab: 'persona',
+  initialData: { personaPage: {} },
+}))
+expectAll('v4 人设 · 页头一行（正在连接）', personaBlocksNoInit, [
+  'data-block="persona-who"', '现在是谁', '正在连接…',
+])
+expectAll('v4 人设 · 本轮实际注入（正在连接）', personaBlocksNoInit, [
+  'data-block="persona-inject"', '本轮实际注入', '正在连接…',
+])
+expectAll('v4 人设 · 体检（正在连接）', personaBlocksNoInit, [
+  'data-block="persona-checkup"', '体检', '正在连接…',
+])
+expectAll('v4 人设 · 换卡对比（正在连接）', personaBlocksNoInit, [
+  'data-block="persona-history"', '换卡对比', '正在连接…',
+])
+for (const bogus of ['找不到 dsh CLI', '数据 刚刚', '未找到', 'undefined']) {
+  if (personaBlocksNoInit.includes(bogus)) { console.log(`✗ FAIL 人设页首帧误报「${bogus}」`); bad++ }
+}
+
 /* ═════════ ⑫ 设置 · 3 组 ═════════ */
 const settingsRules = check('ConsolePage（v4 · 设置 · 节奏与配额）', () => render({
   initialTab: 'settings', initialData: { config: FIX['/api/bili-fenshen/config'] },
@@ -333,6 +457,40 @@ expectAll('v4 设置行式', settingsRules, ['class="bf-row-main"', 'class="bf-r
 /* ═════════ ⑬ settings.section 入口 ═════════ */
 const settingsHtml = check('SettingsEntry 静态壳', () => renderToString(React.createElement(settingsComp)))
 expectAll('设置页入口', settingsHtml, ['安装自检', '一键诊断', '打开控制台'])
+
+/* ═════════ ⑭ W4-4 客户端请求复用：同一 key 30s 内不重复打 + 页面隐藏暂停 ═════════ */
+const bt = plugin.__bfTest
+if (!bt || typeof bt.cachedGet !== 'function') {
+  console.log('✗ FAIL client.js 未暴露 __bfTest.cachedGet（30s 复用无法验证）'); bad++
+} else {
+  bt.resetGetCache()
+  const c0 = fetchCount
+  await bt.cachedGet('/persona')
+  await bt.cachedGet('/persona')
+  await bt.cachedGet('/persona/preview')
+  await bt.cachedGet('/persona')
+  const dupe = fetchCount - c0
+  if (dupe !== 2) { console.log(`✗ FAIL 30s 复用：4 次调用应只打 2 次请求，实际 ${dupe}`); bad++ }
+  else console.log('✓ 30s 复用：同一 key 4 次调用只打 2 次请求')
+
+  // 过期（把 at 拨回 31s 前）后允许重打
+  bt.GET_CACHE.get('/persona').at = Date.now() - (bt.GET_TTL_MS + 1000)
+  await bt.cachedGet('/persona')
+  if (fetchCount - c0 !== 3) { console.log('✗ FAIL 30s 过期后应重打一次'); bad++ }
+  else console.log('✓ 30s 过期后重打一次')
+
+  // 页面隐藏：即使过期也不发新请求；无缓存回 null
+  bt.GET_CACHE.get('/persona').at = Date.now() - (bt.GET_TTL_MS + 1000)
+  globalThis.document.hidden = true
+  const hiddenBefore = fetchCount
+  const stale = await bt.cachedGet('/persona')
+  const nullish = await bt.cachedGet('/persona/lore')
+  globalThis.document.hidden = false
+  if (fetchCount !== hiddenBefore) { console.log('✗ FAIL 页面隐藏时不应发新请求'); bad++ }
+  else if (!stale || stale.ok !== true) { console.log('✗ FAIL 页面隐藏且缓存过期时应复用旧值'); bad++ }
+  else if (nullish !== null) { console.log('✗ FAIL 页面隐藏且无缓存时应返回 null'); bad++ }
+  else console.log('✓ 页面隐藏：暂停请求、复用旧值、无缓存回 null')
+}
 
 console.log(bad === 0 ? 'RENDER SMOKE ALL GREEN' : `${bad} 项失败`)
 process.exit(bad === 0 ? 0 : 1)

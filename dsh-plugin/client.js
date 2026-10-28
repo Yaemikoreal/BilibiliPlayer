@@ -647,6 +647,36 @@ window.__ModuleLoader__.load({
       body: body ? JSON.stringify(body) : '{}',
     }).then((r) => r.json())
 
+    /* ── W4-4：GET 30 秒复用（同一 key 30s 内不重复打；页面隐藏时暂停发新请求） ──
+     * 人设页首屏要打 /persona、/persona/preview、/persona/expression、/persona/lore
+     * 以及新增的 /persona/checkup、/persona/history 六个请求，而这六份数据都是分钟级变化。
+     * 用一个极小的 TTL Map 兜住「同一 key 30s 内只打一次」：
+     *   - 命中且未过期：直接返回缓存里的 promise（并发调用也只会打一次）；
+     *   - 已过期但页面隐藏：返回旧 promise，**不发**新请求（人看不见时不占网络）；
+     *   - 页面隐藏且没有缓存：返回 null（usePoll 保留「正在连接…」空态）；
+     *   - 失败不缓存：删掉条目，下一次轮询自然重试。
+     * 手动刷新（刷新人设数据）会先 resetGetCache() 绕过 TTL，点一下就能拿到最新值。
+     */
+    const GET_TTL_MS = 30000
+    const GET_CACHE = new Map()
+    const resetGetCache = () => GET_CACHE.clear()
+    const isPageHidden = () => typeof document !== 'undefined' && document.hidden === true
+    const cachedGet = (path, ttlMs = GET_TTL_MS) => {
+      if (typeof path !== 'string' || !path) return Promise.resolve(null)
+      const hit = GET_CACHE.get(path)
+      const fresh = !!hit && (Date.now() - hit.at) < ttlMs
+      if (fresh || isPageHidden()) return hit ? hit.promise : Promise.resolve(null)
+      const promise = apiGet(path).then(
+        (data) => data,
+        (e) => {
+          if (GET_CACHE.get(path)?.promise === promise) GET_CACHE.delete(path)
+          throw e
+        },
+      )
+      GET_CACHE.set(path, { at: Date.now(), promise })
+      return promise
+    }
+
     /* ─── 格式化 ─── */
     const fmtDur = (ms) => {
       const s = Math.round((Number(ms) || 0) / 1000)
@@ -1111,7 +1141,7 @@ window.__ModuleLoader__.load({
       return Number.isFinite(start) ? Math.max(0, now - start) : fallback
     }
 
-    const usePersona = (enabled = true) => usePoll(React.useCallback(() => apiGet('/persona'), []), 30000, enabled)
+    const usePersona = (enabled = true) => usePoll(React.useCallback(() => cachedGet('/persona'), []), 30000, enabled)
     const useModels = (enabled = true) => usePoll(React.useCallback(() => apiGet('/models'), []), 60000, enabled)
     const useActivity = (running, enabled = true) =>
       usePoll(React.useCallback(() => apiGet('/activity'), []), running ? 3000 : 15000, enabled)
@@ -1931,11 +1961,21 @@ window.__ModuleLoader__.load({
       quality: 'preview-quality', preview: 'preview-quality', version: 'preview-quality',
       state: 'preview-quality', bank: 'materials', lore: 'materials',
     }
+    /** W5 体检口径的中文展示（§8.2 基线：27 字 / 0.109 / 41.7% / 12.6%）。 */
+    const PF_CHECKUP_VERDICT = {
+      ok: { kind: 'rep', text: '像它' },
+      warn: { kind: 'warn', text: '有偏离' },
+      bad: { kind: 'err', text: '不像它了' },
+    }
+    const PF_HIT_LABEL = { lore: '见闻', canon: '被问到', expression: '语料' }
+    const pctText = (x) => Math.round((Number(x) || 0) * 100) + '%'
 
-    function PersonaPage({ persona, initial, initialTab }) {
-      const prevHook = usePoll(React.useCallback(() => apiGet('/persona/preview'), []), 60000)
-      const exprHook = usePoll(React.useCallback(() => apiGet('/persona/expression'), []), 60000)
-      const loreHook = usePoll(React.useCallback(() => apiGet('/persona/lore'), []), 60000)
+    function PersonaPage({ persona, initial, initialTab, ov }) {
+      const prevHook = usePoll(React.useCallback(() => cachedGet('/persona/preview'), []), 60000)
+      const exprHook = usePoll(React.useCallback(() => cachedGet('/persona/expression'), []), 60000)
+      const loreHook = usePoll(React.useCallback(() => cachedGet('/persona/lore'), []), 60000)
+      const checkupHook = usePoll(React.useCallback(() => cachedGet('/persona/checkup'), []), 60000)
+      const historyHook = usePoll(React.useCallback(() => cachedGet('/persona/history'), []), 60000)
       const versHook = usePoll(React.useCallback(() => apiGet('/persona/versions'), []), 30000)
       const [tab, setTab] = React.useState(PF_TAB_ALIAS[initialTab] || initialTab || 'card')
       const [bucket, setBucket] = React.useState('')
@@ -1978,12 +2018,24 @@ window.__ModuleLoader__.load({
       const curBucket = bucketKeys.includes(bucket) ? bucket
         : (bucketKeys.includes('question') ? 'question' : (bucketKeys[0] || ''))
       const loreEntries = (loreData && loreData.entries) || []
-      const curLore = loreEntries.find((x) => x.id === loreId) || loreEntries[0] || null
+      const curLore = loreEntries.find((x) => x.id === loreId && !x.disabled)
+        || loreEntries.find((x) => !x.disabled) || loreEntries[0] || null
       const versions = (versData && versData.versions) || []
+      // W5：页头一行 / 本轮注入读概览信封（由 ConsolePage 把 rt.data 传进来）；
+      // 体检 / 换卡对比读两个新端点（未就绪时 initial 里没有，页面走「正在连接…」空态）。
+      const ovd = ov || (initial && initial.ov) || null
+      const ckRaw = checkupHook.data || (initial && initial.checkup) || null
+      const ck = ckRaw && ckRaw.ok !== false ? ckRaw : null
+      const histRaw = historyHook.data || (initial && initial.history) || null
+      const hist = histRaw && histRaw.ok !== false ? histRaw : null
+      const inject = (ovd && ovd.round && ovd.round.personaInject) || null
+      const injectTag = (ovd && ovd.round && ovd.round.personaTag) || (inject && inject.personaTag) || ''
 
       const refreshAll = () => {
+        resetGetCache()   // 手动刷新要绕过 W4-4 的 30s 复用
         if (persona && persona.refresh) persona.refresh()
         prevHook.refresh(); exprHook.refresh(); loreHook.refresh(); versHook.refresh()
+        checkupHook.refresh(); historyHook.refresh()
       }
       const switchPreset = async (id) => {
         setBusy(id); setMsg('')
@@ -2045,13 +2097,32 @@ window.__ModuleLoader__.load({
         } catch (e) { setMsg('切换失败：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
       const bankRemove = async (e0) => {
-        if (typeof window !== 'undefined' && window.confirm && !window.confirm('删除这条语料？')) return
+        if (typeof window !== 'undefined' && window.confirm && !window.confirm('删除这条语料？（软删除，可在回收站恢复）')) return
         setBusy('br-' + e0.id); setMsg('')
         try {
           const r = await apiPost('/persona/expression', { action: 'remove', form: curBucket, id: e0.id })
           if (!r.ok) setMsg('删除失败：' + (r.error || '未知'))
-          else { setMsg('已删除'); refreshAll() }
+          else { setMsg(r.soft === true ? '已移入回收站（可恢复）' : '已删除'); refreshAll() }
         } catch (e) { setMsg('删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      /* W3-3：软删除留痕 —— 回收站里的条目可以恢复；「彻底删除」单独二次确认。 */
+      const bankRestore = async (e0) => {
+        setBusy('brr-' + e0.id); setMsg('')
+        try {
+          const r = await apiPost('/persona/expression', { action: 'restore', form: curBucket, id: e0.id })
+          setMsg(r.ok ? '已恢复' : '恢复失败：' + (r.error || '未知'))
+          if (r.ok) refreshAll()
+        } catch (e) { setMsg('恢复失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const bankPurge = async (e0) => {
+        if (typeof window !== 'undefined' && window.confirm
+          && !window.confirm('彻底删除这条语料？删除后不可恢复。')) return
+        setBusy('brp-' + e0.id); setMsg('')
+        try {
+          const r = await apiPost('/persona/expression', { action: 'purge', form: curBucket, id: e0.id })
+          setMsg(r.ok ? '已彻底删除' : '彻底删除失败：' + (r.error || '未知'))
+          if (r.ok) refreshAll()
+        } catch (e) { setMsg('彻底删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
 
       const loreStartEdit = () => {
@@ -2082,13 +2153,31 @@ window.__ModuleLoader__.load({
       }
       const loreRemove = async (id) => {
         if (typeof window !== 'undefined' && window.confirm
-          && !window.confirm('删除见闻「' + id + '」？（索引删掉；已落盘的正文文件保留）')) return
+          && !window.confirm('删除见闻「' + id + '」？（软删除，可在回收站恢复；已落盘的正文文件保留）')) return
         setBusy('lr-' + id); setMsg('')
         try {
           const r = await apiPost('/persona/lore', { action: 'remove', id })
           if (!r.ok) setMsg('删除失败：' + (r.error || '未知'))
-          else { setMsg('已删除'); setLoreId(''); setLoreDraft(null); refreshAll() }
+          else { setMsg(r.soft === true ? '已移入回收站（可恢复）' : '已删除'); setLoreId(''); setLoreDraft(null); refreshAll() }
         } catch (e) { setMsg('删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const loreRestore = async (id) => {
+        setBusy('lrr-' + id); setMsg('')
+        try {
+          const r = await apiPost('/persona/lore', { action: 'restore', id })
+          setMsg(r.ok ? '已恢复' : '恢复失败：' + (r.error || '未知'))
+          if (r.ok) refreshAll()
+        } catch (e) { setMsg('恢复失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const lorePurge = async (id) => {
+        if (typeof window !== 'undefined' && window.confirm
+          && !window.confirm('彻底删除见闻「' + id + '」？删除后不可恢复。')) return
+        setBusy('lrp-' + id); setMsg('')
+        try {
+          const r = await apiPost('/persona/lore', { action: 'purge', id })
+          setMsg(r.ok ? '已彻底删除' : '彻底删除失败：' + (r.error || '未知'))
+          if (r.ok) { setLoreId(''); setLoreDraft(null); refreshAll() }
+        } catch (e) { setMsg('彻底删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
 
       const identity = (cur ? (cur.name || cur.id) : (card ? card.name : '未加载')) +
@@ -2109,6 +2198,201 @@ window.__ModuleLoader__.load({
         PERSONA_TABS.map(([k, label]) => h('button', {
           key: k, role: 'tab', 'aria-selected': String(tab === k), onClick: () => setTab(k),
         }, label)),
+      )
+
+      /* ═══ W5 人设页四个「回答」：页头一行 / 本轮实际注入 / 体检 / 换卡对比 ═══
+       * 数据源：/persona + 概览 round.personaTag|personaInject（已有）；
+       *        /persona/checkup + /persona/history（新端点，未就绪时 initial 里没有 ⇒ 空态）。
+       * 每块都两态：「正在连接…」（首帧未到）/「暂无数据」（到了但没内容），不许谎报。 */
+
+      /* ── ① 页头一行：这个号现在是谁 ── */
+      const whoName = cur ? (cur.name || cur.id) : (card ? (card.name || card.id) : '')
+      const whoVersion = cur?.version || card?.version || ''
+      const whoNow = whoName ? whoName + (whoVersion ? ' @' + whoVersion : '') : ''
+      const whoLine = h('div', {
+        className: 'bf-tools', 'data-block': 'persona-who',
+        style: {
+          padding: '10px 14px', border: '.5px solid var(--border-l2)',
+          borderRadius: 12, background: 'var(--bg-layer-1)',
+        },
+      },
+        h('span', { className: 'bf-note' }, '现在是谁'),
+        whoNow
+          ? h('span', { className: 'bf-strong', style: { fontSize: 13, lineHeight: '20px' } }, whoNow)
+          : h('span', { className: 'bf-note' }, '正在连接…'),
+        whoNow ? h(Pill, { tone: mode === 'card' ? 'ok' : mode === 'legacy' ? 'warn' : 'err' }, modeInfo.text) : null,
+        h(Sp),
+        h('span', { className: 'bf-note' }, '上轮注入'),
+        injectTag
+          ? h('span', { className: 'bf-note st' }, injectTag)
+          : h('span', { className: 'bf-note' }, ovd ? '暂无数据' : '正在连接…'),
+        inject && Number(inject.totalMax)
+          ? h('span', { className: 'bf-pf-num' },
+              (Number(inject.total) || 0) + ' / ' + Number(inject.totalMax) + ' 字符')
+          : null,
+      )
+
+      /* ── ② 本轮实际注入：五块进度条 + 命中见闻 + 降级徽标 ── */
+      const injectLayers = inject && Array.isArray(inject.layers) ? inject.layers : []
+      const injectHits = inject && Array.isArray(inject.hits) ? inject.hits : []
+      const injectDegraded = inject && Array.isArray(inject.degraded) ? inject.degraded : []
+      const injectNotes = inject && Array.isArray(inject.notes) ? inject.notes : []
+      const injectCard = h('div', { 'data-block': 'persona-inject' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '本轮实际注入'),
+            h('span', { className: 'bf-card-note' },
+              inject
+                ? (injectTag || '未知') + ' · 合计 ' + (Number(inject.total) || 0)
+                  + ' / ' + (Number(inject.totalMax) || 0) + ' 字符'
+                : ovd ? '暂无数据' : '正在连接…'),
+            h(Sp),
+            inject && Number(inject.totalMax) && Number(inject.total) > Number(inject.totalMax)
+              ? h(Tag, { kind: 'err' }, '超预算') : null,
+          ),
+          inject
+            ? h('div', null,
+                injectLayers.length
+                  ? injectLayers.map((l) => h('div', { className: 'bf-pf-budget', key: l.name },
+                      h('span', { className: 'bf-note' }, PF_BLOCK_LABEL[l.name] || l.name),
+                      h('div', { className: 'bf-bar' }, h('i', {
+                        className: Number(l.max) && Number(l.chars) > Number(l.max) ? 'over'
+                          : Number(l.max) && Number(l.chars) > Number(l.max) * 0.9 ? 'warn' : '',
+                        style: {
+                          width: Math.min(100, Math.round(
+                            ((Number(l.chars) || 0) / (Number(l.max) || 1)) * 100,
+                          )) + '%',
+                        },
+                      })),
+                      h('span', { className: 'bf-pf-num' }, (Number(l.chars) || 0) + '/' + (Number(l.max) || 0)),
+                    ))
+                  : h('div', { className: 'bf-note' }, '这轮没有分块统计（旧版账本事件）。'),
+                h('div', { className: 'bf-tools', style: { marginTop: 10 } },
+                  h('span', { className: 'bf-note' }, '命中'),
+                  injectHits.length
+                    ? injectHits.map((x, i) => h(Tag, { kind: 'cmt', key: i },
+                        (PF_HIT_LABEL[(x && x.kind)] || (x && x.kind) || '') + ' ' + String((x && x.id) || '')))
+                    : h('span', { className: 'bf-note' }, '无'),
+                  h(Sp),
+                  injectDegraded.length
+                    ? injectDegraded.map((d0, i) => h(Tag, { kind: 'warn', key: i },
+                        '降级 ' + String(d0 == null ? '' : d0)))
+                    : h(Tag, { kind: 'rep' }, '无降级'),
+                ),
+                inject.guard
+                  ? h('div', { className: 'bf-pf-sub' },
+                      '守卫：' + (inject.guard.level || 'ok')
+                      + (Number(inject.guard.len)
+                        ? ' · ' + inject.guard.len + ' / 软线 ' + (inject.guard.softMax || '—')
+                          + ' / 硬线 ' + (inject.guard.hardMax || '—')
+                        : ''))
+                  : null,
+                injectNotes.length
+                  ? h('div', { className: 'bf-pf-sub' },
+                      injectNotes.map((n, i) => h('div', { key: i }, '· ' + String(n == null ? '' : n))))
+                  : null,
+              )
+            : h('div', { className: 'bf-note' },
+                ovd ? '这轮账本里还没有 persona-inject 记录（未走卡链路或还没跑完）。' : '正在连接…'),
+        ),
+      )
+
+      /* ── ③ 体检：说话还像它吗（近 N 条 vs 247 条基线） ── */
+      const ckMetrics = (ck && ck.metrics) || null
+      const ckN = Number(ck && ck.n) || 0
+      const ckMetric = (k) => Number(ckMetrics && ckMetrics[k]) || 0
+      // 至少有一个已知指标才算「有数据」；半截 metrics 按暂无数据处理，别渲染一排 0 假装体检过
+      const ckHasMetrics = !!ckMetrics && ['medianChars', 'periodPerComment', 'emojiRatio', 'questionRatio', 'avoidHits']
+        .some((k) => Number.isFinite(Number(ckMetrics[k])))
+      const ckView = PF_CHECKUP_VERDICT[(ck && ck.verdict && ck.verdict.level) || 'ok'] || PF_CHECKUP_VERDICT.ok
+      const ckSamples = (ck && Array.isArray(ck.samples) ? ck.samples : [])
+        .filter((s0) => s0 && typeof s0 === 'object')
+      const ckReasons = ck && ck.verdict && Array.isArray(ck.verdict.reasons) ? ck.verdict.reasons : []
+      const checkupCard = h('div', { 'data-block': 'persona-checkup' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '体检'),
+            h('span', { className: 'bf-card-note' },
+              ck && ckN
+                ? '近 ' + ckN + ' 条 vs 247 条基线 · 窗口 ' + (Number(ck.windowDays) || 14) + ' 天'
+                : ck ? '暂无数据' : '正在连接…'),
+            h(Sp),
+            ck && ckN ? h(Tag, { kind: ckView.kind }, ckView.text) : null,
+          ),
+          !ck || !ckN || !ckHasMetrics
+            ? h('div', { className: 'bf-note' },
+                ck ? '暂无数据' + (ckReasons[0] ? '：' + ckReasons[0] : '') : '正在连接…')
+            : h('div', null,
+                h('div', { className: 'bf-grid-4' },
+                  h(Metric, { label: '中位字数', value: String(ckMetric('medianChars')) + ' 字', foot: '基线 27 字' }),
+                  h(Metric, { label: '句号 / 条', value: ckMetric('periodPerComment').toFixed(3), foot: '基线 0.109' }),
+                  h(Metric, { label: '表情占比', value: pctText(ckMetric('emojiRatio')), foot: '基线 41.7%' }),
+                  h(Metric, { label: '问号占比', value: pctText(ckMetric('questionRatio')), foot: '基线 12.6%' }),
+                ),
+                h('div', { className: 'bf-tools', style: { marginTop: 8 } },
+                  h('span', { className: 'bf-note' }, '禁用词命中 ' + pctText(ckMetric('avoidHits')) + '（基线 0）'),
+                  h(Sp),
+                  h('span', { className: 'bf-note' }, '样本 ' + ckN + ' 条'),
+                ),
+                ckReasons.length
+                  ? h('div', { style: { marginTop: 8 } },
+                      ckReasons.map((r, i) => h('div', { className: 'bf-note', key: i }, '· ' + r)))
+                  : h('div', { className: 'bf-note', style: { marginTop: 8 } }, '各项指标都在基线附近。'),
+                ckSamples.length
+                  ? h('div', { style: { marginTop: 8 } }, ckSamples.slice(0, 5).map((s0, i) => h('div', {
+                      key: (s0.bvid || '') + i,
+                      style: { padding: '6px 0', borderTop: i ? '.5px solid var(--border-l2)' : 0 },
+                    },
+                      h('div', { style: { fontSize: 13, lineHeight: '20px' } }, (i + 1) + '. ' + String(s0.text || '')),
+                      h('div', { className: 'bf-note' },
+                        [s0.bvid || '', s0.t ? hhmm(s0.t) : ''].filter(Boolean).join(' · ')),
+                    )))
+                  : null,
+              ),
+        ),
+      )
+
+      /* ── ④ 换卡对比：改了卡有变好吗（按 personaTag 分组，各 3 条评论 + 赞） ── */
+      const histTags = (hist && Array.isArray(hist.tags) ? hist.tags : [])
+        .filter((g) => g && typeof g === 'object')
+      const historyCard = h('div', { 'data-block': 'persona-history' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '换卡对比'),
+            h('span', { className: 'bf-card-note' },
+              histTags.length
+                ? histTags.length + ' 组人设 · 每组近 3 条评论 + 赞'
+                : hist ? '暂无数据' : '正在连接…'),
+          ),
+          histTags.length
+            ? h('div', { className: 'bf-grid-2' }, histTags.map((g) => h('div', {
+                key: String(g.personaTag || ''),
+                style: {
+                  border: '.5px solid var(--border-l2)', borderRadius: 12,
+                  padding: '10px 12px', background: 'var(--bg-layer-1)',
+                },
+              },
+                h('div', { className: 'bf-tools' },
+                  h('span', { className: 'bf-strong', style: { fontSize: 13, lineHeight: '20px' } },
+                    String(g.personaTag || '未知')),
+                  h(Sp),
+                  h('span', { className: 'bf-note' },
+                    (Number(g.rounds) || 0) + ' 轮 · 赞 ' + (Number(g.likes) || 0)),
+                  g.lastAt ? h('span', { className: 'bf-note' }, hhmm(g.lastAt)) : null,
+                ),
+                (Array.isArray(g.samples) ? g.samples : []).filter((s0) => s0 && typeof s0 === 'object').length
+                  ? (Array.isArray(g.samples) ? g.samples : [])
+                      .filter((s0) => s0 && typeof s0 === 'object').map((s0, i) => h('div', {
+                      key: i, style: { padding: '6px 0', borderTop: '.5px solid var(--border-l2)' },
+                    },
+                      h('div', { style: { fontSize: 13, lineHeight: '20px' } }, String(s0.text || '')),
+                      h('div', { className: 'bf-note' }, (s0.bvid || '') + ' · 赞 ' + (Number(s0.likes) || 0)),
+                    ))
+                  : h('div', { className: 'bf-note', style: { marginTop: 6 } }, '这版人设还没有评论样本。'),
+              )))
+            : h('div', { className: 'bf-note' },
+                hist ? '还没有 persona-inject 归因数据（跑过卡轮后出现）。' : '正在连接…'),
+        ),
       )
 
       const budgetCard = h(Card, null,
@@ -2204,10 +2488,12 @@ window.__ModuleLoader__.load({
 
       /* ── ② 素材库（语料 + 见闻） ── */
       const bankEntries = (buckets[curBucket] || [])
+      const bankDisabled = bankEntries.filter((e) => e.disabled === true)
       const bankCard = h(Card, null,
         h('div', { className: 'bf-card-head' },
           h('span', { className: 'bf-card-title' }, '语料库'),
-          h('span', { className: 'bf-card-note' }, '逐字真实素材 · 注入时只学手感'),
+          h('span', { className: 'bf-card-note' },
+            '逐字真实素材 · 注入时只学手感' + (bankDisabled.length ? ' · 回收站 ' + bankDisabled.length : '')),
           h(Sp),
           h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: bankStartAdd }, '＋ 新增'),
         ),
@@ -2242,7 +2528,15 @@ window.__ModuleLoader__.load({
             ? bankEntries.map((e, i) => h('div', {
                 key: e.id || i, style: { padding: '9px 0', borderTop: '.5px solid var(--border-l2)' },
               },
-                bankEditId === e.id && bankDraft ? h('div', null,
+                e.disabled === true ? h('div', { style: { opacity: .55 } },
+                  h('div', { style: { fontSize: 13, lineHeight: '20px', textDecoration: 'line-through' } }, e.text),
+                  h('div', { className: 'bf-tools', style: { marginTop: 2 } },
+                    h('span', { className: 'bf-note' }, (e.source || '') + ' · 已删除（回收站）'),
+                    h(Sp),
+                    h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => bankRestore(e) }, '恢复'),
+                    h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => bankPurge(e) }, '彻底删除'),
+                  ),
+                ) : bankEditId === e.id && bankDraft ? h('div', null,
                   h('textarea', {
                     value: bankDraft.text, 'aria-label': '语料正文',
                     onChange: (ev) => setBankDraft({ ...bankDraft, text: ev.target.value }),
@@ -2274,10 +2568,13 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      const loreDisabled = loreEntries.filter((e) => e.disabled === true)
       const loreCard = h(Card, null,
         h('div', { className: 'bf-card-head' },
           h('span', { className: 'bf-card-title' }, '见闻库'),
-          h('span', { className: 'bf-card-note' }, loreEntries.length + ' 条 · 索引常驻，正文命中才读'),
+          h('span', { className: 'bf-card-note' },
+            loreEntries.length + ' 条 · 索引常驻，正文命中才读'
+            + (loreDisabled.length ? ' · 回收站 ' + loreDisabled.length : '')),
           h(Sp),
           h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: loreStartAdd }, '＋ 新增'),
         ),
@@ -2311,15 +2608,23 @@ window.__ModuleLoader__.load({
             ) : null,
             loreEntries.length
               ? loreEntries.map((e) => h('div', {
-                  key: e.id, style: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' },
+                  key: e.id, style: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', opacity: e.disabled ? .55 : 1 },
                 },
-                  h('button', {
+                  e.disabled === true ? h('div', {
+                    className: 'bf-list-btn', style: { flex: 1, minWidth: 0, cursor: 'default' },
+                  }, h('span', { className: 'l', style: { textDecoration: 'line-through' } }, e.id),
+                     h('span', { className: 'm' }, '已删除')) : h('button', {
                     className: 'bf-list-btn', style: { flex: 1, minWidth: 0 },
                     'aria-current': String((curLore || {}).id === e.id),
                     onClick: () => { setLoreId(e.id); setLoreDraft(null) },
                   }, h('span', { className: 'l' }, e.id),
                      h('span', { className: 'm' }, e.usedToday ? '今天用过' : '可用')),
-                  h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => loreRemove(e.id) }, '删'),
+                  e.disabled === true
+                    ? h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => loreRestore(e.id) }, '恢复')
+                    : h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => loreRemove(e.id) }, '删'),
+                  e.disabled === true
+                    ? h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => lorePurge(e.id) }, '彻底删除')
+                    : null,
                 ))
               : h('div', { className: 'bf-note' }, '卡里还没有 loreIndex。'),
           ),
@@ -2480,6 +2785,9 @@ window.__ModuleLoader__.load({
           mode === 'missing' ? h('div', { className: 'bf-banner error' },
             h('span', null, '人设卡读不到：' + (health.detail || '未知原因') + '，可切一个内置预设恢复。')) : null,
           err ? h('div', { className: 'bf-banner error' }, h('span', null, '读取失败：' + err)) : null,
+          whoLine,
+          h('div', { className: 'bf-grid-2' }, injectCard, checkupCard),
+          historyCard,
           tabs,
           h('section', { role: 'tabpanel', 'aria-label': (PERSONA_TABS.find(([k]) => k === tab) || [])[1] || '' }, body),
         ),
@@ -3324,6 +3632,7 @@ window.__ModuleLoader__.load({
               ? h(PersonaPage, {
                   persona, initial: init?.personaPage || props?.persona,
                   initialTab: props?.initialPersonaTab,
+                  ov: data,
                 })
               : h(SettingsPage, { ov: { data }, initial: init?.config, initialSub: props?.initialSub })
 
@@ -3397,7 +3706,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return {
+    const plugin = {
       inject: ['slots', 'layout'],
       apply(ctx) {
         ctxLayout = ctx.get?.('layout') ?? ctx.layout ?? ctxLayout
@@ -3424,5 +3733,9 @@ window.__ModuleLoader__.load({
         } catch (e) { console.error('[bili-fenshen] 注册设置页入口失败：', e) }
       },
     }
+    // 测试钩子（render-smoke / 单测验证 W4-4 的 30s 复用）只在测试沙箱里暴露：
+    // 生产包不带这个全局面（宿主只读 inject / apply，本来也不碰它）。
+    if (globalThis.__BF_TEST__) plugin.__bfTest = { cachedGet, resetGetCache, GET_CACHE, GET_TTL_MS }
+    return plugin
   },
 })
