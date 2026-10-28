@@ -8,7 +8,7 @@
  *
  * 全部确定性：同一 (日期, 账本, 卡) 必得同一结果，事故可复现。
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { charLen, hash32, stripEmoji } from './text.js'
 import { stateFile } from './store.js'
@@ -149,12 +149,22 @@ export const loadState = (file = stateFile()) => {
   }
 }
 
+/**
+ * 保存今日状态。
+ *
+ * W3-4：**tmp + rename 原子替换**。旧实现直写目标文件，进程在写的瞬间被杀就会留下半截 JSON；
+ * 而 `loadState` 的 catch 会把半截文件当成 `{}` —— 等于把"今天用过哪些见闻/canon/语料"
+ * 整张冷却表静默清零，当天立刻重复讲同一件事。
+ */
 export const saveState = (state, file = stateFile()) => {
+  const tmp = `${file}.tmp-${process.pid}`
   try {
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(state, null, 2), 'utf8')
+    writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8')
+    renameSync(tmp, file)
     return true
   } catch {
+    try { unlinkSync(tmp) } catch { /* 临时文件清不掉也不能影响主流程 */ }
     return false
   }
 }

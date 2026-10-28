@@ -2,6 +2,18 @@
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 const REPLY_API = 'https://api.bilibili.com/x/msgfeed/reply?platform=web&build=0&mobi_app=web'
 
+/** 单次拉取的硬超时（W3-2）：没有它，一次挂死的连接会把轮询循环永远吊住。 */
+export const POLL_TIMEOUT_MS = 8000
+
+/** 失败退避阶梯（1min → 5min → 15min，之后停在 15min）。断网时不要把日志刷成瀑布。 */
+export const BACKOFF_STEPS_MS = Object.freeze([60_000, 5 * 60_000, 15 * 60_000])
+
+/** 第 n 次连续失败后该等多久（n 从 1 开始；0 次失败 = 正常间隔，由调用方决定）。 */
+export const nextPollDelay = (consecutiveFailures = 0) => {
+  const n = Math.max(1, Math.floor(Number(consecutiveFailures) || 0))
+  return BACKOFF_STEPS_MS[Math.min(n, BACKOFF_STEPS_MS.length) - 1]
+}
+
 export function bvidOf(uri) {
   const m = /\/video\/(BV[0-9A-Za-z]+)/.exec(String(uri || ''))
   return m ? m[1] : ''
@@ -29,9 +41,31 @@ export function toReplyIn(notif, opts = {}) {
   }
 }
 
-export async function fetchReplyNotifs(cookieHeader, fetchImpl = fetch) {
+/**
+ * 拉回复通知。
+ *
+ * W3-2：带 **硬超时 + 外部 signal**——旧实现没有 `signal`，一个卡住的 TCP 连接会让
+ * 轮询循环永远等下去（页面显示"正在拉取"直到进程被杀）。
+ * @param {string} cookieHeader
+ * @param {Function} [fetchImpl]
+ * @param {{timeoutMs?: number, signal?: AbortSignal}} [opts]
+ */
+export async function fetchReplyNotifs(cookieHeader, fetchImpl = fetch, opts = {}) {
+  const { timeoutMs = POLL_TIMEOUT_MS, signal } = opts || {}
+  // 组合信号：外部取消（stop/轮次结束）与超时取先到者。
+  // AbortSignal.any 在 Node ≥20 可用；老运行时退化为只用超时，绝不因组合失败而抛。
+  let combined = signal
+  try {
+    if (timeoutMs > 0 && typeof AbortSignal?.timeout === 'function') {
+      const to = AbortSignal.timeout(timeoutMs)
+      combined = signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, to]) : (signal || to)
+    }
+  } catch {
+    combined = signal
+  }
   const res = await fetchImpl(REPLY_API, {
     headers: { 'User-Agent': UA, Cookie: cookieHeader, Referer: 'https://www.bilibili.com/' },
+    signal: combined,
   })
   const json = await res.json().catch(() => ({}))
   const items = json?.data?.items

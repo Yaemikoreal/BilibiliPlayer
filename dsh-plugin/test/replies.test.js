@@ -1,7 +1,10 @@
 // dsh-plugin/test/replies.test.js
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { toReplyIn, bvidOf, roundIdForReply } from '../lib/replies.js'
+import {
+  toReplyIn, bvidOf, roundIdForReply,
+  fetchReplyNotifs, nextPollDelay, POLL_TIMEOUT_MS, BACKOFF_STEPS_MS,
+} from '../lib/replies.js'
 import { normalizeAccount } from '../lib/account.js'
 
 test('bvidOf 从 uri / native_uri 提取 BV 号', () => {
@@ -95,4 +98,55 @@ test('normalizeAccount 归一 nav + relation/stat', () => {
 
   const out = normalizeAccount({ code: -101, data: { isLogin: false } }, null)
   assert.equal(out.loggedIn, false)
+})
+
+/* ───────── W3-2：回复轮询的超时与退避（旧实现没有 signal，挂死即永远吊住） ───────── */
+
+test('nextPollDelay：1min → 5min → 15min 阶梯，之后停在 15min', () => {
+  assert.deepEqual(BACKOFF_STEPS_MS, [60_000, 300_000, 900_000])
+  assert.equal(nextPollDelay(1), 60_000)
+  assert.equal(nextPollDelay(2), 300_000)
+  assert.equal(nextPollDelay(3), 900_000)
+  assert.equal(nextPollDelay(9), 900_000, '连续失败再多也不超过 15min')
+  assert.equal(nextPollDelay(0), 60_000, '0 次失败按最小档（调用方不用它，但要确定）')
+  assert.equal(nextPollDelay(-5), 60_000)
+  assert.equal(nextPollDelay('2'), 300_000)
+})
+
+test('fetchReplyNotifs：带超时信号（默认 8s），能正常返回 items', async () => {
+  let seen = null
+  const fakeFetch = async (url, init) => {
+    seen = init
+    return { json: async () => ({ data: { items: [{ id: 1 }] } }) }
+  }
+  const items = await fetchReplyNotifs('SESSDATA=x', fakeFetch)
+  assert.equal(items.length, 1)
+  assert.ok(seen.signal, '必须把 signal 传下去，否则请求挂死没人管')
+  assert.equal(POLL_TIMEOUT_MS, 8000)
+})
+
+test('fetchReplyNotifs：超时真的会 abort（不靠外部取消）', async () => {
+  // 用 10ms 超时 + 永不 resolve 的假 fetch：验证超时信号确实被触发
+  const hang = (url, init) => new Promise((resolve, reject) => {
+    if (!init?.signal) return reject(new Error('no signal'))
+    init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+  })
+  await assert.rejects(() => fetchReplyNotifs('c', hang, { timeoutMs: 10 }), /aborted/)
+})
+
+test('fetchReplyNotifs：外部 signal 取消优先生效', async () => {
+  const ctrl = new AbortController()
+  const hang = (url, init) => new Promise((resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
+  })
+  const p = fetchReplyNotifs('c', hang, { timeoutMs: 60_000, signal: ctrl.signal })
+  setTimeout(() => ctrl.abort(), 5)
+  await assert.rejects(() => p, /cancelled/)
+})
+
+test('fetchReplyNotifs：坏 JSON / 缺 items 时返回空数组，不抛', async () => {
+  const bad = async () => ({ json: async () => { throw new Error('not json') } })
+  assert.deepEqual(await fetchReplyNotifs('c', bad), [])
+  const noItems = async () => ({ json: async () => ({ data: {} }) })
+  assert.deepEqual(await fetchReplyNotifs('c', noItems), [])
 })
