@@ -15,6 +15,7 @@ const {
   resolveLoreIndex,
 } = await import('../lib/persona/index.js')
 import { personaDir } from '../lib/persona/store.js'
+import { activeOf } from '../lib/persona/expression.js'
 
 const home = () => process.env.BILI_FENSHEN_HOME
 
@@ -54,9 +55,26 @@ test('语料库 status / edit / remove', () => {
   assert.equal(got.heat, 3)
   assert.equal(got.len, '改过的语料文本'.length)
 
+  // W3-3：remove 是**软删除**（可恢复）—— 语料是稀缺资产，物理删除没有 undo
   const rm = editExpressionBank({ action: 'remove', form: 'question', id: entry.id })
   assert.equal(rm.ok, true, rm.error)
-  assert.ok(!normalizeBank(loadBank()).buckets.question.some((e) => e.id === entry.id))
+  assert.equal(rm.soft, true, 'remove 必须走软删除')
+  assert.ok(rm.disabled >= 1, '返回里要报禁用条数（控制台显示回收站）')
+  const softened = normalizeBank(loadBank()).buckets.question.find((e) => e.id === entry.id)
+  assert.ok(softened, '软删除后条目仍在库里（可恢复）')
+  assert.equal(softened.disabled, true)
+  assert.ok(!activeOf(loadBank(), 'question').some((e) => e.id === entry.id), '软删除的条目不能再被抽中')
+
+  const back = editExpressionBank({ action: 'restore', form: 'question', id: entry.id })
+  assert.equal(back.ok, true, back.error)
+  assert.equal(normalizeBank(loadBank()).buckets.question.find((e) => e.id === entry.id).disabled, false)
+  // 注意 status 在这条用例前面被改成了 candidate，所以"可抽中"要先把 status 拨回 active
+  editExpressionBank({ action: 'status', form: 'question', id: entry.id, status: 'active' })
+  assert.ok(activeOf(loadBank(), 'question').some((e) => e.id === entry.id), '恢复 + active 后应重新可抽中')
+
+  const purged = editExpressionBank({ action: 'purge', form: 'question', id: entry.id })
+  assert.equal(purged.ok, true, purged.error)
+  assert.ok(!normalizeBank(loadBank()).buckets.question.some((e) => e.id === entry.id), '只有 purge 才物理删除')
 })
 
 test('语料库非法输入被拒', () => {
@@ -88,9 +106,29 @@ test('见闻索引 add → 走整卡保存并出版本快照；edit / remove 正
   assert.equal(ed.ok, true, ed.error)
   assert.deepEqual(loadCard().card.loreIndex.find((l) => l.id === 'test-entry').keys, ['新触发词'])
 
+  // W3-3：见闻 remove 也是软删除；编译时 resolveLoreIndex 跳过 disabled
   const rm = editLoreIndex({ action: 'remove', id: 'test-entry' })
   assert.equal(rm.ok, true, rm.error)
-  assert.ok(!loadCard().card.loreIndex.some((l) => l.id === 'test-entry'))
+  const kept = loadCard().card.loreIndex.find((l) => l.id === 'test-entry')
+  assert.ok(kept, '软删除后索引条目仍在卡里（可恢复）')
+  assert.equal(kept.disabled, true)
+  assert.ok(!resolveLoreIndex(loadCard().card, {}).some((l) => l.id === 'test-entry'), '软删除的见闻不进编译索引')
+
+  const back = editLoreIndex({ action: 'restore', id: 'test-entry' })
+  assert.equal(back.ok, true, back.error)
+  assert.ok(resolveLoreIndex(loadCard().card, {}).some((l) => l.id === 'test-entry'), '恢复后应重新进索引')
+
+  // W3-3：软删除的条目仍然要能被**列表接口**看到（控制台回收站），只是不进编译
+  editLoreIndex({ action: 'remove', id: 'test-entry' })
+  const listed = resolveLoreIndex(loadCard().card, {}, new Date(), { includeDisabled: true })
+  const inBin = listed.find((l) => l.id === 'test-entry')
+  assert.ok(inBin, '回收站读口应含软删除条目')
+  assert.equal(inBin.disabled, true, '列表里要带 disabled 标记，控制台才知道渲染成"已删除"')
+  assert.ok(!resolveLoreIndex(loadCard().card, {}).some((l) => l.id === 'test-entry'), '编译读口仍要跳过它')
+
+  const purged = editLoreIndex({ action: 'purge', id: 'test-entry' })
+  assert.equal(purged.ok, true, purged.error)
+  assert.ok(!loadCard().card.loreIndex.some((l) => l.id === 'test-entry'), '只有 purge 才真删')
 })
 
 test('见闻索引非法输入被拒（坏 id / 重复 id / 缺 keys）', () => {

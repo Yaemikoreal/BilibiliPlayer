@@ -86,19 +86,26 @@ export const normalizeBank = (bank) => {
         checked: e.checked === true,       // 人工位：true = 人工确认过
         aiReviewed: e.aiReviewed === true, // AI 复核位：true = 写入前复核通过
         addedAt: e.addedAt || '', // 自演化管道用：转正 FIFO 与满额淘汰的排序键
+        // W3-3 软删除：`disabled:true` = 从控制台"删掉"，但仍留在库里可恢复（不再注入）。
+        // 为什么不做物理删除：语料是稀缺资产，误删一条要重新攒；而物理删除没有 undo。
+        disabled: e.disabled === true,
+        disabledAt: e.disabledAt || '',
       }))
     total += buckets[form].length
   }
   return { spec: bank?.spec || BANK_SPEC, updatedAt: bank?.updatedAt || '', buckets, total }
 }
 
-/** 可注入的条目：active 且不是 blocked（blocked 永不入库，这里再兜一层防御）。 */
+/** 可注入的条目：active、不是 blocked、且**没被软删除**。 */
 export const activeOf = (bank, form) =>
-  (normalizeBank(bank).buckets[form] || []).filter((e) => e.status === 'active' && e.origin !== 'blocked')
+  (normalizeBank(bank).buckets[form] || [])
+    .filter((e) => e.status === 'active' && e.origin !== 'blocked' && !e.disabled)
 
-/** 库里 active 的全部文本（用于重合拦截）。 */
+/** 库里 active 的全部文本（用于重合拦截）。软删除的条目不再参与拦截（它已经不在教学池里）。 */
 export const activeTexts = (bank) =>
-  BUCKETS.flatMap((f) => (normalizeBank(bank).buckets[f] || []).filter((e) => e.status === 'active').map((e) => e.text))
+  BUCKETS.flatMap((f) => (normalizeBank(bank).buckets[f] || [])
+    .filter((e) => e.status === 'active' && !e.disabled)
+    .map((e) => e.text))
 
 /**
  * 抽样本：按 (1/(1+heat)) 加权、排除今天用过的。

@@ -149,8 +149,10 @@ export const buildCore = (card = {}, { state = {} } = {}) => {
  * @param {number} [opts.maxChars] 单一字数上限（旧口径：场域未知时的 modeMax）
  * @param {object} [opts.modes] 场域字数 `{comment,reply,dynamic}`（W1-2）；给了就输出一行场域表
  * @param {boolean} [opts.shrink] 降级动作 `state:shrink`：丢掉"最近说过"列表，保住状态/欠账/字数
+ * @param {string} [opts.memoryText] W7-1 记忆段（已渲染好的人话；空串=不注入）
+ * @param {string} [opts.selfCorrect] W7-3 体检自纠（一句动作提示；空串=不注入）
  */
-export const buildState = (state = {}, { maxChars = null, modes = null, shrink = false } = {}) => {
+export const buildState = (state = {}, { maxChars = null, modes = null, shrink = false, memoryText = '', selfCorrect = '' } = {}) => {
   if (!state) return ''
   const lines = []
   const mood = state.mood || {}
@@ -174,6 +176,11 @@ export const buildState = (state = {}, { maxChars = null, modes = null, shrink =
 
   const d = debtLine(state)
   if (d) lines.push(`⚠️ ${d}`)
+  // W7-1 记忆：放在状态块里（C2 通道）——它是"状态"不是"身份"，
+  // 放 C1 会变成每一步都在付 token；降级 state:shrink 时也一起丢（先保尾注与字数口径）。
+  if (memoryText && !shrink) lines.push(memoryText)
+  // W7-3 体检自纠：上一轮体检超出阈值时，这一轮只补**一句**动作（不报数字——模型不会做那个算术）
+  if (selfCorrect && !shrink) lines.push(`⚠️ ${selfCorrect}`)
   if (modes) {
     // W1-2：场域表 —— 各场域上限与时段上限取更严的那个，绝不因"凌晨"把楼中楼放宽
     const caps = effectiveModes(modes, tod.maxChars)
@@ -263,7 +270,7 @@ export const renderPersonaText = (blocks = {}) => [
 export const compilePersona = (card = {}, ctx = {}) => {
   const {
     state = {}, bank = null, roundId = 'round', modeMax = 100, modes = null,
-    budget = null, degrade = [], loreDir = 'persona/lore',
+    budget = null, degrade = [], loreDir = 'persona/lore', memoryText = '', selfCorrect = '',
   } = ctx
   const notes = []
   const actions = Array.isArray(degrade) ? degradesOnly(degrade) : []
@@ -314,7 +321,7 @@ export const compilePersona = (card = {}, ctx = {}) => {
     if (bad?.text) p4 += `\n反例（别这样）：${bad.text}${bad.reason ? ` —— ${bad.reason}` : ''}`
   }
 
-  const stateText = buildState(state, { maxChars: modeMax, modes, shrink: has('state:shrink') })
+  const stateText = buildState(state, { maxChars: modeMax, modes, shrink: has('state:shrink'), memoryText, selfCorrect })
   const blocks = {
     core: fitBlock('core', buildCore(card, { state }), effBudget),
     lore: loreBlock,

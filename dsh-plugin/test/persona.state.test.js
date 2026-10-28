@@ -75,6 +75,25 @@ test('冷却表：usedToday 按自然日判断，recordUsage 只增不改', () =
 
 /* ───────── W3-4：state.json 原子写（旧实现直写，半截 JSON 会让冷却表整张清零） ───────── */
 
+test('usedToday：统一按**本地日**判（UTC 切片在 UTC+8 的 00:00–08:00 会差一天）', () => {
+  // 本地 2026-10-28 05:30（UTC+8）⇒ 该时刻的 UTC 日期还是 10-27
+  const localEarly = new Date(2026, 9, 28, 5, 30, 0)
+  const utcDay = localEarly.toISOString().slice(0, 10)
+  assert.notEqual(utcDay, '2026-10-28', '前提：这个本地时刻的 UTC 日期不是同一天')
+
+  // ① lore 存完整时间戳：同一天稍后再判，必须仍是"今天用过"
+  const st = recordUsage({}, { loreIds: ['a'] }, localEarly)
+  assert.equal(usedToday(st.loreUsed, 'a', new Date(2026, 9, 28, 7, 0, 0)), true, '本地同一天要判 true')
+  assert.equal(usedToday(st.loreUsed, 'a', new Date(2026, 9, 29, 7, 0, 0)), false, '跨天要判 false')
+
+  // ② canon 存日期：必须是**本地日**，不是 UTC 切片
+  assert.equal(st.canonUsed === undefined || true, true)
+  const st2 = recordUsage({}, { canonKeys: ['k'] }, localEarly)
+  assert.equal(st2.canonUsed.k, '2026-10-28', 'canon 冷却按本地日记')
+  assert.equal(usedToday(st2.canonUsed, 'k', new Date(2026, 9, 28, 23, 0, 0)), true)
+  assert.equal(usedToday(st2.canonUsed, 'k', new Date(2026, 9, 29, 1, 0, 0)), false)
+})
+
 test('saveState：tmp+rename 原子写，内容可回读且不留临时文件', () => {
   const d = mkdtempSync(join(tmpdir(), 'bf-state-atomic-'))
   const f = join(d, 'state.json')

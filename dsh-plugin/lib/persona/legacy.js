@@ -18,10 +18,11 @@ export const legacyBlock = (text, note) =>
       : '\n\n⭐ 本轮没有拿到人设 ⇒ 按一个独立、有自己判断的普通网友说话，别编人格。\n'
 
 /**
- * @param {string} rawInput 配置里的 personaPrompt（正文或路径）
+ * @param {string} rawInput 配置里的 personaPrompt（正文或路径，绝对/相对均可）
+ * @param {{roots?: string[]}} [opts] W3-5：相对路径的解析根（插件根 / 家目录）
  * @returns {{text:string, note:string, source:string, block:string}}
  */
-export const loadLegacy = (rawInput) => {
-  const { text, note, source } = loadPersona(rawInput)
+export const loadLegacy = (rawInput, opts = {}) => {
+  const { text, note, source } = loadPersona(rawInput, opts)
   return { text, note, source, block: legacyBlock(text, note) }
 }

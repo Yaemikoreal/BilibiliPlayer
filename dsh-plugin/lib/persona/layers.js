@@ -58,16 +58,18 @@ const isBefore = (pos) => String(pos || '').startsWith('before')
  * @param {object|null} [opts.used] 预留给调用方传入的已用素材（本轮不消费，冷却表仍在 state 里）
  * @param {string} [opts.roundId] 抽样 seed / 逐轮复现
  * @param {string} [opts.loreDir] 见闻正文目录（绝对路径提示）
+ * @param {string} [opts.memoryText] W7-1 记忆段（已在 resolvePersona 里按相关性/半衰期算好并渲染）
+ * @param {string} [opts.selfCorrect] W7-3 体检自纠（一句动作提示，来自上一轮体检）
  * @returns {{c1:string, c2:string, c3Hints:object, used:object, stats:object, blocks:object,
  *            notes:string[], targetForm:string, degraded:string[], tag:string, position:object, budget:object}}
  */
 export const buildLayers = ({
   card = {}, state = {}, bank = null, now = new Date(), modes = null, budget = null,
-  degrade = [], used = null, roundId = 'round', loreDir = 'persona/lore',
+  degrade = [], used = null, roundId = 'round', loreDir = 'persona/lore', memoryText = '', selfCorrect = '',
 } = {}) => {
   const position = resolvePosition(card)
   const effBudget = budget || resolveBudget(card)
-  const compiled = compilePersona(card, { state, bank, roundId, modes, budget: effBudget, degrade, loreDir })
+  const compiled = compilePersona(card, { state, bank, roundId, modes, budget: effBudget, degrade, loreDir, memoryText, selfCorrect })
   const tag = `${card.id}@${card.version}`
   const titleOf = (k) => LAYER_TITLES[k](tag)
   const textOf = (k) => compiled.blocks?.[k]?.text || ''

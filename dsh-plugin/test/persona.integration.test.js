@@ -48,11 +48,38 @@ test('legacy 直通：行为与升级前一致（人设块 + 读自文件 note�
   assert.equal(r.after, '', 'legacy 模式没有后段')
 })
 
-test('legacy 直通：路径不存在 ⇒ 中性降级并说明原因', () => {
+test('legacy 直通：路径不存在 ⇒ 记警告并回落卡链路（W3-5 不再静默注入警告块）', () => {
   const r = resolvePersona({ cfg: { personaPrompt: join(HOME, 'nope.md') }, roundId: 'R1' })
-  assert.equal(r.mode, 'legacy')
-  assert.match(r.before, /不存在/)
-  assert.match(r.before, /中性说话/)
+  // 旧行为：mode='legacy' 并注入一段"没人设/按中性说话"的警告块 —— 主人会以为人设在生效。
+  assert.notEqual(r.mode, 'legacy', '解析失败不该继续冒充 legacy 成功')
+  assert.ok(r.mode === 'card' || r.mode === 'missing', `应回落卡链路，实际 ${r.mode}`)
+  assert.ok(r.notes.some((n) => /personaPrompt 解析失败/.test(n)), '必须在 notes 里说清解析失败且已回落')
+})
+
+test('W3-5：personaPrompt 支持 preset:<id>（走卡链路，不 legacy 直通）', () => {
+  const r = resolvePersona({ cfg: { personaPrompt: 'preset:whale' }, roundId: 'R1' })
+  assert.equal(r.mode, 'card')
+  assert.match(r.personaTag, /^whale@/)
+  assert.match(r.before, /===== 人设（whale@/)
+})
+
+test('W3-5：personaPrompt 支持相对路径（按插件根解析）', () => {
+  const r = resolvePersona({ cfg: { personaPrompt: 'prompts/persona-whale.md' }, roundId: 'R1' })
+  assert.equal(r.mode, 'legacy', '相对路径能解析就仍走 legacy 直通（行为不变）')
+  assert.match(r.before, /按这个来说话/)
+  assert.match(r.before, /读自文件/)
+})
+
+test('W3-5：personaHealth 不再对 legacy 无条件 ok（路径写错要能看见）', () => {
+  const bad = personaHealth({ cfg: { personaPrompt: join(HOME, 'nope.md') } })
+  assert.equal(bad.ok, false, '路径不存在时健康检查必须是红的')
+  assert.match(bad.detail, /解析失败|不存在/)
+  const good = personaHealth({ cfg: { personaPrompt: whalePath } })
+  assert.equal(good.ok, true)
+  assert.match(good.detail, /读自文件/)
+  const pre = personaHealth({ cfg: { personaPrompt: 'preset:whale' } })
+  assert.equal(pre.mode, 'card')
+  assert.equal(pre.ok, true)
 })
 
 test('卡模式：before 含身份与标签，after 含状态/手感/尾注', () => {

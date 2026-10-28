@@ -174,14 +174,25 @@ export const recordUsage = (state, { loreIds = [], canonKeys = [], expressionIds
   const t = now.toISOString()
   const next = { ...state, loreUsed: { ...(state.loreUsed || {}) }, canonUsed: { ...(state.canonUsed || {}) }, expressionUsed: { ...(state.expressionUsed || {}) } }
   for (const id of loreIds) next.loreUsed[id] = t
-  for (const k of canonKeys) next.canonUsed[k] = t.slice(0, 10)
+  // canon 存**本地日**（不是 UTC 切片）：UTC+8 的 00:00–08:00 时 UTC 日期还是"昨天"，
+  // 用 `t.slice(0,10)` 会把今天的梗记成昨天用过 ⇒ 当天重复讲、跨天又不能讲。
+  for (const k of canonKeys) next.canonUsed[k] = dayKeyOf(now)
   for (const id of expressionIds) next.expressionUsed[id] = t
   next.updatedAt = t
   return next
 }
 
-/** 今天是否用过某个 lore（同一天只用一次）。 */
+/**
+ * 今天是否用过某个条目（**统一按本地日**）。
+ *
+ * 为什么不能直接 `at.slice(0,10)`：ISO 时间戳是 UTC，而"今天"是本地日。
+ * 在 UTC+8，本地 00:00–08:00 的 UTC 日期是前一天 —— 那段时间里
+ * 「今天用过」会一直判 false（当天重复讲同一件事），跨天后又会判 true（该讲的不讲）。
+ */
 export const usedToday = (map, id, now = new Date()) => {
   const at = map?.[id]
-  return typeof at === 'string' && at.slice(0, 10) === dayKeyOf(now)
+  if (typeof at !== 'string' || !at) return false
+  // 已经是 YYYY-MM-DD（canon 口径）就直接比；带时间的按本地日折算
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(at) ? at : dayKeyOf(new Date(at))
+  return day === dayKeyOf(now)
 }

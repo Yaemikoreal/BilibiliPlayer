@@ -62,6 +62,20 @@ export const buildPersonaInjectEvent = (o = {}) => {
     total: Number(stats.total) || 0,
     totalMax: Number(stats.totalMax) || 0,
     hits: hitsFromUsed(p.used || {}),
+    // W7-3：本轮体检结论 + 自纠动作（"这轮为什么被要求收短"要能查）
+    checkup: p.checkup ? {
+      level: String(p.checkup.level || 'ok'),
+      n: Number(p.checkup.n) || 0,
+      reasons: asArr(p.checkup.reasons).map(String),
+      selfCorrect: String(p.checkup.selfCorrect || ''),
+    } : null,
+    // W7-1：本轮记忆注入了哪几条（"为什么这轮提了旧事"要能查；null = 这版还没有记忆字段）
+    memory: p.memory ? {
+      injected: asArr(p.memory.injected).map((m) => ({ id: String(m.id || ''), title: String(m.title || ''), importance: Number(m.importance) || 0, decayed: Number(m.decayed) || 0 })),
+      pool: Number(p.memory.pool) || 0,
+      relevant: Number(p.memory.relevant) || 0,
+      fallbackToRecent: p.memory.fallbackToRecent === true,
+    } : null,
     degraded: asArr(o.degraded).map(String),
     guard: o.guard
       ? {

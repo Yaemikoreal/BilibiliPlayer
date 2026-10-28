@@ -25,6 +25,23 @@ export const looksLikePath = (raw) => {
   return /^[A-Za-z]:[\\/]/.test(s) // Windows 盘符
 }
 
+/**
+ * W3-5：**相对路径**形态（`prompts/persona-whale.md`、`./x.md`、`persona.md`）。
+ *
+ * 为什么要认它：旧实现只认绝对路径，配置里写相对路径时会被当成人设**正文**直接注入
+ * prompt —— 路径字符串就变成了人设（B2-9 一类事故）。所以相对路径必须能被识别并解析。
+ *
+ * 保守判据（宁可漏判也不误判）：单行、长度 < 200、以 `.md`/`.markdown`/`.txt` 结尾，
+ * 且含路径分隔符或 `.` 起头。「只看游戏/数码」这类正文不会被误当成文件。
+ */
+export const looksLikeRelativePath = (raw) => {
+  const s = String(raw || '').trim()
+  if (!s || s.includes('\n') || s.length > 200) return false
+  if (looksLikePath(s)) return false
+  if (!/\.(md|markdown|txt)$/i.test(s)) return false
+  return /[\\/]/.test(s) || s.startsWith('.')
+}
+
 /** `~/x` → `<home>/x`；其余（含裸 `~`）原样返回。home 缺失时返回 null（无法展开）。 */
 export const expandPath = (raw, home) => {
   const s = String(raw || '').trim()
@@ -42,9 +59,31 @@ const homeOf = () => process.env.HOME || process.env.USERPROFILE || ''
  *   - 文件：source=file，note 以 `（读自文件…）` 说明来源；
  *   - 失败：text 为空、note 说明原因（调用方据此降级为中性并在日志里提示）。
  */
-export function loadPersona(rawInput, { home = homeOf(), maxChars = PERSONA_MAX_CHARS } = {}) {
+export function loadPersona(rawInput, { home = homeOf(), maxChars = PERSONA_MAX_CHARS, roots = [] } = {}) {
   const raw = String(rawInput || '').trim()
   if (!raw) return { text: '', note: '', source: 'inline' }
+
+  // W3-5：相对路径按给定的根依次尝试（插件根 / 家目录 / 家目录/persona），命中即用。
+  if (looksLikeRelativePath(raw)) {
+    const candidates = roots.map((r) => join(String(r || ''), raw)).filter((p) => p && p !== raw)
+    for (const c of candidates) {
+      try {
+        if (!existsSync(c) || !statSync(c).isFile()) continue
+        const text = readFileSync(c, 'utf8').trim()
+        if (!text) return { text: '', note: `人设文件是空的：${c}（本轮按中性说话）`, source: 'empty' }
+        if (text.length > maxChars) {
+          return { text: text.slice(0, maxChars), note: `（读自文件 ${c}，超过 ${maxChars} 字已截断）`, source: 'file' }
+        }
+        return { text, note: `（读自文件 ${c}）`, source: 'file' }
+      } catch { /* 换下一个根 */ }
+    }
+    return {
+      text: '',
+      note: `人设相对路径解析失败：${raw}（试过 ${candidates.length ? candidates.join(' / ') : '（没有可用根）'}）`,
+      source: 'missing',
+    }
+  }
+
   if (!looksLikePath(raw)) {
     // 普通文字：原样返回；超长同样截断（旧实现是静默截断，这里给出 note）
     if (raw.length > maxChars) {
