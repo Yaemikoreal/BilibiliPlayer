@@ -13,6 +13,7 @@ import base64
 import logging
 import aiohttp
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -646,6 +647,274 @@ async def bili_video_info(bvid: str) -> str:
     }, ensure_ascii=False)
 
 
+# ========== 质量门 lint：只读规则文件、哑执行（单一事实来源在 dsh-plugin/lib/persona/lint.js） ==========
+#
+# 分工（计划 §6.3 / §8.1）：
+#   - 判据、词表、阈值全部由 JS 导出的 <家目录>/persona/lint-rules.json 决定；
+#     本段只有"解释器"，**不复制任何规则**——改判据改 JS，重导一遍即可。
+#   - 文件缺失 / 解析失败 / 判据写坏 → **放行 + 告警**（绝不因规则坏了全线停摆）。
+#   - 只有 level=='block' 且文件里 mode=='block' 才不发；mode=='warn'（默认先跑三天）
+#     照发，但把 lint 结果塞进返回体，让模型当轮就能看见"这条本该被拦"。
+
+_LINT_EMOJI_RE = re.compile(r"\[[^\]]{1,12}\]|[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]")
+_LINT_TAIL_RE = re.compile(r'[\s。！!？?～~….,，、:：;；·）」』"”’）)】]+$')
+_LINT_SENTENCE_RE = re.compile(r"[。！？!?；;\n]+")
+_LINT_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("“", "”"), ('"', '"'), ("‘", "’"))
+_LINT_FORMS = ("comment", "reply", "dynamic")
+
+
+def _persona_home() -> Path:
+    """插件家目录：与 dsh-plugin/lib/persona/store.js 的 homeDir() 同源（BILI_FENSHEN_HOME 优先）。"""
+    home = os.environ.get("BILI_FENSHEN_HOME") or os.path.join(
+        os.environ.get("HOME") or os.environ.get("USERPROFILE") or ".", ".dsh", "bili-fenshen")
+    return Path(home)
+
+
+def _lint_rules_file() -> Path:
+    """质量门规则文件路径；由 dsh-plugin/scripts/export-lint-rules.mjs 写出。"""
+    return _persona_home() / "persona" / "lint-rules.json"
+
+
+def _lint_strip_emoji(s: str) -> str:
+    return _LINT_EMOJI_RE.sub("", s)
+
+
+def _lint_char_len(s: str) -> int:
+    """字数口径与 JS 的 charLen 一致：去表情 token、去空白后按码点算。"""
+    return len(re.sub(r"\s+", "", _lint_strip_emoji(s)))
+
+
+def _lint_ngrams(s: str, n: int = 2) -> set:
+    t = re.sub(r"\s+", "", _lint_strip_emoji(s))
+    return {t[i:i + n] for i in range(max(0, len(t) - n + 1))}
+
+
+def _lint_jaccard(a: str, b: str, n: int = 2) -> float:
+    """与 JS text.js 的 jaccard 同口径（两边都太短则退化为"是否相同"）。"""
+    x, y = _lint_ngrams(a, n), _lint_ngrams(b, n)
+    if not x or not y:
+        return 1.0 if a.strip() == b.strip() else 0.0
+    hit = len(x & y)
+    return hit / (len(x) + len(y) - hit)
+
+
+def _lint_render(template, variables: dict) -> str:
+    """按规则里的 reasonTemplate 渲染理由：占位符也来自 JS，Python 不自造文案。"""
+    out = str(template or "")
+    for key, value in variables.items():
+        out = out.replace("{" + key + "}", str(value))
+    return out
+
+
+def _lint_eval_check(check: dict, text: str, form: str, limits: dict, rules: dict):
+    """跑一条声明式判据；命中返回 {code, level, reason, advice}，否则 None。
+
+    只认 lint.js 导出的 kind；未知 kind、缺阈值、坏正则一律跳过（规则升级时宁可漏判不误杀）。
+    """
+    if not isinstance(check, dict):
+        return None
+    kind = str(check.get("kind") or "")
+    variables: dict = {}
+
+    if kind == "endsWithAny":
+        tail = _LINT_TAIL_RE.sub("", _lint_strip_emoji(text)).strip()
+        hit = next((w for w in (check.get("words") or [])
+                    if isinstance(w, str) and w and tail.endswith(w)), None)
+        if not hit:
+            return None
+        variables["hit"] = hit
+    elif kind == "startsWithAny":
+        segments = [s.strip() for s in _LINT_SENTENCE_RE.split(_lint_strip_emoji(text).strip()) if s.strip()]
+        head = segments[0] if segments else ""
+        hit = next((w for w in (check.get("words") or [])
+                    if isinstance(w, str) and w and head.startswith(w)), None)
+        if not hit:
+            return None
+        variables["hit"] = hit
+    elif kind == "quotedOnly":
+        raw = text.strip()
+        inner_len = -1
+        for open_q, close_q in _LINT_QUOTE_PAIRS:
+            if raw.startswith(open_q) and raw.endswith(close_q) and len(raw) > len(open_q) + len(close_q):
+                inner_len = _lint_char_len(raw[len(open_q):len(raw) - len(close_q)])
+                break
+        min_chars = check.get("minChars")
+        if inner_len < 0 or not isinstance(min_chars, (int, float)) or inner_len < min_chars:
+            return None
+        variables["len"] = inner_len
+    elif kind == "maxJaccard":
+        threshold = check.get("threshold")
+        if not isinstance(threshold, (int, float)):
+            return None
+        ngram = check.get("ngram")
+        ngram = ngram if isinstance(ngram, int) and ngram > 0 else 2
+        texts = (rules.get("bank") or {}).get("active") or []
+        if not isinstance(texts, list) or not texts:
+            return None
+        best, best_text = 0.0, ""
+        for candidate in texts:
+            if not isinstance(candidate, str):
+                continue
+            score = _lint_jaccard(text, candidate, ngram)
+            if score > best:
+                best, best_text = score, candidate
+        if not best > threshold:
+            return None
+        variables["overlap"] = f"{best:.2f}"
+        variables["threshold"] = f"{threshold:.2f}"
+        variables["text"] = best_text[:12]
+    elif kind == "maxChars":
+        limit = limits.get(form)
+        if not isinstance(limit, (int, float)):
+            return None  # 规则里没这本场域的上限 ⇒ 这条判据不生效（不抄缺省值）
+        length = _lint_char_len(text)
+        if length <= limit:
+            return None
+        variables["len"] = length
+        variables["limit"] = limit
+        variables["mode"] = form
+    elif kind == "maxCount":
+        char = check.get("char")
+        max_n = check.get("max")
+        if not isinstance(char, str) or not char or not isinstance(max_n, (int, float)):
+            return None
+        count = text.count(char)
+        if count <= max_n:
+            return None
+        variables.update({"count": count, "max": max_n, "char": char})
+    elif kind == "maxCountEmoji":
+        max_n = check.get("max")
+        if not isinstance(max_n, (int, float)):
+            return None
+        count = len(_LINT_EMOJI_RE.findall(text))
+        if count <= max_n:
+            return None
+        variables.update({"count": count, "max": max_n})
+    elif kind == "containsAny":
+        hit = next((w for w in (check.get("words") or [])
+                    if isinstance(w, str) and w and w in text), None)
+        if not hit:
+            return None
+        variables["hit"] = hit
+    elif kind == "regexAny":
+        pattern = check.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            return None
+        try:
+            matched = re.search(pattern, text)
+        except re.error as e:
+            logger.warning("质量门正则无效，跳过该判据：%s（%s）", pattern, e)
+            return None
+        if not matched:
+            return None
+        variables["hit"] = matched.group(0)[:20]
+    else:
+        return None
+
+    return {
+        "code": str(check.get("code") or kind),
+        "level": "block" if check.get("level") == "block" else "warn",
+        "reason": _lint_render(check.get("reasonTemplate"), variables) or f"{check.get('code') or kind} 未通过",
+        "advice": str(check.get("advice") or ""),
+    }
+
+
+def _lint_eval(text: str, mode: str, rules: dict) -> dict:
+    """哑执行：按规则文件里的 checks 逐条跑；返回与 JS lintComment 同形的结果。"""
+    form = mode if mode in _LINT_FORMS else "comment"
+    limits = rules.get("limits") if isinstance(rules.get("limits"), dict) else {}
+    hits = []
+    for check in rules.get("checks") or []:
+        hit = _lint_eval_check(check, text, form, limits, rules)
+        if hit:
+            hits.append(hit)
+    codes, reasons, advices = [], [], []
+    for hit in hits:
+        if hit["code"] not in codes:
+            codes.append(hit["code"])
+        if hit["reason"] and hit["reason"] not in reasons:
+            reasons.append(hit["reason"])
+        if hit["advice"] and hit["advice"] not in advices:
+            advices.append(hit["advice"])
+    return {
+        "ok": not hits,
+        "level": "block" if any(h["level"] == "block" for h in hits) else "warn",
+        "codes": codes,
+        "reasons": reasons,
+        "advice": "；".join(advices),
+    }
+
+
+def _lint_precheck(text: str, mode: str) -> dict:
+    """发布前质量门。返回 {"blocked": bool, "payload": dict|None, "warn": dict|None, "notice": str}。
+
+    blocked=True 时 payload 就是工具对外返回的 JSON；放行时 warn 非空表示"本该被拦但当前档位只告警"。
+    任何意外（文件缺失/坏 JSON/判据异常）都走放行，绝不让质量门把发布整条链路拖死。
+    """
+    try:
+        rules, why = _load_lint_rules()
+        if rules is None:
+            logger.warning("质量门规则不可用（%s）：本次放行", why)
+            return {"blocked": False, "payload": None, "warn": None, "notice": f"lint 规则不可用，已放行：{why}"}
+        apply_mode = str(rules.get("mode") or "warn").strip().lower()
+        if apply_mode not in ("off", "warn", "block"):
+            apply_mode = "warn"  # 写坏档位按最保守的 warn 处理，不擅自拦
+        if apply_mode == "off":
+            return {"blocked": False, "payload": None, "warn": None, "notice": ""}
+        verdict = _lint_eval(text, mode, rules)
+        if verdict["ok"]:
+            return {"blocked": False, "payload": None, "warn": None, "notice": ""}
+        summary = "；".join(verdict["reasons"])
+        if apply_mode == "block" and verdict["level"] == "block":
+            logger.warning("质量门拦截（%s/%s）：%s", mode, apply_mode, ",".join(verdict["codes"]))
+            return {
+                "blocked": True,
+                "payload": {
+                    "success": False,
+                    "ok": False,
+                    "code": "LINT_BLOCKED",
+                    "codes": verdict["codes"],
+                    "reasons": verdict["reasons"],
+                    "advice": verdict["advice"],
+                    "error": f"发布前质量门拦截：{summary}",
+                },
+                "warn": None,
+                "notice": "",
+            }
+        logger.warning("质量门告警（%s/%s）：%s", mode, apply_mode, ",".join(verdict["codes"]))
+        return {
+            "blocked": False,
+            "payload": None,
+            "warn": {
+                "level": verdict["level"],
+                "codes": verdict["codes"],
+                "reasons": verdict["reasons"],
+                "advice": verdict["advice"],
+            },
+            "notice": "",
+        }
+    except Exception as e:  # 兜底：质量门自身出 bug 也只告警放行
+        logger.warning("质量门执行异常，本次放行：%s", e)
+        return {"blocked": False, "payload": None, "warn": None, "notice": f"lint 执行异常，已放行：{e}"}
+
+
+def _load_lint_rules():
+    """读 <家目录>/persona/lint-rules.json。返回 (rules|None, 原因)；读不到/写坏都返回 None。"""
+    file = _lint_rules_file()
+    try:
+        if not file.exists():
+            return None, f"规则文件缺失：{file}"
+        with open(file, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None, "规则文件内容不是对象"
+        if not isinstance(data.get("checks"), list):
+            return None, "规则文件缺 checks 数组"
+        return data, ""
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
 # ========== Tool 6: 回复评论 ==========
 
 @_gated_tool()
@@ -666,6 +935,12 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
     Returns:
         发表结果
     """
+    # 发布前质量门：规则来自 <家目录>/persona/lint-rules.json（JS 导出）；缺失/损坏则放行 + 告警
+    gate = _lint_precheck(text, "reply" if rpid else "comment")
+    if gate["blocked"]:
+        return json.dumps(gate["payload"], ensure_ascii=False)
+    lint_warn = gate.get("warn")
+
     try:
         cred = get_cred()
         v = video.Video(bvid=bvid, credential=cred)
@@ -697,12 +972,15 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         rpid_out = None
         if isinstance(result, dict):
             rpid_out = result.get("rpid") or (result.get("data") or {}).get("rpid")
-        return json.dumps({
+        payload = {
             "success": True,
             "message": "评论发送成功",
             "bvid": bvid,
             "rpid": rpid_out,
-        }, ensure_ascii=False)
+        }
+        if lint_warn:
+            payload["lint"] = lint_warn  # warn 档：照发，但把"本该被拦"的判据回给模型
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         return _err(f"评论发送失败: {e}", bvid=bvid)
 
@@ -843,6 +1121,12 @@ async def bili_send_dynamic(
     if not text or not text.strip():
         return json.dumps({"success": False, "error": "text 不能为空"}, ensure_ascii=False)
 
+    # 发布前质量门：与 bili_reply 同一份规则文件（动态场域上限从规则里读）
+    gate = _lint_precheck(text.strip(), "dynamic")
+    if gate["blocked"]:
+        return json.dumps(gate["payload"], ensure_ascii=False)
+    lint_warn = gate.get("warn")
+
     cred = get_cred()
 
     dyn = dynamic.BuildDynamic.empty()
@@ -861,11 +1145,14 @@ async def bili_send_dynamic(
 
     try:
         result = await dynamic.send_dynamic(info=dyn, credential=cred)
-        return json.dumps({
+        payload = {
             "success": True,
             "message": "动态发布成功",
             "data": result if isinstance(result, dict) else str(result),
-        }, ensure_ascii=False)
+        }
+        if lint_warn:
+            payload["lint"] = lint_warn  # warn 档：照发，但把"本该被拦"的判据回给模型
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
