@@ -53,6 +53,50 @@ function parseSeenRows(raw) {
   return rows
 }
 
+/* ───────── 同源守卫（borrowed from dsh-agent-md 评审：本地 API 无鉴权是家族通病） ─────────
+ * webServer 载体把原始 req/res 直接交给路由（无任何中间件），而这里的 POST 能 spawn
+ * 值班轮（用真账号发帖）、写凭证与配置 ⇒ 浏览器跨站面必须关死。守卫只在「头存在且矛盾」
+ * 时拒绝，无头客户端（curl / 单测探针 req.headers 缺失）不受影响：
+ *   1) Sec-Fetch-Site: cross-site / same-site ⇒ 403（跨站 fetch/表单，no-cors 也带这个头）
+ *   2) Origin: null ⇒ 403（沙箱 iframe / 某些跳转，正常 GUI 不会发）
+ *   3) Origin 存在时必须与 Host 头同 host ⇒ 403（跨站请求的 Origin ≠ 本站）
+ *   4) webOrigin 可解析时 Origin/Host 必须与其一致 ⇒ 顺带挡 DNS rebinding
+ *   5) POST 只收 application/json（no-cors 的 text/plain 可带任意 body，不校验就是直通门）
+ */
+export function sameOriginGuard(req, webOrigin) {
+  const headers = req && req.headers
+  if (!headers || typeof headers !== 'object') return { ok: true }
+  const site = String(headers['sec-fetch-site'] || '')
+  if (site && site !== 'same-origin' && site !== 'none') {
+    return { ok: false, reason: `跨站请求被拒（Sec-Fetch-Site: ${site}）` }
+  }
+  const expected = (() => {
+    try { return typeof webOrigin === 'function' ? (webOrigin() || '') : (webOrigin || '') } catch { return '' }
+  })()
+  const host = String(headers.host || '')
+  if (expected) {
+    try {
+      const expectHost = new URL(expected).host
+      if (host && host !== expectHost) return { ok: false, reason: `Host 与本机服务不符（${host} ≠ ${expectHost}）` }
+    } catch { /* expected 不是合法 URL：跳过这项，其余检查照做 */ }
+  }
+  const origin = String(headers.origin || '')
+  if (origin) {
+    if (origin === 'null') return { ok: false, reason: 'Origin: null 被拒' }
+    if (expected && origin !== expected) return { ok: false, reason: `跨站 Origin 被拒（${origin}）` }
+    try {
+      if (host && new URL(origin).host !== host) return { ok: false, reason: `跨站 Origin 被拒（${origin}）` }
+    } catch { return { ok: false, reason: `无法解析的 Origin（${origin}）` } }
+  }
+  if (String(req.method || '').toUpperCase() === 'POST') {
+    const ct = String(headers['content-type'] || '')
+    if (ct && !ct.toLowerCase().startsWith('application/json')) {
+      return { ok: false, status: 415, reason: `POST 只收 application/json（收到 ${ct}）` }
+    }
+  }
+  return { ok: true }
+}
+
 export function createApiHandler(deps) {
   const patchConfig = () => (typeof deps.patchConfig === 'function' ? deps.patchConfig() : deps.patchConfig)
   const sendJson = (res, status, data) => {
@@ -274,6 +318,9 @@ export function createApiHandler(deps) {
     const path = url.pathname
     const method = req.method
     try {
+      // 同源守卫（覆盖工厂全部端点，含两个 SSE；老端点由 index.js 的 dispatch 统一守）
+      const guard = sameOriginGuard(req, deps.webOrigin)
+      if (!guard.ok) return sendJson(res, guard.status || 403, { ok: false, error: guard.reason })
       if (!path.startsWith(PREFIX)) return sendJson(res, 404, { ok: false, error: 'not found' })
 
       if (method === 'GET' && path === `${PREFIX}/overview`) {

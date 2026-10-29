@@ -4011,6 +4011,36 @@ window.__ModuleLoader__.load({
 
     /* ═══════════════════════ §10 注册 ═══════════════════════ */
 
+    /** 注册处统一套边界：页面崩了也看得见原因，而不是整块白屏。
+     *  ⚠️ 类定义必须懒执行（放在 guardPage 里）：factory 期的 require('react') 在
+     *  vm 直载单测里是空 stub（没有 Component），`class extends undefined` 会在
+     *  工厂期就炸掉整个 client.js 加载；真宿主/渲染冒烟里 React.Component 都在。 */
+    const guardPage = (Comp) => {
+      if (!React || typeof React.Component !== 'function') return Comp
+      class BiliFenshenBoundary extends React.Component {
+        constructor(props) { super(props); this.state = { error: null } }
+        static getDerivedStateFromError(error) { return { error } }
+        componentDidCatch(error) { try { console.error('[bili-fenshen] 控制台渲染失败：', error) } catch (e) { /* 忽略 */ } }
+        render() {
+          if (this.state && this.state.error) {
+            const msg = String((this.state.error && this.state.error.message) || this.state.error)
+            return h('div', { className: 'bf-console bf-root', style: { padding: 16 } },
+              h('div', {
+                style: { color: 'var(--dsw-alias-state-error-primary,#a83a2c)', fontWeight: 600, marginBottom: 8 },
+              }, '这个页面渲染时出错了'),
+              h('div', { className: 'bf-note', style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, msg),
+              h('div', { className: 'bf-note', style: { marginTop: 8 } },
+                '刷新页面即可恢复（客户端代码是页面加载时取的）；把这段报错发给主人可定位。值班调度不受影响（它跑在宿主侧）。'),
+            )
+          }
+          return this.props.children
+        }
+      }
+      return function BiliFenshenGuardedPage(props) {
+        return h(BiliFenshenBoundary, null, h(Comp, props))
+      }
+    }
+
     /* 图标：ownerProps { size, active }；B站粉/蓝只用于侧栏图标 */
     function PanelIcon({ size = 20 }) {
       return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none' },
@@ -4043,12 +4073,12 @@ window.__ModuleLoader__.load({
           ctx.slots.inject('main', () => ctx.slots.register({
             name: 'main',
             key: PANEL_ID,
-          }, ConsolePage))
+          }, guardPage(ConsolePage)))
         } catch (e) { console.error('[bili-fenshen] 注册 main 面板失败：', e) }
         try {
           ctx.slots.inject('settings.section', () => ctx.slots.register({
             name: 'settings.section', id: PANEL_ID, order: 35, label: T.title,
-          }, SettingsEntry))
+          }, guardPage(SettingsEntry)))
         } catch (e) { console.error('[bili-fenshen] 注册设置页入口失败：', e) }
       },
     }

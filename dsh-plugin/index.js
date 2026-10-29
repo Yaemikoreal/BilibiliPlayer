@@ -27,10 +27,10 @@ import { appendEvents, isDuplicate } from './lib/ledger.js'
 import { ledgerReaderFor } from './lib/ledger-index.js'
 import { createUtf8Decoder, keepTail, rotateIfBig, createProbeLogger } from './lib/logsink.js'
 import { parseRoundReport, parseProactiveScan, roundSection, dedupeScans } from './lib/report.js'
-import { createApiHandler } from './lib/api.js'
+import { createApiHandler, sameOriginGuard } from './lib/api.js'
 import { effectiveConfig, writeOverride, extractConfigBlock, pickReasoningEffort, normalizeScheduleFields, FIELDS } from './lib/config.js'
 import { fetchAccount } from './lib/account.js'
-import { fetchReplyNotifs, toReplyIn, roundIdForReply, proactiveTargetsFromLedger } from './lib/replies.js'
+import { fetchReplyNotifs, toReplyIn, roundIdForReply, repliedTargetsFromLedger } from './lib/replies.js'
 import { seenListFromLedger } from './lib/seen.js'
 import { buildOverview as buildOverviewData, countToday, windowPool } from './lib/overview.js'
 import { createOverviewHub } from './lib/realtime.js'
@@ -2227,6 +2227,8 @@ export function apply(ctx, config) {
           // 新增端点依赖（api.js 里缺失时优雅降级）
           models: buildModelsInfo,
           diagnose: runDiagnoseSafely,
+          // 同源守卫的期望 origin（懒取：listen 绑定端口前 getOrigin 会抛，请求期必然已绑定）
+          webOrigin: () => { try { return web?.getOrigin?.() ?? '' } catch { return '' } },
           live: {
             snapshot: (after) => liveSnapshot(after),
             subscribe: (listener) => live.onPush(listener),
@@ -2240,6 +2242,17 @@ export function apply(ctx, config) {
 
         const dispatch = async (req, res) => {
           try {
+            // 同源守卫：一个卡口覆盖新端点（工厂）与老端点（legacyHandle）
+            const guard = sameOriginGuard(req, () => { try { return web?.getOrigin?.() ?? '' } catch { return '' } })
+            if (!guard.ok) {
+              try {
+                if (!res.writableEnded && !res.headersSent) {
+                  res.writeHead(guard.status || 403, { 'content-type': 'application/json; charset=utf-8' })
+                  res.end(JSON.stringify({ ok: false, error: guard.reason }))
+                } else { res.end() }
+              } catch { /* 兜住 */ }
+              return
+            }
             const url = new URL(req.url, 'http://127.0.0.1')
             if (FACTORY_PATHS.has(url.pathname)) {
               await api(req, res)                                   // 新端点
