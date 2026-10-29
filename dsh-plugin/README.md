@@ -1,6 +1,6 @@
 # dsh-bili-fenshen ｜ B站分身
 
-DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂载给 DeepSeek Harness 的 Agent，并让它按**值班章程**自动运营一个B站小号——看视频、读字幕、点赞、评论、跟进被回复、发动态，全部先发后报、可配置配额。
+DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（35 个工具）挂载给 DeepSeek Harness 的 Agent，并让它按**值班章程**自动运营一个B站小号——看视频、读字幕、点赞、评论、跟进被回复、发动态，全部先发后报、可配置配额。
 
 ## 组成
 
@@ -37,7 +37,7 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂�
 1. 到点（或手动触发）→ Host 生成一次性 overlay → `dsh --profile headless --patch overlay "值班提示词"` 拉起独立会话
 2. 那一轮只见白名单工具（`BILI_MCP_TOOLS`，默认值班所需的最小集），看不到上传/私信等高权限工具
 3. Agent 按章程：拉内容源（**优先 `bili_feed` 一次拉齐常看 UP 主的最新投稿并已按账本过滤「看过」→ 关键词搜索 → 热门榜兜底**，命中「不看清单」直接跳过）→ 判重 → 读字幕原文 → 决定动作（受配额与禁令开关约束）→ `bili_ledger_append` 记账 + `bili_report_append` 写报告
-4. 结束 90 秒后宿主复核调度（对抗压审：接口回执成功 ≠ 公开可见）
+4. 轮末由 Agent 调一次 `bili_verify_recent_comments` 复核刚发的话是否真的公开可见（对抗压审：接口回执成功 ≠ 公开可见；发送成功即自动进 `verify-pending.jsonl` 待核队列）
 
 ## 控制台
 

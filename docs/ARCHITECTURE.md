@@ -23,7 +23,7 @@
 
 ## 1. 一句话定位与三层分工
 
-**一句话**：用 `mcp_server.py` 把B站变成 Agent 可调用的 34 个工具，再用一个 DSH 插件把这些工具、一套值班章程、一个人设卡和一键控制台组装起来，让 Agent 按配额、按排班、有纪律地运营一个B站小号。
+**一句话**：用 `mcp_server.py` 把B站变成 Agent 可调用的 35 个工具，再用一个 DSH 插件把这些工具、一套值班章程、一个人设卡和一键控制台组装起来，让 Agent 按配额、按排班、有纪律地运营一个B站小号。
 
 三层职责泾渭分明：
 
@@ -339,7 +339,7 @@ flowchart LR
 ```
 
 - 白名单写进 overlay 的 `BILI_MCP_TOOLS`（`index.js:851`），Python 侧 `mcp_server.py:40` 在**注册期**过滤 ⇒ 名单外的工具在那一轮**不存在**（不是被拒绝，是不可见）。
-- 会话级（非值班轮）MCP 连接不设该变量 ⇒ 全量 34 个工具可用。
+- 会话级（非值班轮）MCP 连接不设该变量 ⇒ 全量 35 个工具可用。
 - `bili_reply` 的硬拦截优先级高于一切：命中去重集合直接拒绝，连 B站 API 都不碰（`mcp_server.py:943`）。
 
 ### 4.5 记账 / 报告 / 回填管线
@@ -386,7 +386,7 @@ flowchart LR
 #### 5.1.3 通用 helper（`:68`）
 - 统一返回格式 `_ok/_err`、凭证读取（`BILI_CRED_FILE` 可覆盖）、标题清洗、图片上传。
 
-#### 5.1.4 工具清单（34 个，实测 `^async def bili_` 计数）
+#### 5.1.4 工具清单（35 个，实测 `@_gated_tool()` 计数）
 
 | 分组 | 工具 | 行号 |
 |---|---|---|
@@ -394,10 +394,10 @@ flowchart LR
 | 采集（6） | `bili_search` / `bili_comments` / `bili_subtitle` / `bili_danmaku` / `bili_video_info` / `bili_crawl` | 360 / 470 / 547 / 572 / 613 / 1013 |
 | 发布（5） | `bili_send_dynamic` / `bili_upload_video` / `bili_upload_video_multi` / `bili_send_opus` / `bili_video_zones` | 1125 / 1185 / 1293 / 1374 / 1417 |
 | 发现（7） | `bili_hot_videos` / `bili_hot_buzzwords` / `bili_weekly_hot` / `bili_rank` / `bili_user_info` / `bili_user_videos` / `bili_followings` | 1462 / 1498 / 1519 / 1542 / 1604 / 1653 / 1944 |
-| 互动（8） | `bili_reply` / `bili_like` / `bili_favorite_lists` / `bili_favorite_content` / `bili_send_message` / `bili_unread_messages` / `bili_received_replies` / `bili_received_at_and_likes` | 923 / 1921 / 1704 / 1742 / 1787 / 1822 / 1840 / 1895 |
+| 互动（9） | `bili_reply` / `bili_like` / `bili_favorite_lists` / `bili_favorite_content` / `bili_send_message` / `bili_unread_messages` / `bili_received_replies` / `bili_received_at_and_likes` / `bili_verify_recent_comments` | 923 / 1921 / 1704 / 1742 / 1787 / 1822 / 1840 / 1895 / 尾部（发后复核，2026-10-30 新增） |
 | **值班专用（5）** | `bili_feed` / `bili_ledger_append` / `bili_report_append` / `bili_persona_lore` / `bili_persona_note` | 2107 / 2265 / 2332 / 2558 / 2596 |
 
-> ⚠️ 根 README 写「29 个工具」、`dsh-plugin/README.md` 写「32 个」，**实测 34 个**（29 基础 + 5 值班/人设）。以本表为准。
+> ⚠️ 根 README 写「29 个工具」、`dsh-plugin/README.md` 写「32 个」，**实测 35 个**（29 基础 + 5 值班/人设 + 1 发后复核，2026-10-30）。以本表与 `test/mcp.tools-snapshot.test.js` 的快照为准；行号会随提交漂移，以快照为准。
 
 #### 5.1.5 质量门 lint（`:652`）
 - 只读 `<家目录>/persona/lint-rules.json`，规则**单一事实来源在 `lib/persona/lint.js`**（JS 侧 `buildLintRules` 导出，Python 侧哑执行）。

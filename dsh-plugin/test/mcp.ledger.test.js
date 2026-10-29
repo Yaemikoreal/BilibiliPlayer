@@ -153,6 +153,19 @@ const pythonProbe = (() => {
       'async def _ok_likes(credential=None):',
       '    return {"items": [{"id": 2}], "likes": True}',
       '',
+      '# §5-4 家目录口径三源对齐：scripts/_fenshen_paths.py 必须与 mcp_server._persona_home 同源',
+      'sys.path.insert(0, ' + JSON.stringify(join(REPO_ROOT, 'scripts')) + ')',
+      'import _fenshen_paths as fp',
+      'out["mcpHome"] = str(m._persona_home())',
+      'out["scriptHome"] = str(fp.fenshen_home())',
+      '',
+      'async def _ok_at(credential=None):',
+      '    return {"items": [{"id": 1}], "at": True}',
+      'async def _fail_likes(credential=None):',
+      '    raise RuntimeError("频控了")',
+      'async def _ok_likes(credential=None):',
+      '    return {"items": [{"id": 2}], "likes": True}',
+      '',
       'm.session.get_at = _ok_at',
       'm.session.get_likes = _fail_likes',
       'out["partial"] = json.loads(asyncio.run(m.bili_received_at_and_likes()))',
@@ -211,6 +224,17 @@ test('§2.5 坏文件不静默：整文件读失败留 error 日志，返回已�
   const probe = pythonProbe()
   assert.deepEqual(probe.unreadable, [])
   assert.match(probe.stderr, /账本读取失败/, `stderr=${probe.stderr}`)
+})
+
+test('§5-4 家目录三源对齐：scripts/_fenshen_paths.py 与 mcp_server._persona_home 同一落点', (t) => {
+  if (!needPython(t)) return
+  const probe = pythonProbe()
+  const norm = (p) => String(p).toLowerCase().replace(/\//g, '\\')
+  assert.equal(
+    norm(probe.mcpHome),
+    norm(probe.scriptHome),
+    `mcp=${probe.mcpHome} script=${probe.scriptHome}——家目录解析漂移会让"账本在 A、候选在 B"`,
+  )
 })
 
 /* ───────────────────────── §2.4 通知容错 ───────────────────────── */

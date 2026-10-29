@@ -1,15 +1,15 @@
-<p align="center"><img src="assets/hero.png" alt="BilibiliPlayer — 让 AI 直接操作B站" width="100%"></p>
+﻿<p align="center"><img src="assets/hero.png" alt="BilibiliPlayer — 让 AI 直接操作B站" width="100%"></p>
 
 <h1 align="center">BilibiliPlayer ｜ 让 AI 直接操作B站</h1>
 
 <p align="center"><b>29 个 MCP 工具，一个跑在本机的 MCP Server —— 把B站变成 Agent 可调用的能力。</b><br>
 搜索 · 字幕 · 弹幕 · 评论 · 点赞 · 发动态 · 投稿 · 排行榜 · 私信 · 收藏夹</p>
 
-<p align="center"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"> <img src="https://img.shields.io/badge/MCP-Model_Context_Protocol-4D6BFE?style=flat-square" alt="MCP"> <img src="https://img.shields.io/badge/tools-29-00A1D6?style=flat-square" alt="29 tools"> <a href="https://github.com/Yaemikoreal/BilibiliPlayer/actions/workflows/ci.yml"><img src="https://github.com/Yaemikoreal/BilibiliPlayer/actions/workflows/ci.yml/badge.svg" alt="CI"></a><br>
+<p align="center"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"> <img src="https://img.shields.io/badge/MCP-Model_Context_Protocol-4D6BFE?style=flat-square" alt="MCP"> <img src="https://img.shields.io/badge/tools-35-00A1D6?style=flat-square" alt="35 tools"> <a href="https://github.com/Yaemikoreal/BilibiliPlayer/actions/workflows/ci.yml"><img src="https://github.com/Yaemikoreal/BilibiliPlayer/actions/workflows/ci.yml/badge.svg" alt="CI"></a><br>
 <img src="https://img.shields.io/badge/DSH-plugin-8A2BE2?style=flat-square" alt="DSH plugin"> <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="MIT"></a> <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-2ea44f?style=flat-square" alt="PRs welcome"></a></p>
 
 - 🔒 **纯本地运行**：MCP Server 只跑在你自己的机器上，登录凭证写在本地 `bili_credential.json`（已 `.gitignore`），不经过任何第三方服务器，也没有远程后端。
-- 🧰 **真接口，不是爬虫壳**：29 个工具全部基于 [`bilibili-api-python`](https://github.com/Nemo2011/bilibili-api)，读写都走B站 Web API，登录沿用官方扫码流程。
+- 🧰 **真接口，不是爬虫壳**：35 个工具全部基于 [`bilibili-api-python`](https://github.com/Nemo2011/bilibili-api)，读写都走B站 Web API，登录沿用官方扫码流程。
 - 🤖 **Agent 拿来就能干活**：标准 MCP（stdio）接入 Claude Code / Cursor / Cline / OpenClaw；还附赠 DSH 插件「B站分身」——看板 + 操作台 + 值班章程，能让 Agent 自己运营一个小号。
 
 ## ⚡ 30 秒上手
@@ -47,9 +47,9 @@ pip install -r requirements.txt
 | 📊 | **发现与榜单** | 热门、热搜、每周必看、分区排行榜、UP 主与收藏夹数据 |
 | 💬 | **互动与消息** | 评论/楼中楼回复、点赞、私信、未读与 @/点赞通知 |
 
-每个工具的参数、默认值与上限见下方 [29 个工具全览](#-29-个工具全览)。
+每个工具的参数、默认值与上限见下方 [35 个工具全览](#-35-个工具全览)。
 
-## 🧰 29 个工具全览
+## 🧰 35 个工具全览
 
 > 全部注册在 `mcp_server.py`（FastMCP，stdio 传输），工具名与下方表格逐一对应。数量上限来自代码里的钳位逻辑，不是宣传口径。
 
@@ -107,24 +107,25 @@ pip install -r requirements.txt
 </details>
 
 <details>
-<summary><b>💬 互动与消息（8）</b> — 评论、点赞、收藏夹、私信、通知</summary>
+<summary><b>💬 互动与消息（9）</b> — 评论、点赞、收藏夹、私信、通知、发后复核</summary>
 
 | Tool | 作用 | 要点 |
 |---|---|---|
-| `bili_reply` | 发表评论 / 回复评论 | 支持楼中楼：`rpid` 指定楼层，`root` 指定根评论 |
+| `bili_reply` | 发表评论 / 回复评论 | 支持楼中楼：`rpid` 指定楼层，`root` 指定根评论；`venue` 传剧场档位（普通区/生态区/AI话题区） |
 | `bili_like` | 点赞 / 取消点赞 | `like=false` 取消 |
 | `bili_favorite_lists` | 收藏夹列表 | `uid=0` 表示自己的收藏夹 |
 | `bili_favorite_content` | 收藏夹内容 | 分页 + 夹内关键词搜索 |
 | `bili_send_message` | 发送私信 | 指定接收者 `receiver_uid` |
 | `bili_unread_messages` | 未读消息数 | 私信 / @ / 回复 / 点赞分类计数 |
 | `bili_received_replies` | 收到的回复 | 最近的评论回复通知 |
-| `bili_received_at_and_likes` | @ 与点赞通知 | 最近的 @ 提及和点赞记录 |
+| `bili_received_at_and_likes` | @ 与点赞通知 | 最近的 @ 提及和点赞记录；单侧失败带 `partial` 标记 |
+| `bili_verify_recent_comments` | 发后复核 | 核对最近发出的评论/接话是否公开可见（登录态核对；`grace_min` 审核宽限窗） |
 
 </details>
 
 ## 🖥️ DSH 插件「B站分身」
 
-[dsh-plugin/](./dsh-plugin/) 是 DeepSeek Harness 插件：把上面 29 个工具挂载给 DSH 的 Agent，再配一套**值班章程**，让它按配额自动运营一个小号——刷到 → 看 → 赞 → 评 → 被回复 → 我回，全程可审计。控制台按 **DSH UI 规范**重做为 7 页：概览 / 实时 / 活动 · 生命周期 / 日报 / 判重表 / 人设工作室 / 设置。
+[dsh-plugin/](./dsh-plugin/) 是 DeepSeek Harness 插件：把上面 35 个工具挂载给 DSH 的 Agent，再配一套**值班章程**，让它按配额自动运营一个小号——刷到 → 看 → 赞 → 评 → 被回复 → 我回，全程可审计。控制台按 **DSH UI 规范**重做为 7 页：概览 / 实时 / 活动 · 生命周期 / 日报 / 判重表 / 人设工作室 / 设置。
 
 <p align="center"><img src="docs/demo/shots/v3-overview-dark.png" alt="B站分身控制台 v3：概览（值班/账号/配额/存在感/最近活动/人设/本地检查）" width="100%"></p>
 
@@ -205,7 +206,7 @@ flowchart LR
 
 ```text
 BilibiliPlayer/
-├── mcp_server.py            # MCP Server 主文件（29 个工具，FastMCP / stdio）
+├── mcp_server.py            # MCP Server 主文件（35 个工具，FastMCP / stdio）
 ├── bili_login.py            # 命令行扫码登录（备用入口）
 ├── requirements.txt         # Python 依赖（bilibili-api-python / aiohttp / mcp）
 ├── CONTEXT.md               # 领域术语表：值班轮 / 章程 / 账本 / 活动……

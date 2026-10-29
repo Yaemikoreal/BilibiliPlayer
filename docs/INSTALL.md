@@ -1,6 +1,6 @@
-# 安装与客户端配置
+﻿# 安装与客户端配置
 
-本文把 [README](../README.md) 的「30 秒上手」展开成完整步骤：从零环境到客户端里能看到 29 个工具，含 Windows 与 macOS / Linux 两套命令、ffmpeg、MCP Inspector 调试、凭证说明和常见安装故障。
+本文把 [README](../README.md) 的「30 秒上手」展开成完整步骤：从零环境到客户端里能看到 35 个工具，含 Windows 与 macOS / Linux 两套命令、ffmpeg、MCP Inspector 调试、凭证说明和常见安装故障。
 
 ---
 
@@ -219,7 +219,7 @@ Windows 把前半段换成 `.venv\Scripts\python.exe` 的绝对路径。
 
 ### 工具白名单（可选）
 
-`BILI_MCP_TOOLS` 是逗号分隔的工具名单：**未设置 = 全量注册 29 个工具**；设置后名单外的工具不会注册，模型根本看不见。
+`BILI_MCP_TOOLS` 是逗号分隔的工具名单：**未设置 = 全量注册 35 个工具**；设置后名单外的工具不会注册，模型根本看不见。
 
 ```json
 {
