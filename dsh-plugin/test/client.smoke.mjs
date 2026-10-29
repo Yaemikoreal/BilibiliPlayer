@@ -61,20 +61,22 @@ console.log('registered:', JSON.stringify(registered))
    用最小源码断言防止被后来的重构悄悄改回去（2026-10-28 控制台事故）。 */
 const mustHave = [
   ['首帧无条件接受（seq 守卫只在有数据后生效）', /if \(r\.hasData && seq <= r\.seq\) return false/],
-  ['tick 允许与当前信封同 seq', /Number\.isFinite\(seq\) && seq < r\.seq\) return/],
-  ['wide 行改上下布局（防 label 竖排）', /\.bf-row\.wide\{flex-direction:column/],
-  ['Row 输出 wide 类名', /'bf-row' \+ \(wide \? ' wide' : ''\)/],
-  ['人设卡解包 hook.data', /\(persona && persona\.data\) \|\| persona/],
+  ['tick 允许与当前信封同 seq（守卫含 r.hasData 前提）', /Number\.isFinite\(seq\) && r\.hasData && seq < r\.seq\) return/],
+  ['wide 行纵向堆叠（防 label 竖排）', /\.bf-row-wide\{flex-direction:column/],
+  ['Row 输出 bf-row-wide 类名', /bf-row\$\{wide \? ' bf-row-wide' : ''\}/],
   ['收赞按 likesAvailable 显无数据源', /likesAvailable !== false/],
 ]
 const missed = mustHave.filter(([, re]) => !re.test(code)).map(([name]) => name)
 for (const name of missed) console.log('MISSING:', name)
 
-/* ── 反向守卫：应该被删掉的东西不许回来（先剥掉行注释，注释里提到不算复活） ── */
+/* ── 反向守卫：应该被删掉的东西不许回来（先剥掉行注释，注释里提到不算复活） ──
+ * 2026-10-29 起：人设唯一编辑入口 = 人设页「回滚出口：legacy 直通」（d274330），
+ * 所以这里只禁「设置页的旧 personaPrompt 分组」复活，不禁人设页的回滚出口本身；
+ * 设置页不含人设编辑入口由 render-smoke 的页面级断言守（settingsContent 不含「人设提示词」）。 */
 const codeNoComments = code.replace(/^\s*\/\/.*$/gm, '')
 const mustNotHave = [
-  ['设置页「人设提示词」输入（2026-10-28 已删，人设独立成页）', /人设提示词/],
-  ['设置页「人设直通（legacy）」分组', /人设直通（legacy）/],
+  ['设置页旧 personaPrompt 分组（personaPromptGroup）', /personaPromptGroup/],
+  ['设置页旧「人设提示词」textarea（aria-label 精确匹配，人设页回滚出口是「旧人设提示词（legacy）」不算）', /'aria-label': '人设提示词'/],
 ]
 const resurrected = mustNotHave.filter(([, re]) => re.test(codeNoComments)).map(([name]) => name)
 for (const name of resurrected) console.log('SHOULD BE GONE:', name)

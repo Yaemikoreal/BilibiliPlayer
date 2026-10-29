@@ -7,25 +7,36 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂�
 | 文件 | 职责 |
 |---|---|
 | `cordis.patch.yml` | bundle 挂载声明：原生 MCP connection（stdio → 项目 venv 的 `mcp_server.py`）+ Host 插件行 |
-| `index.js` | Host 半部：值班调度（手动 + 谷时窗口）、dsh CLI 探测、headless 值班轮（overlay 动态生成）、轮次生命周期（`round-end`/报告兜底回填/中止/心跳自愈）、回复通知轮询、配额账本、`/api/bili-fenshen/*` 路由、JS 侧扫码登录 |
-| `lib/*.js` | 纯逻辑模块（`node --test` 覆盖）：账本 JSONL、报告兜底解析、活动聚合、配置覆盖层、回复通知映射、账号拉取、路由工厂、一键诊断（`diagnose.js`）、实时运行流（`live.js`） |
+| `index.js` | Host 半部：值班调度（手动 + 排班：谷时窗口 / 固定间隔 / 指定时间）、dsh CLI 探测、headless 值班轮（overlay 动态生成）、轮次生命周期（`round-end`/报告兜底回填/中止/心跳自愈）、回复通知轮询、配额账本、`/api/bili-fenshen/*` 路由、JS 侧扫码登录 |
+| `lib/*.js` | 纯逻辑模块（`node --test` 覆盖）：账本 JSONL、报告兜底解析、活动聚合、配置覆盖层、值班排班（`schedule.js`：谷时窗口/固定间隔/指定时间）、回复通知映射、账号拉取、路由工厂、一键诊断（`diagnose.js`）、实时运行流（`live.js`） |
 | `client.js` | Client 半部：左侧栏「B站分身」控制台 —— DSH 原生风格 **5 页**（概览 / 活动 / 日报 / 人设 / 设置）；运行详情并入概览、判重表并入活动、人设置 3 子页签、设置 3 组；设置页另含「安装自检」入口 |
 | `prompts/duty.md` | 值班章程：内容判据、评论/点赞/动态纪律、提示注入防御红线、`### BV号` 报告契约、账本记账契约 |
 | `test/*.test.js` | `npm test`（`node --test`）纯函数单测 |
 | `templates/` | DSH 官方模板拷贝（decoration / mcp），仅作开发参考 |
 
+## 人设：豆腐
+
+开箱默认人设是 DeepSeek 鲸鱼娘 **豆腐**（v3.0.0）：活泼开朗、略小淘气、爱操心、贪玩、爱大白饭，有自己的小脾气；社区二创、非官方、仅非商业。
+
+- 人设卡（运行时事实来源）：`prompts/persona/whale.card.json`
+- 完整人设文档（旧 `personaPrompt` 直通用法）：`prompts/persona-whale.md`
+- 调研与改写记录：`../docs/research/2026-10-29-dongbing-whale-tofu.md`、`../docs/analysis/2026-10-29-tofu-persona-rewrite.md`
+- 控制台「人设」页可预览编译结果、改卡、看版本对比、回滚
+
 ## Agent 工具
 
 安装后 Agent 自动获得两层能力：
 
-- **全量 MCP 工具**（`mcp__bili-fenshen__bili_*`，29 个）：任何 DSH 会话里都能直接用（搜索/字幕/评论/关注列表/点赞/动态/登录…）
+- **全量 MCP 工具**（`mcp__bili-fenshen__bili_*`，32 个）：任何 DSH 会话里都能直接用（搜索/字幕/评论/关注列表/点赞/动态/登录…）
+- **值班轮专用（宿主侧）**：`bili_feed`（一次拿到常看 UP 主的最新投稿，已按账本标好看过/没看过）、
+  `bili_ledger_append`（一次写多条账本事件，宿主补 t/round、校验、去重）、`bili_report_append`（追加本轮报告并校验 round id）
 - **宿主工具**：`bili_fenshen_status`（状态与配额）、`bili_fenshen_run`（立即值班一轮）、`bili_fenshen_diagnose`（一键诊断，返回逐项 pass/warn/fail 与修复建议）
 
 ## 值班机制
 
 1. 到点（或手动触发）→ Host 生成一次性 overlay → `dsh --profile headless --patch overlay "值班提示词"` 拉起独立会话
 2. 那一轮只见白名单工具（`BILI_MCP_TOOLS`，默认值班所需的最小集），看不到上传/私信等高权限工具
-3. Agent 按章程：拉内容源（**订阅 UP 主（没指定 UID 时用 bili_followings 按「最常访问」取常看的 UP 主）→ 关键词搜索 → 热门榜兜底**，命中「不看清单」直接跳过）→ 判重 → 读字幕原文 → 决定动作（受配额与禁令开关约束）→ 写报告与判重表
+3. Agent 按章程：拉内容源（**优先 `bili_feed` 一次拉齐常看 UP 主的最新投稿并已按账本过滤「看过」→ 关键词搜索 → 热门榜兜底**，命中「不看清单」直接跳过）→ 判重 → 读字幕原文 → 决定动作（受配额与禁令开关约束）→ `bili_ledger_append` 记账 + `bili_report_append` 写报告
 4. 结束 90 秒后宿主复核调度（对抗压审：接口回执成功 ≠ 公开可见）
 
 ## 控制台
@@ -35,8 +46,8 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂�
 - **概览（它在干什么？今天干成了什么？）**：页头 + 状态条（运行/自动值班/下一轮/数据新鲜度）→ **今日产出**（看/赞/评/接话/动态 + 它今天说过的原话）→ **接话**（今日扫描/接/不接理由，未扫描标红）→ **运行详情**（运行中展开：阶段轨、秒表、工具计数、事件流；空闲折叠成一行）→ **配额**（日累计 vs 本轮，6 项 3×2，不再有孤儿瓦片）→ 存在感 / 人设与健康。
 - **活动（它看过/说过什么，链路通不通？）**：三视图 `生命周期 / 时间线 / 判重表` + 类型 chips（含「接话」「接话扫描」）+ 搜索；每条视频的链路是「刷到 → 看 → 赞 → 评 → 扫描 → 被回复 → 我回」，接话与跟进回复分开标。
 - **日报（那一轮它怎么想的？）**：日期/月度归档/overlay 列表 + Markdown 渲染（h1 降级，页面只有一个 h1）。
-- **人设（这个号是谁、说话像不像它？）**：3 子页签 `人设卡 / 素材库 / 预览与质量`；人设卡 = 字段折叠 + 五块预算 + 高级 JSON（折叠）；素材库 = 语料库 + 见闻库；预览与质量 = 编译预览 + L0 六条 + 今日状态 + 版本对比。
-- **设置（怎么调它？）**：3 组 `节奏与配额 / 内容与禁令 / 运行环境`（模型、一键诊断、宿主日志）；宿主式行式布局（label 左、控件右），脏标记 + 保存并生效。
+- **人设（这个号是谁、说话像不像它？）**：3 子页签 `人设卡 / 素材库 / 预览与质量`；人设卡 = 字段折叠 + 五块预算 + 高级 JSON（折叠）+ **回滚出口（legacy 直通，折叠）**；素材库 = 语料库 + 见闻库；预览与质量 = 编译预览 + L0 六条 + 今日状态 + 版本对比。**人设内容的唯一编辑入口就是这一页。**
+- **设置（怎么调它？）**：3 组 `节奏与配额 / 内容与禁令 / 运行环境`（模型、一键诊断、宿主日志）；宿主式行式布局（label 左、控件右），脏标记 + 保存并生效。这里只放**运行参数与默认禁令**——人设内容（身份 / 口吻 / 素材 / 回滚）不在这页，去「人设」。
 - **设置 → B站分身**：顶部「安装自检」卡片，一键诊断依赖/MCP 连接/登录/模型是否就绪（安装后先点这个）。
 
 扫码登录在控制台右上角「重新扫码」。
@@ -109,7 +120,16 @@ dsh plugin --profile desktop add link:<项目路径>/dsh-plugin
 
 默认值走 Loader patch 的 `config`（`id: bili-fenshen` 行）；控制台「设置 → 配置」保存到 `<家目录>/config.json` 覆盖层（逐字段覆盖 patch，不改用户的 patch 文件），保存即热生效。关键字段：
 
-`autoDuty`（自动值班总开关，默认关）、`noon`/`night`（谷时窗口）、`perDay` / `commentsPerDay` / `commentsPerRound` / `likesPerDay` / `dynamicsPerDay` / `repliesPerRound`（配额）、`followUids`（指定 UP 主 UID，可选、优先）、`followAuto`（**自动按「最常访问」拉取常看的 UP 主**，默认开）、`followPerRound`（每轮按「最常访问」取前几个常看 UP 主，默认 8；都看过就顺延）、`keywords`（搜索关键词，其次）、`avoidList`（**不看清单**：BV号 / UP主（名或UID）/ 标题关键词，命中整条跳过）、`banPrivacy` / `banImpersonation` / `banControversy` / `banRepeat` / `banReplyRefusal`（**默认禁令开关**，默认全开）、`dynamicPureText`（**是否允许纯文本感想动态**）、`personaPrompt`（**旧字段 / legacy 直通**：非空时整段覆盖人设卡，本轮注入用它而不是卡；控制台已不再提供编辑入口 —— 人设统一到「人设」页的卡片里改，要退场就删掉这个键或置空）、`reportLevel`（full/brief/off）、`dutyTools`（值班轮白名单）、`dshBin`（CLI 路径，留空自动探测）、`headlessProfile`（默认 `headless`）、`modelProvider` / `modelName` / `modelReasoningEffort`（值班轮模型，**三个都留空 = 跟随当前会话默认模型**）。
+`autoDuty`（自动值班总开关，默认关）、`noon`/`night`（谷时窗口）、`perDay` / `commentsPerDay` / `commentsPerRound` / `likesPerDay` / `dynamicsPerDay` / `repliesPerRound`（配额）、`followUids`（指定 UP 主 UID，可选、优先）、`followAuto`（**自动按「最常访问」拉取常看的 UP 主**，默认开）、`followPerRound`（每轮按「最常访问」取前几个常看 UP 主，默认 8；都看过就顺延）、`keywords`（搜索关键词，其次）、`avoidList`（**不看清单**：BV号 / UP主（名或UID）/ 标题关键词，命中整条跳过）、`banPrivacy` / `banImpersonation` / `banControversy` / `banRepeat` / `banReplyRefusal`（**默认禁令开关**，默认全开）、`dynamicPureText`（**是否允许纯文本感想动态**）、`personaPrompt`（人设：普通文字，或一个文件路径——`/绝对路径`、`~/…`、Windows 盘符都行；填目录则读其中的 `AGENTS.md`；读不到会降级为中性并把原因写进值班日志。仓库内置样例 `prompts/persona-whale.md` / `prompts/persona-elaina.md`；**控制台入口只有「人设 → 人设卡 → 回滚出口」一处**，设置页不再重复放输入框）、`reportLevel`（full/brief/off）、`dutyTools`（值班轮白名单）、`dshBin`（CLI 路径，留空自动探测）、`headlessProfile`（默认 `headless`）、`modelProvider` / `modelName` / `modelReasoningEffort`（值班轮模型，**三个都留空 = 跟随当前会话默认模型**）。
+
+**排班方式**（设置 → 值班节奏；不传这些字段 = 旧版谷时窗口，行为完全不变）：
+
+- `dutyScheduleMode`：`windows`（默认，谷时窗口）/ `interval`（固定间隔）/ `daily`（每天指定时间）
+- `windows` 模式：沿用 `noon`（12:00–14:00）与 `night`（18:00–次日 09:00），每天每窗最多一次
+- `interval` 模式：`dutyIntervalMinutes`（10–1440，默认 180）——距上次运行（含手动轮）至少隔这么多分钟；`dutyActiveStart` / `dutyActiveEnd`（默认 `00:00`–`23:59`）限定活跃时段，开始 > 结束表示跨夜（如 `22:00`–`06:00`）
+- `daily` 模式：`dutyDailyTimes`（`HH:MM` 数组，最多 8 个，默认空）每个槽位每天一次；宿主晚到 20 分钟内会补跑，超过宽限直接跳过
+- 三种模式都受 `dutyWeekdays`（ISO 数组：周一 = 1 … 周日 = 7，默认每天；空数组也视为每天）过滤；概览「下一轮」显示 `interval` 的「每 3 小时（1h20m 后）」或 `daily` 的「每天 12:30（2h30m 后）」
+- 不传新字段时行为与原版逐字节一致（`windows` 模式的「下一轮」文案也保持原格式）
 
 模型说明：只影响值班轮拉起的 headless 会话，不影响当前对话；换 provider 时插件会把桌面版 profile 里的 `llm-pi-ai` provider 配置（你的 key/模型）带进 headless，所以自定义 provider 也能用。控制台「配置 → 模型」有下拉选择，保存即写覆盖层并热生效（下一轮值班生效）。
 

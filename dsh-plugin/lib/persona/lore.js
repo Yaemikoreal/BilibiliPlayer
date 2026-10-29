@@ -17,17 +17,22 @@ export const lorePath = (id, active) => join(assetDir(active), 'lore', `${id}.md
 
 /**
  * 解析索引条目：卡里 `loreIndex[]` 是唯一事实来源，正文文件可缺（缺了就从索引退化）。
- * @returns {Array<{id,keys,oneLine,usedToday:boolean}>}
+ *
+ * W3-3：`disabled:true` 的条目默认**不进编译**（等于已删），但控制台回收站需要看到它们，
+ * 所以留 `includeDisabled` 读口 —— 编译永远用默认值，列表接口才传 true。
+ * @returns {Array<{id,keys,oneLine,usedToday:boolean,disabled:boolean}>}
  */
-export const resolveLoreIndex = (card, state = {}, now = new Date()) => {
+export const resolveLoreIndex = (card, state = {}, now = new Date(), { includeDisabled = false } = {}) => {
   const list = Array.isArray(card?.loreIndex) ? card.loreIndex : []
   return list
     .filter((l) => l && l.id)
+    .filter((l) => includeDisabled || l.disabled !== true)
     .map((l) => ({
       id: String(l.id),
       keys: Array.isArray(l.keys) ? l.keys.map(String) : [],
       oneLine: String(l.oneLine || ''),
       usedToday: usedToday(state?.loreUsed, String(l.id), now),
+      disabled: l.disabled === true,
     }))
 }
 
@@ -44,7 +49,9 @@ export const renderLoreIndex = (entries, { maxItems = 8, dir = 'persona/lore' } 
   const lines = []
   for (const e of fresh) lines.push(`${e.id} · ${e.keys.slice(0, 4).join('/')} · ${e.oneLine}`)
   if (used.length) lines.push(`今天用过了：${used.map((e) => e.id).join('、')}`)
-  lines.push(`→ 写评论前命中哪条，就读 ${String(dir).replace(/\\/g, '/')}/<id>.md 再用；别凭这一行编细节。`)
+  // W6-1：正文改由 MCP 工具按需取（`bili_persona_lore(keyword=…)`），不再让模型自己 read 文件。
+  // 这样"先看到标题/热评才知道该用哪条"发生在**生成期**，且正文不占 argv 24k 硬线。
+  lines.push('→ 写之前把「视频标题 + 字幕要点 + 热评关键词」拼成一句话，调 `bili_persona_lore(keyword=…)` 取正文再写；别凭这一行编细节。')
   return lines.join('\n')
 }
 

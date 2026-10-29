@@ -35,13 +35,14 @@ test('核心块：含身份与边界，且绝不泄露 creatorNotes', () => {
   assert.ok(!out.text.includes('绝对不能被编译进 prompt'))
 })
 
-test('P5 最后一公里：恰好 3 行、只给分类不给具体句子', () => {
+test('P5 最后一公里：3 行约束 + behaviorStyle 1 行，只给分类不给具体句子', () => {
   const card = smokeCard()
   const tail = buildTail(card)
   const lines = tail.split('\n')
-  assert.equal(lines.length, 3)
+  assert.equal(lines.length, 4, '3 行约束 + W1-4 补的 behaviorStyle「兴趣优先」1 行')
   assert.match(lines[0], /别收在判断上/)
   assert.match(lines[0], /纯情绪词/)
+  assert.match(lines[3], /^4\) 兴趣优先/)
   // 不许把卡里的示例句塞进尾注（"指出口"会让 6 句里 5 句收在同一格）
   for (const s of card.voice.samples.good) {
     assert.ok(!tail.includes(s.text), `尾注不该出现示例句：${s.text}`)

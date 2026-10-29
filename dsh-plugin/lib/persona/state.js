@@ -8,9 +8,9 @@
  *
  * 全部确定性：同一 (日期, 账本, 卡) 必得同一结果，事故可复现。
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { charLen, hash32, stripEmoji } from './text.js'
+import { charLen, hash32, stripEmoji, EMOJI_RE } from './text.js'
 import { stateFile } from './store.js'
 
 /** 8 种"今天的状态"。只允许表达**自己的**状态，不许衍生外部事实。 */
@@ -43,7 +43,6 @@ const dayKeyOf = (d = new Date()) => {
 /* ───────────────────────── 形态判定（P1 临时版） ───────────────────────── */
 
 const JUDGE_TAIL = /(得很|死了|这个了|说死了|实在|靠谱|给得足|到位|说透|不错|挺好|厉害|值了|香|省心|够了|服了)$/
-const EMOJI = /\[[^\]]{1,12}\]|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/u
 
 /**
  * 粗分评论形态。P3 会换成 `lib/style.js` 的正式分类器（同一套正则），
@@ -58,12 +57,13 @@ export const formOf = (text) => {
   if (JUDGE_TAIL.test(core)) return 'detail' // 判断收尾不算情绪（关键：否则欠账永远不欠）
   // 第一人称经历优先于"带表情"：否则"我吃晕了[doge]"会被算成玩梗
   if (/我/.test(core) && n >= 8) return 'experience'
-  if (EMOJI.test(raw)) return 'meme'
+  if (hasEmoji(raw)) return 'meme'
   if (n <= 6) return 'reaction'
   return 'detail'
 }
 
-export const hasEmoji = (text) => EMOJI.test(String(text ?? ''))
+// 表情口径只有一份：text.js 的 EMOJI_RE（B 站 `[doge]` 标签 + Unicode）。本文件不再自建正则。
+export const hasEmoji = (text) => EMOJI_RE.test(String(text ?? ''))
 
 /* ───────────────────────── 派生 ───────────────────────── */
 
@@ -149,12 +149,22 @@ export const loadState = (file = stateFile()) => {
   }
 }
 
+/**
+ * 保存今日状态。
+ *
+ * W3-4：**tmp + rename 原子替换**。旧实现直写目标文件，进程在写的瞬间被杀就会留下半截 JSON；
+ * 而 `loadState` 的 catch 会把半截文件当成 `{}` —— 等于把"今天用过哪些见闻/canon/语料"
+ * 整张冷却表静默清零，当天立刻重复讲同一件事。
+ */
 export const saveState = (state, file = stateFile()) => {
+  const tmp = `${file}.tmp-${process.pid}`
   try {
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(state, null, 2), 'utf8')
+    writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8')
+    renameSync(tmp, file)
     return true
   } catch {
+    try { unlinkSync(tmp) } catch { /* 临时文件清不掉也不能影响主流程 */ }
     return false
   }
 }
@@ -164,14 +174,25 @@ export const recordUsage = (state, { loreIds = [], canonKeys = [], expressionIds
   const t = now.toISOString()
   const next = { ...state, loreUsed: { ...(state.loreUsed || {}) }, canonUsed: { ...(state.canonUsed || {}) }, expressionUsed: { ...(state.expressionUsed || {}) } }
   for (const id of loreIds) next.loreUsed[id] = t
-  for (const k of canonKeys) next.canonUsed[k] = t.slice(0, 10)
+  // canon 存**本地日**（不是 UTC 切片）：UTC+8 的 00:00–08:00 时 UTC 日期还是"昨天"，
+  // 用 `t.slice(0,10)` 会把今天的梗记成昨天用过 ⇒ 当天重复讲、跨天又不能讲。
+  for (const k of canonKeys) next.canonUsed[k] = dayKeyOf(now)
   for (const id of expressionIds) next.expressionUsed[id] = t
   next.updatedAt = t
   return next
 }
 
-/** 今天是否用过某个 lore（同一天只用一次）。 */
+/**
+ * 今天是否用过某个条目（**统一按本地日**）。
+ *
+ * 为什么不能直接 `at.slice(0,10)`：ISO 时间戳是 UTC，而"今天"是本地日。
+ * 在 UTC+8，本地 00:00–08:00 的 UTC 日期是前一天 —— 那段时间里
+ * 「今天用过」会一直判 false（当天重复讲同一件事），跨天后又会判 true（该讲的不讲）。
+ */
 export const usedToday = (map, id, now = new Date()) => {
   const at = map?.[id]
-  return typeof at === 'string' && at.slice(0, 10) === dayKeyOf(now)
+  if (typeof at !== 'string' || !at) return false
+  // 已经是 YYYY-MM-DD（canon 口径）就直接比；带时间的按本地日折算
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(at) ? at : dayKeyOf(new Date(at))
+  return day === dayKeyOf(now)
 }

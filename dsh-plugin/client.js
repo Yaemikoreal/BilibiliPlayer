@@ -494,6 +494,26 @@ window.__ModuleLoader__.load({
       .bf-edit-actions{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center}
       .bf-sandbox-note{max-width:640px;font-size:13px;line-height:20px;color:var(--label-secondary)}
 
+      /* ── 当前账号（概览顶部：头像 + 昵称/UID + 关键数字） ── */
+      .bf-account{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+      .bf-avatar{width:44px;height:44px;border-radius:50%;flex:0 0 44px;display:grid;place-items:center;
+        overflow:hidden;background:linear-gradient(135deg,var(--bili-pink),var(--bili-blue));color:#fff;
+        font-size:17px;font-weight:600;line-height:1;box-shadow:0 0 0 1px var(--border-l2) inset}
+      .bf-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
+      .bf-account-main{min-width:0;flex:1 1 160px}
+      .bf-account-name{display:flex;align-items:center;gap:6px;min-width:0;font-size:15px;line-height:22px;
+        font-weight:500;color:var(--label-primary)}
+      .bf-account-name>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .bf-account-meta{margin-top:2px;font-size:12px;line-height:18px;color:var(--label-tertiary);
+        font-family:var(--font-code);font-variant-numeric:tabular-nums}
+      .bf-lv{font-size:10px;line-height:14px;padding:0 4px;border-radius:6px;background:var(--bg-module-platform);
+        color:var(--label-secondary);border:.5px solid var(--border-l2);font-family:var(--font-code);flex:0 0 auto}
+      .bf-acct-stats{display:flex;gap:18px;flex-wrap:wrap;margin-left:auto}
+      .bf-acct-stat{min-width:52px;text-align:right}
+      .bf-acct-stat-v{font-size:15px;line-height:22px;font-weight:500;color:var(--label-primary);
+        font-variant-numeric:tabular-nums}
+      .bf-acct-stat-k{font-size:11px;line-height:16px;color:var(--label-caption)}
+
       /* ── 设置（行式：label+说明左，控件右，行高 60） ── */
       .bf-config{display:flex;flex-direction:column;gap:10px}
       .bf-group-title{font-size:14px;line-height:20px;font-weight:500;margin:0 0 4px;color:var(--label-primary)}
@@ -501,6 +521,10 @@ window.__ModuleLoader__.load({
         border-top:.5px solid var(--border-l2)}
       .bf-row:first-of-type{border-top:0}
       .bf-row-main{flex:1;min-width:0}
+      /* ⭐ 宽控件行改纵向堆叠：旧版 .bf-row-ctl.wide{width:100%} 在不可换行的 flex 里
+         把 main 挤到 0 宽，中文标签于是变成「一字一行」的竖排。 */
+      .bf-row-wide{flex-direction:column;align-items:stretch;gap:8px}
+      .bf-row-wide .bf-row-ctl{max-width:100%;width:100%;justify-content:flex-start}
       .bf-row-label{font-size:13px;line-height:20px;font-weight:500;color:var(--label-primary)}
       .bf-row-help{font-size:12px;line-height:18px;color:var(--label-secondary);margin-top:2px}
       .bf-row-ctl{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;
@@ -631,6 +655,36 @@ window.__ModuleLoader__.load({
       body: body ? JSON.stringify(body) : '{}',
     }).then((r) => r.json())
 
+    /* ── W4-4：GET 30 秒复用（同一 key 30s 内不重复打；页面隐藏时暂停发新请求） ──
+     * 人设页首屏要打 /persona、/persona/preview、/persona/expression、/persona/lore
+     * 以及新增的 /persona/checkup、/persona/history 六个请求，而这六份数据都是分钟级变化。
+     * 用一个极小的 TTL Map 兜住「同一 key 30s 内只打一次」：
+     *   - 命中且未过期：直接返回缓存里的 promise（并发调用也只会打一次）；
+     *   - 已过期但页面隐藏：返回旧 promise，**不发**新请求（人看不见时不占网络）；
+     *   - 页面隐藏且没有缓存：返回 null（usePoll 保留「正在连接…」空态）；
+     *   - 失败不缓存：删掉条目，下一次轮询自然重试。
+     * 手动刷新（刷新人设数据）会先 resetGetCache() 绕过 TTL，点一下就能拿到最新值。
+     */
+    const GET_TTL_MS = 30000
+    const GET_CACHE = new Map()
+    const resetGetCache = () => GET_CACHE.clear()
+    const isPageHidden = () => typeof document !== 'undefined' && document.hidden === true
+    const cachedGet = (path, ttlMs = GET_TTL_MS) => {
+      if (typeof path !== 'string' || !path) return Promise.resolve(null)
+      const hit = GET_CACHE.get(path)
+      const fresh = !!hit && (Date.now() - hit.at) < ttlMs
+      if (fresh || isPageHidden()) return hit ? hit.promise : Promise.resolve(null)
+      const promise = apiGet(path).then(
+        (data) => data,
+        (e) => {
+          if (GET_CACHE.get(path)?.promise === promise) GET_CACHE.delete(path)
+          throw e
+        },
+      )
+      GET_CACHE.set(path, { at: Date.now(), promise })
+      return promise
+    }
+
     /* ─── 格式化 ─── */
     const fmtDur = (ms) => {
       const s = Math.round((Number(ms) || 0) / 1000)
@@ -731,6 +785,8 @@ window.__ModuleLoader__.load({
           hasData: !!(initial && typeof initial === 'object' && Object.keys(initial).length),
           alive: true, mode: useSse && typeof EventSource !== 'undefined' ? 'sse' : 'poll',
           es: null, timer: null, ac: null, reqId: 0,
+          // ⭐ 是否已拿到过真实信封：首帧不做 seq 单调比较的前提（见 accept 注释）
+          hasData: !!(initial && Object.keys(initial).length),
         }
       }
 
@@ -752,11 +808,11 @@ window.__ModuleLoader__.load({
           if (!payload || typeof payload !== 'object') return false
           const seq = Number(payload.seq)
           if (Number.isFinite(seq)) {
-            // seq 守卫只挡「旧帧覆盖新帧」。第一帧无条件接受——建连时 hello 已把 r.seq
-            // 推到服务端当前值，而首帧 overview 常常就是同一个 seq（2026-10-28 事故：
-            // 整份概览因此永远空白，连「刷新」都救不回来）。
+            // ⭐ 首帧不做单调比较：/stream 先发 hello(seq=hub.seq)，而首帧 overview
+            //    在 hub 已有数据且不脏时用同一个 seq（view() 不自增），严格单调会把
+            //    唯一一帧丢掉 —— 页面于是永远停在空数据态（红条/未找到都由此而来）。
             if (r.hasData && seq <= r.seq) return false
-            r.seq = Math.max(r.seq, seq)
+            r.seq = seq
           }
           r.hasData = true
           r.running = !!(payload.round && payload.round.running)
@@ -775,8 +831,10 @@ window.__ModuleLoader__.load({
         /** tick 帧：只补运行中会变的三个字段，不做整包替换 */
         const applyTick = (frame) => {
           const seq = Number(frame && frame.seq)
-          // tick 是同一版信封的增量（seq 与当前 seq 相等是常态），只挡「更旧」的帧
-          if (Number.isFinite(seq) && seq < r.seq) return
+          // ⭐ tick 帧的 seq 就是 hub 当前值（不推进），与 r.seq 相等是常态：
+          //    这里只丢「比已知信封更旧」的 tick，否则运行中的秒表/阶段永远不刷新。
+          if (Number.isFinite(seq) && r.hasData && seq < r.seq) return
+          if (Number.isFinite(seq)) r.seq = Math.max(r.seq, seq)
           r.seenAt = Date.now()
           setState((p) => {
             if (!p.data) return p
@@ -912,8 +970,9 @@ window.__ModuleLoader__.load({
               return
             }
             const seq = Number(payload.seq)
+            // ⭐ 与 accept 同口径：已经有数据才严格单调，否则「点刷新也救不回来」
             if (Number.isFinite(seq) && r.hasData && seq <= r.seq) return
-            if (Number.isFinite(seq)) r.seq = Math.max(r.seq, seq)
+            if (Number.isFinite(seq)) r.seq = seq
             r.hasData = true
             r.running = !!(payload.round && payload.round.running)
             r.seenAt = Date.now()
@@ -1091,7 +1150,7 @@ window.__ModuleLoader__.load({
       return Number.isFinite(start) ? Math.max(0, now - start) : fallback
     }
 
-    const usePersona = (enabled = true) => usePoll(React.useCallback(() => apiGet('/persona'), []), 30000, enabled)
+    const usePersona = (enabled = true) => usePoll(React.useCallback(() => cachedGet('/persona'), []), 30000, enabled)
     const useModels = (enabled = true) => usePoll(React.useCallback(() => apiGet('/models'), []), 60000, enabled)
     const useActivity = (running, enabled = true) =>
       usePoll(React.useCallback(() => apiGet('/activity'), []), running ? 3000 : 15000, enabled)
@@ -1147,6 +1206,61 @@ window.__ModuleLoader__.load({
 
     const Sp = () => h('span', { className: 'bf-sp' })
 
+    /* ── W7-2 发言门控：概览卡与人设页共用同一套归一化 ──
+     * 契约 = GET /overview → round.speakGate：null | {mode,decision,reason,suggestedMaxComments,features}。
+     * 三条纪律：① 数据可能整个没有（后端未接线 / 还没跑过带门控的轮）⇒ 返回 null，调用方渲染「暂无数据」；
+     *          ② 字段半截 / 类型不对 ⇒ 逐个兜底，绝不抛错、绝不渲染 undefined；
+     *          ③ mode 缺失或无法识别时按 observe 展示并**明确标注**，绝不谎称「已经在强制拦截」。 */
+    const SPEAK_GATE_MODES = {
+      off: { text: '已关闭', kind: 'like', note: '门控已关闭：本轮不记录节奏。' },
+      observe: { text: '观察中 · 不拦', kind: 'warn', note: '观察档：只记录不强制，别当成已经在拦。' },
+      enforce: { text: '强制', kind: 'cmt', note: '强制档：会按门控收紧本轮评论上限（配额仍是硬上限）。' },
+    }
+    const SPEAK_GATE_DECISIONS = {
+      normal: { text: '正常', kind: 'rep' },
+      throttle: { text: '收紧', kind: 'warn' },
+      forced: { text: '放行', kind: 'cmt' },
+    }
+    const speakGateOf = (raw) => {
+      if (!raw || typeof raw !== 'object') return null
+      const rawMode = String(raw.mode || '')
+      const rawDecision = String(raw.decision || '')
+      // mode 缺失/无法识别 → 按 observe 展示（宁可保守说「不拦」，也不谎称在强制拦截）
+      const mode = SPEAK_GATE_MODES[rawMode] ? rawMode : 'observe'
+      const decision = SPEAK_GATE_DECISIONS[rawDecision] ? rawDecision : 'normal'
+      const f = raw.features && typeof raw.features === 'object' ? raw.features : {}
+      const intOf = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null)
+      const recentWindow = intOf(f.recentWindow)
+      const recentSpoke = intOf(f.recentSpoke)
+      const gap = f.gapMinutes == null ? null : intOf(f.gapMinutes)
+      const feat = []
+      if (recentWindow != null && recentWindow > 0) {
+        feat.push('近 ' + recentWindow + ' 个动作说了 ' + (recentSpoke == null ? 0 : recentSpoke) + ' 次')
+      }
+      if (gap == null) {
+        if (recentWindow != null && recentWindow > 0) feat.push('还没发过言')
+      } else feat.push('距上次 ' + gap + ' 分钟')
+      return {
+        mode, decision,
+        modeText: SPEAK_GATE_MODES[mode].text,
+        modeKind: SPEAK_GATE_MODES[mode].kind,
+        modeNote: SPEAK_GATE_MODES[mode].note,
+        modeKnown: !!SPEAK_GATE_MODES[rawMode],
+        decisionText: SPEAK_GATE_DECISIONS[decision].text,
+        decisionKind: SPEAK_GATE_DECISIONS[decision].kind,
+        enforced: raw.enforced === true,
+        reason: typeof raw.reason === 'string' ? raw.reason : '',
+        suggestedMaxComments: intOf(raw.suggestedMaxComments) || 0,
+        featText: feat.join(' · '),
+      }
+    }
+    /** 门控两枚徽标（模式 + 判定）：概览卡与人设页共用，口径只写一次 */
+    const SpeakGateTags = ({ gate }) => (gate
+      ? h(React.Fragment, null,
+          h(Tag, { kind: gate.modeKind }, gate.modeText),
+          h(Tag, { kind: gate.decisionKind }, gate.decisionText))
+      : null)
+
     /** 页头：唯一 h1 + 一句话 intro + 右侧 ≤2 个主操作 */
     function PageHeader({ title, intro, children }) {
       return h('header', { className: 'bf-page-head' },
@@ -1159,8 +1273,16 @@ window.__ModuleLoader__.load({
     }
 
     /** 数据新鲜度徽标：>15s 黄、>60s 红，error 非空也显形（design §2.3） */
-    function Freshness({ ageMs, mode, error }) {
+    function Freshness({ ageMs, mode, error, hasData }) {
       const age = Number(ageMs) || 0
+      // ⭐ 一帧业务数据都没到过：说「正在连接」，不能说「数据 刚刚」（那是谎报新鲜度）
+      if (!hasData && !error) {
+        return h('span', { className: 'bf-fresh', 'data-freshness': '' },
+          h('i', { className: 'bf-dot warn', 'aria-hidden': 'true' }),
+          '正在连接…',
+          mode === 'poll' ? h('span', { className: 'bf-note' }, ' · 轮询') : null,
+        )
+      }
       const tone = error ? 'err' : age > 60000 ? 'err' : age > 15000 ? 'warn' : ''
       const text = error
         ? '数据异常·正在重连'
@@ -1237,9 +1359,9 @@ window.__ModuleLoader__.load({
         note ? h('div', { className: 'bf-note', style: { marginBottom: 4 } }, note) : null,
         children)
 
-    /** 行式字段：label+说明 左，控件 右（行高 60） */
+    /** 行式字段：label+说明 左，控件 右（行高 60）；wide = 控件独占一行（纵向堆叠） */
     const Row = ({ label, help, children, wide }) =>
-      h('div', { className: 'bf-row' + (wide ? ' wide' : '') },
+      h('div', { className: `bf-row${wide ? ' bf-row-wide' : ''}` },
         h('div', { className: 'bf-row-main' },
           h('div', { className: 'bf-row-label' }, label),
           help ? h('div', { className: 'bf-row-help' }, help) : null,
@@ -1283,8 +1405,10 @@ window.__ModuleLoader__.load({
       if (account && account.loggedIn === false) {
         items.push({ tone: 'warn', text: '未登录，点赞/评论/动态都会失败。', action: '扫码登录', onAction: onLogin })
       }
-      if (health && !health.cli) {
-        items.push({ tone: 'error', text: '找不到 dsh CLI，值班轮跑不起来 —— 到「设置 → 运行环境」的「dsh CLI」填 bin.js 路径（一般留空即可自动探测）。' })
+      // ⭐ 只有「确实拿到了健康信息」才判红：health 对象缺失（首帧未到/信封为空）
+      //    不等于「探测失败」，否则页面一打开就假报「找不到 dsh CLI」。
+      if (health && health.cli !== undefined && health.cli !== null && !health.cli) {
+        items.push({ tone: 'error', text: '找不到 dsh CLI，值班轮跑不起来 —— 到「设置 → 运行环境」填写 dshBin。' })
       }
       if (round && round.lastCode != null && round.lastCode !== 0) {
         items.push({ tone: 'error', text: `上一轮退出码 ${round.lastCode}（${round.lastWhy || '未知来源'}）—— 到「设置 → 运行环境」看宿主日志尾部。` })
@@ -1791,7 +1915,7 @@ window.__ModuleLoader__.load({
         flat.sort((a, b) => String(b.e.t || '').localeCompare(String(a.e.t || '')))
         let lastDay = ''
         body = h(Card, null, flat.map(({ e, item }, i) => {
-          const day = String(e.t || '').slice(0, 10)
+          const day = e.t ? dayKeyOf(e.t) : ''   // 本地日：与服务器侧 groupByDay 同口径（UTC 切片在凌晨会差一天）
           const sep = day !== lastDay ? h('div', { className: 'bf-daysep', key: 'd-' + day + '-' + i }, day) : null
           lastDay = day
           const isProactive = e.type === 'reply-out' && e.kind === 'proactive'
@@ -1901,11 +2025,83 @@ window.__ModuleLoader__.load({
       quality: 'preview-quality', preview: 'preview-quality', version: 'preview-quality',
       state: 'preview-quality', bank: 'materials', lore: 'materials',
     }
+    /** W5 体检口径的中文展示（§8.2 基线：27 字 / 0.109 / 41.7% / 12.6%）。 */
+    const PF_CHECKUP_VERDICT = {
+      ok: { kind: 'rep', text: '像它' },
+      warn: { kind: 'warn', text: '有偏离' },
+      bad: { kind: 'err', text: '不像它了' },
+    }
+    const PF_HIT_LABEL = { lore: '见闻', canon: '被问到', expression: '语料' }
+    const pctText = (x) => Math.round((Number(x) || 0) * 100) + '%'
 
-    function PersonaPage({ persona, initial, initialTab }) {
-      const prevHook = usePoll(React.useCallback(() => apiGet('/persona/preview'), []), 60000)
-      const exprHook = usePoll(React.useCallback(() => apiGet('/persona/expression'), []), 60000)
-      const loreHook = usePoll(React.useCallback(() => apiGet('/persona/lore'), []), 60000)
+    /**
+     * 回滚出口：legacy 直通（旧 `personaPrompt`）。
+     *
+     * 这个字段原先在「设置 → 内容与禁令」里有一个编辑框 —— 但人设内容已经在本页有完整的
+     * 卡 / 素材 / 版本编辑入口，同一个字段两处能改只会让人分不清哪边生效（2026-10-28 主人指正：
+     * 「设置里那个没什么意义」）。所以设置页只管运行参数，这里只留**应急回滚**：
+     *   - 填回一段正文 / 一个文件路径 ⇒ 本轮注入回到 v1（legacy 直通，行为一字不差）；
+     *   - 清空 ⇒ 立刻回到人设卡链路。
+     * 收起时不发请求（enabled=open），展开才读 /config；写完刷新人设页的取数。
+     */
+    function LegacyFallback({ legacy, onChanged }) {
+      const [open, setOpen] = React.useState(!!legacy)   // legacy 生效时默认展开：这时它是本页唯一有用的东西
+      const [text, setText] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [msg, setMsg] = React.useState('')
+      const cfg = usePoll(React.useCallback(() => cachedGet('/config'), []), 30000, open)
+      const cfgVals = (cfg.data && cfg.data.values) || null
+      const cur = cfgVals && typeof cfgVals.personaPrompt === 'string' ? cfgVals.personaPrompt : ''
+      const val = text == null ? cur : text
+      const save = async (next) => {
+        setBusy(true); setMsg('')
+        try {
+          const r = await apiPost('/config', { personaPrompt: next })
+          if (r && r.ok) {
+            setText(null)
+            setMsg(next ? '已切到 legacy 直通（下一轮生效）' : '已清空：下一轮回人设卡')
+            cfg.refresh()
+            if (onChanged) onChanged()
+          } else {
+            const first = r && Array.isArray(r.errors) && r.errors[0]
+            setMsg('保存失败：' + ((r && (r.error || (first && (first.msg || first.path)))) || '未知错误'))
+          }
+        } catch (e) { setMsg('保存失败：' + String(e && e.message != null ? e.message : e)) } finally { setBusy(false) }
+      }
+      return h('details', {
+        className: 'bf-group', open,
+        onToggle: (e) => {
+          const o = !!(e && e.currentTarget && e.currentTarget.open)
+          if (o !== open) setOpen(o)
+        },
+      },
+        h('summary', null, '回滚出口：legacy 直通（旧 personaPrompt）'),
+        h('div', { style: { marginTop: 8 } },
+          h('div', { className: 'bf-note', style: { marginBottom: 8 } },
+            '人设内容只在本页维护。这里留一个应急出口：卡链路整体不对劲时，把旧提示词填回来，'
+            + '本轮注入就回到 v1 的做法（一字不差）；清空即回到人设卡。'),
+          legacy ? h('div', { className: 'bf-banner warn', style: { marginBottom: 8 } },
+            h('span', null, '当前生效中：legacy 直通。本页的人设卡与编译预览不生效。')) : null,
+          h('textarea', {
+            value: val, 'aria-label': '旧人设提示词（legacy）',
+            placeholder: '一段正文，或一个文件路径（/绝对路径、~/…、Windows 盘符、preset:whale；填目录则读其中的 AGENTS.md）',
+            onChange: (e) => setText(e.target.value),
+          }),
+          h('div', { className: 'bf-edit-actions' },
+            h(Btn, { variant: 'primary', disabled: busy || val === cur, onClick: () => save(val) }, '保存并生效'),
+            h(Btn, { variant: 'ghost', disabled: busy || !cur, onClick: () => save('') }, '清空：回到人设卡'),
+            msg ? h('span', { className: 'bf-note' }, msg) : null,
+          ),
+        ),
+      )
+    }
+
+    function PersonaPage({ persona, initial, initialTab, ov }) {
+      const prevHook = usePoll(React.useCallback(() => cachedGet('/persona/preview'), []), 60000)
+      const exprHook = usePoll(React.useCallback(() => cachedGet('/persona/expression'), []), 60000)
+      const loreHook = usePoll(React.useCallback(() => cachedGet('/persona/lore'), []), 60000)
+      const checkupHook = usePoll(React.useCallback(() => cachedGet('/persona/checkup'), []), 60000)
+      const historyHook = usePoll(React.useCallback(() => cachedGet('/persona/history'), []), 60000)
       const versHook = usePoll(React.useCallback(() => apiGet('/persona/versions'), []), 30000)
       const [tab, setTab] = React.useState(PF_TAB_ALIAS[initialTab] || initialTab || 'card')
       const [bucket, setBucket] = React.useState('')
@@ -1948,12 +2144,26 @@ window.__ModuleLoader__.load({
       const curBucket = bucketKeys.includes(bucket) ? bucket
         : (bucketKeys.includes('question') ? 'question' : (bucketKeys[0] || ''))
       const loreEntries = (loreData && loreData.entries) || []
-      const curLore = loreEntries.find((x) => x.id === loreId) || loreEntries[0] || null
+      const curLore = loreEntries.find((x) => x.id === loreId && !x.disabled)
+        || loreEntries.find((x) => !x.disabled) || loreEntries[0] || null
       const versions = (versData && versData.versions) || []
+      // W5：页头一行 / 本轮注入读概览信封（由 ConsolePage 把 rt.data 传进来）；
+      // 体检 / 换卡对比读两个新端点（未就绪时 initial 里没有，页面走「正在连接…」空态）。
+      const ovd = ov || (initial && initial.ov) || null
+      const ckRaw = checkupHook.data || (initial && initial.checkup) || null
+      const ck = ckRaw && ckRaw.ok !== false ? ckRaw : null
+      const histRaw = historyHook.data || (initial && initial.history) || null
+      const hist = histRaw && histRaw.ok !== false ? histRaw : null
+      const inject = (ovd && ovd.round && ovd.round.personaInject) || null
+      const injectTag = (ovd && ovd.round && ovd.round.personaTag) || (inject && inject.personaTag) || ''
+      // W7-2：同一个概览信封里的 round.speakGate，不新增请求（缺失时 injectGate = null ⇒ 渲染「暂无数据」）
+      const injectGate = speakGateOf(ovd && ovd.round && ovd.round.speakGate)
 
       const refreshAll = () => {
+        resetGetCache()   // 手动刷新要绕过 W4-4 的 30s 复用
         if (persona && persona.refresh) persona.refresh()
         prevHook.refresh(); exprHook.refresh(); loreHook.refresh(); versHook.refresh()
+        checkupHook.refresh(); historyHook.refresh()
       }
       const switchPreset = async (id) => {
         setBusy(id); setMsg('')
@@ -2015,13 +2225,32 @@ window.__ModuleLoader__.load({
         } catch (e) { setMsg('切换失败：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
       const bankRemove = async (e0) => {
-        if (typeof window !== 'undefined' && window.confirm && !window.confirm('删除这条语料？')) return
+        if (typeof window !== 'undefined' && window.confirm && !window.confirm('删除这条语料？（软删除，可在回收站恢复）')) return
         setBusy('br-' + e0.id); setMsg('')
         try {
           const r = await apiPost('/persona/expression', { action: 'remove', form: curBucket, id: e0.id })
           if (!r.ok) setMsg('删除失败：' + (r.error || '未知'))
-          else { setMsg('已删除'); refreshAll() }
+          else { setMsg(r.soft === true ? '已移入回收站（可恢复）' : '已删除'); refreshAll() }
         } catch (e) { setMsg('删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      /* W3-3：软删除留痕 —— 回收站里的条目可以恢复；「彻底删除」单独二次确认。 */
+      const bankRestore = async (e0) => {
+        setBusy('brr-' + e0.id); setMsg('')
+        try {
+          const r = await apiPost('/persona/expression', { action: 'restore', form: curBucket, id: e0.id })
+          setMsg(r.ok ? '已恢复' : '恢复失败：' + (r.error || '未知'))
+          if (r.ok) refreshAll()
+        } catch (e) { setMsg('恢复失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const bankPurge = async (e0) => {
+        if (typeof window !== 'undefined' && window.confirm
+          && !window.confirm('彻底删除这条语料？删除后不可恢复。')) return
+        setBusy('brp-' + e0.id); setMsg('')
+        try {
+          const r = await apiPost('/persona/expression', { action: 'purge', form: curBucket, id: e0.id })
+          setMsg(r.ok ? '已彻底删除' : '彻底删除失败：' + (r.error || '未知'))
+          if (r.ok) refreshAll()
+        } catch (e) { setMsg('彻底删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
 
       const loreStartEdit = () => {
@@ -2052,13 +2281,31 @@ window.__ModuleLoader__.load({
       }
       const loreRemove = async (id) => {
         if (typeof window !== 'undefined' && window.confirm
-          && !window.confirm('删除见闻「' + id + '」？（索引删掉；已落盘的正文文件保留）')) return
+          && !window.confirm('删除见闻「' + id + '」？（软删除，可在回收站恢复；已落盘的正文文件保留）')) return
         setBusy('lr-' + id); setMsg('')
         try {
           const r = await apiPost('/persona/lore', { action: 'remove', id })
           if (!r.ok) setMsg('删除失败：' + (r.error || '未知'))
-          else { setMsg('已删除'); setLoreId(''); setLoreDraft(null); refreshAll() }
+          else { setMsg(r.soft === true ? '已移入回收站（可恢复）' : '已删除'); setLoreId(''); setLoreDraft(null); refreshAll() }
         } catch (e) { setMsg('删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const loreRestore = async (id) => {
+        setBusy('lrr-' + id); setMsg('')
+        try {
+          const r = await apiPost('/persona/lore', { action: 'restore', id })
+          setMsg(r.ok ? '已恢复' : '恢复失败：' + (r.error || '未知'))
+          if (r.ok) refreshAll()
+        } catch (e) { setMsg('恢复失败：' + String(e?.message ?? e)) } finally { setBusy('') }
+      }
+      const lorePurge = async (id) => {
+        if (typeof window !== 'undefined' && window.confirm
+          && !window.confirm('彻底删除见闻「' + id + '」？删除后不可恢复。')) return
+        setBusy('lrp-' + id); setMsg('')
+        try {
+          const r = await apiPost('/persona/lore', { action: 'purge', id })
+          setMsg(r.ok ? '已彻底删除' : '彻底删除失败：' + (r.error || '未知'))
+          if (r.ok) { setLoreId(''); setLoreDraft(null); refreshAll() }
+        } catch (e) { setMsg('彻底删除失败：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
 
       const identity = (cur ? (cur.name || cur.id) : (card ? card.name : '未加载')) +
@@ -2079,6 +2326,215 @@ window.__ModuleLoader__.load({
         PERSONA_TABS.map(([k, label]) => h('button', {
           key: k, role: 'tab', 'aria-selected': String(tab === k), onClick: () => setTab(k),
         }, label)),
+      )
+
+      /* ═══ W5 人设页四个「回答」：页头一行 / 本轮实际注入 / 体检 / 换卡对比 ═══
+       * 数据源：/persona + 概览 round.personaTag|personaInject（已有）；
+       *        /persona/checkup + /persona/history（新端点，未就绪时 initial 里没有 ⇒ 空态）。
+       * 每块都两态：「正在连接…」（首帧未到）/「暂无数据」（到了但没内容），不许谎报。 */
+
+      /* ── ① 页头一行：这个号现在是谁 ── */
+      const whoName = cur ? (cur.name || cur.id) : (card ? (card.name || card.id) : '')
+      const whoVersion = cur?.version || card?.version || ''
+      const whoNow = whoName ? whoName + (whoVersion ? ' @' + whoVersion : '') : ''
+      const whoLine = h('div', {
+        className: 'bf-tools', 'data-block': 'persona-who',
+        style: {
+          padding: '10px 14px', border: '.5px solid var(--border-l2)',
+          borderRadius: 12, background: 'var(--bg-layer-1)',
+        },
+      },
+        h('span', { className: 'bf-note' }, '现在是谁'),
+        whoNow
+          ? h('span', { className: 'bf-strong', style: { fontSize: 13, lineHeight: '20px' } }, whoNow)
+          : h('span', { className: 'bf-note' }, '正在连接…'),
+        whoNow ? h(Pill, { tone: mode === 'card' ? 'ok' : mode === 'legacy' ? 'warn' : 'err' }, modeInfo.text) : null,
+        h(Sp),
+        h('span', { className: 'bf-note' }, '上轮注入'),
+        injectTag
+          ? h('span', { className: 'bf-note st' }, injectTag)
+          : h('span', { className: 'bf-note' }, ovd ? '暂无数据' : '正在连接…'),
+        inject && Number(inject.totalMax)
+          ? h('span', { className: 'bf-pf-num' },
+              (Number(inject.total) || 0) + ' / ' + Number(inject.totalMax) + ' 字符')
+          : null,
+      )
+
+      /* ── ② 本轮实际注入：五块进度条 + 命中见闻 + 降级徽标 ── */
+      const injectLayers = inject && Array.isArray(inject.layers) ? inject.layers : []
+      const injectHits = inject && Array.isArray(inject.hits) ? inject.hits : []
+      const injectDegraded = inject && Array.isArray(inject.degraded) ? inject.degraded : []
+      const injectNotes = inject && Array.isArray(inject.notes) ? inject.notes : []
+      const injectCard = h('div', { 'data-block': 'persona-inject' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '本轮实际注入'),
+            h('span', { className: 'bf-card-note' },
+              inject
+                ? (injectTag || '未知') + ' · 合计 ' + (Number(inject.total) || 0)
+                  + ' / ' + (Number(inject.totalMax) || 0) + ' 字符'
+                : ovd ? '暂无数据' : '正在连接…'),
+            h(Sp),
+            inject && Number(inject.totalMax) && Number(inject.total) > Number(inject.totalMax)
+              ? h(Tag, { kind: 'err' }, '超预算') : null,
+          ),
+          inject
+            ? h('div', null,
+                injectLayers.length
+                  ? injectLayers.map((l) => h('div', { className: 'bf-pf-budget', key: l.name },
+                      h('span', { className: 'bf-note' }, PF_BLOCK_LABEL[l.name] || l.name),
+                      h('div', { className: 'bf-bar' }, h('i', {
+                        className: Number(l.max) && Number(l.chars) > Number(l.max) ? 'over'
+                          : Number(l.max) && Number(l.chars) > Number(l.max) * 0.9 ? 'warn' : '',
+                        style: {
+                          width: Math.min(100, Math.round(
+                            ((Number(l.chars) || 0) / (Number(l.max) || 1)) * 100,
+                          )) + '%',
+                        },
+                      })),
+                      h('span', { className: 'bf-pf-num' }, (Number(l.chars) || 0) + '/' + (Number(l.max) || 0)),
+                    ))
+                  : h('div', { className: 'bf-note' }, '这轮没有分块统计（旧版账本事件）。'),
+                h('div', { className: 'bf-tools', style: { marginTop: 10 } },
+                  h('span', { className: 'bf-note' }, '命中'),
+                  injectHits.length
+                    ? injectHits.map((x, i) => h(Tag, { kind: 'cmt', key: i },
+                        (PF_HIT_LABEL[(x && x.kind)] || (x && x.kind) || '') + ' ' + String((x && x.id) || '')))
+                    : h('span', { className: 'bf-note' }, '无'),
+                  h(Sp),
+                  injectDegraded.length
+                    ? injectDegraded.map((d0, i) => h(Tag, { kind: 'warn', key: i },
+                        '降级 ' + String(d0 == null ? '' : d0)))
+                    : h(Tag, { kind: 'rep' }, '无降级'),
+                ),
+                inject.guard
+                  ? h('div', { className: 'bf-pf-sub' },
+                      '守卫：' + (inject.guard.level || 'ok')
+                      + (Number(inject.guard.len)
+                        ? ' · ' + inject.guard.len + ' / 软线 ' + (inject.guard.softMax || '—')
+                          + ' / 硬线 ' + (inject.guard.hardMax || '—')
+                        : ''))
+                  : null,
+                injectNotes.length
+                  ? h('div', { className: 'bf-pf-sub' },
+                      injectNotes.map((n, i) => h('div', { key: i }, '· ' + String(n == null ? '' : n))))
+                  : null,
+              )
+            : h('div', { className: 'bf-note' },
+                ovd ? '这轮账本里还没有 persona-inject 记录（未走卡链路或还没跑完）。' : '正在连接…'),
+          /* W7-2 发言门控一行：解释这轮为什么说 / 不说（与被注入的口径同源，不新增请求） */
+          h('div', {
+            className: 'bf-tools', 'data-block': 'persona-gate',
+            style: { marginTop: 10, paddingTop: 8, borderTop: '.5px solid var(--border-l2)' },
+          },
+            h('span', { className: 'bf-note st' }, '发言门控'),
+            injectGate
+              ? h(React.Fragment, null,
+                  h(SpeakGateTags, { gate: injectGate }),
+                  injectGate.reason ? h('span', { className: 'bf-note' }, '· ' + injectGate.reason) : null,
+                  injectGate.featText ? h('span', { className: 'bf-note' }, '· ' + injectGate.featText) : null,
+                )
+              : h('span', { className: 'bf-note' }, ovd ? '暂无数据' : '正在连接…'),
+          ),
+        ),
+      )
+
+      /* ── ③ 体检：说话还像它吗（近 N 条 vs 247 条基线） ── */
+      const ckMetrics = (ck && ck.metrics) || null
+      const ckN = Number(ck && ck.n) || 0
+      const ckMetric = (k) => Number(ckMetrics && ckMetrics[k]) || 0
+      // 至少有一个已知指标才算「有数据」；半截 metrics 按暂无数据处理，别渲染一排 0 假装体检过
+      const ckHasMetrics = !!ckMetrics && ['medianChars', 'periodPerComment', 'emojiRatio', 'questionRatio', 'avoidHits']
+        .some((k) => Number.isFinite(Number(ckMetrics[k])))
+      const ckView = PF_CHECKUP_VERDICT[(ck && ck.verdict && ck.verdict.level) || 'ok'] || PF_CHECKUP_VERDICT.ok
+      const ckSamples = (ck && Array.isArray(ck.samples) ? ck.samples : [])
+        .filter((s0) => s0 && typeof s0 === 'object')
+      const ckReasons = ck && ck.verdict && Array.isArray(ck.verdict.reasons) ? ck.verdict.reasons : []
+      const checkupCard = h('div', { 'data-block': 'persona-checkup' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '体检'),
+            h('span', { className: 'bf-card-note' },
+              ck && ckN
+                ? '近 ' + ckN + ' 条 vs 247 条基线 · 窗口 ' + (Number(ck.windowDays) || 14) + ' 天'
+                : ck ? '暂无数据' : '正在连接…'),
+            h(Sp),
+            ck && ckN ? h(Tag, { kind: ckView.kind }, ckView.text) : null,
+          ),
+          !ck || !ckN || !ckHasMetrics
+            ? h('div', { className: 'bf-note' },
+                ck ? '暂无数据' + (ckReasons[0] ? '：' + ckReasons[0] : '') : '正在连接…')
+            : h('div', null,
+                h('div', { className: 'bf-grid-4' },
+                  h(Metric, { label: '中位字数', value: String(ckMetric('medianChars')) + ' 字', foot: '基线 27 字' }),
+                  h(Metric, { label: '句号 / 条', value: ckMetric('periodPerComment').toFixed(3), foot: '基线 0.109' }),
+                  h(Metric, { label: '表情占比', value: pctText(ckMetric('emojiRatio')), foot: '基线 41.7%' }),
+                  h(Metric, { label: '问号占比', value: pctText(ckMetric('questionRatio')), foot: '基线 12.6%' }),
+                ),
+                h('div', { className: 'bf-tools', style: { marginTop: 8 } },
+                  h('span', { className: 'bf-note' }, '禁用词命中 ' + pctText(ckMetric('avoidHits')) + '（基线 0）'),
+                  h(Sp),
+                  h('span', { className: 'bf-note' }, '样本 ' + ckN + ' 条'),
+                ),
+                ckReasons.length
+                  ? h('div', { style: { marginTop: 8 } },
+                      ckReasons.map((r, i) => h('div', { className: 'bf-note', key: i }, '· ' + r)))
+                  : h('div', { className: 'bf-note', style: { marginTop: 8 } }, '各项指标都在基线附近。'),
+                ckSamples.length
+                  ? h('div', { style: { marginTop: 8 } }, ckSamples.slice(0, 5).map((s0, i) => h('div', {
+                      key: (s0.bvid || '') + i,
+                      style: { padding: '6px 0', borderTop: i ? '.5px solid var(--border-l2)' : 0 },
+                    },
+                      h('div', { style: { fontSize: 13, lineHeight: '20px' } }, (i + 1) + '. ' + String(s0.text || '')),
+                      h('div', { className: 'bf-note' },
+                        [s0.bvid || '', s0.t ? hhmm(s0.t) : ''].filter(Boolean).join(' · ')),
+                    )))
+                  : null,
+              ),
+        ),
+      )
+
+      /* ── ④ 换卡对比：改了卡有变好吗（按 personaTag 分组，各 3 条评论 + 赞） ── */
+      const histTags = (hist && Array.isArray(hist.tags) ? hist.tags : [])
+        .filter((g) => g && typeof g === 'object')
+      const historyCard = h('div', { 'data-block': 'persona-history' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '换卡对比'),
+            h('span', { className: 'bf-card-note' },
+              histTags.length
+                ? histTags.length + ' 组人设 · 每组近 3 条评论 + 赞'
+                : hist ? '暂无数据' : '正在连接…'),
+          ),
+          histTags.length
+            ? h('div', { className: 'bf-grid-2' }, histTags.map((g) => h('div', {
+                key: String(g.personaTag || ''),
+                style: {
+                  border: '.5px solid var(--border-l2)', borderRadius: 12,
+                  padding: '10px 12px', background: 'var(--bg-layer-1)',
+                },
+              },
+                h('div', { className: 'bf-tools' },
+                  h('span', { className: 'bf-strong', style: { fontSize: 13, lineHeight: '20px' } },
+                    String(g.personaTag || '未知')),
+                  h(Sp),
+                  h('span', { className: 'bf-note' },
+                    (Number(g.rounds) || 0) + ' 轮 · 赞 ' + (Number(g.likes) || 0)),
+                  g.lastAt ? h('span', { className: 'bf-note' }, hhmm(g.lastAt)) : null,
+                ),
+                (Array.isArray(g.samples) ? g.samples : []).filter((s0) => s0 && typeof s0 === 'object').length
+                  ? (Array.isArray(g.samples) ? g.samples : [])
+                      .filter((s0) => s0 && typeof s0 === 'object').map((s0, i) => h('div', {
+                      key: i, style: { padding: '6px 0', borderTop: '.5px solid var(--border-l2)' },
+                    },
+                      h('div', { style: { fontSize: 13, lineHeight: '20px' } }, String(s0.text || '')),
+                      h('div', { className: 'bf-note' }, (s0.bvid || '') + ' · 赞 ' + (Number(s0.likes) || 0)),
+                    ))
+                  : h('div', { className: 'bf-note', style: { marginTop: 6 } }, '这版人设还没有评论样本。'),
+              )))
+            : h('div', { className: 'bf-note' },
+                hist ? '还没有 persona-inject 归因数据（跑过卡轮后出现）。' : '正在连接…'),
+        ),
       )
 
       const budgetCard = h(Card, null,
@@ -2170,14 +2626,17 @@ window.__ModuleLoader__.load({
               '保存会校验 schema + L0 前六条（红线三件套/禁止句/手段表/词频/矛盾/示例），失败返回字段级错误。'),
           ),
         ),
+        h(LegacyFallback, { legacy, onChanged: refreshAll }),
       )
 
       /* ── ② 素材库（语料 + 见闻） ── */
       const bankEntries = (buckets[curBucket] || [])
+      const bankDisabled = bankEntries.filter((e) => e.disabled === true)
       const bankCard = h(Card, null,
         h('div', { className: 'bf-card-head' },
           h('span', { className: 'bf-card-title' }, '语料库'),
-          h('span', { className: 'bf-card-note' }, '逐字真实素材 · 注入时只学手感'),
+          h('span', { className: 'bf-card-note' },
+            '逐字真实素材 · 注入时只学手感' + (bankDisabled.length ? ' · 回收站 ' + bankDisabled.length : '')),
           h(Sp),
           h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: bankStartAdd }, '＋ 新增'),
         ),
@@ -2212,7 +2671,15 @@ window.__ModuleLoader__.load({
             ? bankEntries.map((e, i) => h('div', {
                 key: e.id || i, style: { padding: '9px 0', borderTop: '.5px solid var(--border-l2)' },
               },
-                bankEditId === e.id && bankDraft ? h('div', null,
+                e.disabled === true ? h('div', { style: { opacity: .55 } },
+                  h('div', { style: { fontSize: 13, lineHeight: '20px', textDecoration: 'line-through' } }, e.text),
+                  h('div', { className: 'bf-tools', style: { marginTop: 2 } },
+                    h('span', { className: 'bf-note' }, (e.source || '') + ' · 已删除（回收站）'),
+                    h(Sp),
+                    h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => bankRestore(e) }, '恢复'),
+                    h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => bankPurge(e) }, '彻底删除'),
+                  ),
+                ) : bankEditId === e.id && bankDraft ? h('div', null,
                   h('textarea', {
                     value: bankDraft.text, 'aria-label': '语料正文',
                     onChange: (ev) => setBankDraft({ ...bankDraft, text: ev.target.value }),
@@ -2244,10 +2711,13 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      const loreDisabled = loreEntries.filter((e) => e.disabled === true)
       const loreCard = h(Card, null,
         h('div', { className: 'bf-card-head' },
           h('span', { className: 'bf-card-title' }, '见闻库'),
-          h('span', { className: 'bf-card-note' }, loreEntries.length + ' 条 · 索引常驻，正文命中才读'),
+          h('span', { className: 'bf-card-note' },
+            loreEntries.length + ' 条 · 索引常驻，正文命中才读'
+            + (loreDisabled.length ? ' · 回收站 ' + loreDisabled.length : '')),
           h(Sp),
           h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: loreStartAdd }, '＋ 新增'),
         ),
@@ -2281,15 +2751,23 @@ window.__ModuleLoader__.load({
             ) : null,
             loreEntries.length
               ? loreEntries.map((e) => h('div', {
-                  key: e.id, style: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' },
+                  key: e.id, style: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', opacity: e.disabled ? .55 : 1 },
                 },
-                  h('button', {
+                  e.disabled === true ? h('div', {
+                    className: 'bf-list-btn', style: { flex: 1, minWidth: 0, cursor: 'default' },
+                  }, h('span', { className: 'l', style: { textDecoration: 'line-through' } }, e.id),
+                     h('span', { className: 'm' }, '已删除')) : h('button', {
                     className: 'bf-list-btn', style: { flex: 1, minWidth: 0 },
                     'aria-current': String((curLore || {}).id === e.id),
                     onClick: () => { setLoreId(e.id); setLoreDraft(null) },
                   }, h('span', { className: 'l' }, e.id),
                      h('span', { className: 'm' }, e.usedToday ? '今天用过' : '可用')),
-                  h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => loreRemove(e.id) }, '删'),
+                  e.disabled === true
+                    ? h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => loreRestore(e.id) }, '恢复')
+                    : h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => loreRemove(e.id) }, '删'),
+                  e.disabled === true
+                    ? h(Btn, { small: true, variant: 'ghost', disabled: !!busy, onClick: () => lorePurge(e.id) }, '彻底删除')
+                    : null,
                 ))
               : h('div', { className: 'bf-note' }, '卡里还没有 loreIndex。'),
           ),
@@ -2446,10 +2924,14 @@ window.__ModuleLoader__.load({
         head,
         h('div', { className: 'bf-pagemain' },
           legacy ? h('div', { className: 'bf-banner warn' },
-            h('span', null, '配置里填了 personaPrompt：本轮走 legacy 直通，本页的卡与编译预览不生效；切预设只改 active.json，不会覆盖配置。')) : null,
+            h('span', null, '配置里填了 personaPrompt：本轮走 legacy 直通，本页的卡与编译预览不生效；切预设只改 active.json，不会覆盖配置。'
+              + '要回到人设卡，去「人设卡 → 回滚出口」点「清空：回到人设卡」。')) : null,
           mode === 'missing' ? h('div', { className: 'bf-banner error' },
             h('span', null, '人设卡读不到：' + (health.detail || '未知原因') + '，可切一个内置预设恢复。')) : null,
           err ? h('div', { className: 'bf-banner error' }, h('span', null, '读取失败：' + err)) : null,
+          whoLine,
+          h('div', { className: 'bf-grid-2' }, injectCard, checkupCard),
+          historyCard,
           tabs,
           h('section', { role: 'tabpanel', 'aria-label': (PERSONA_TABS.find(([k]) => k === tab) || [])[1] || '' }, body),
         ),
@@ -2461,7 +2943,6 @@ window.__ModuleLoader__.load({
     const SET_SUBTABS = [['rules', '节奏与配额'], ['content', '内容与禁令'], ['env', '运行环境']]
 
     function SettingsPage({ ov, initial, initialSub }) {
-      // initialSub 让子页可直达（渲染测试用）；真实宿主不传，默认「节奏与配额」
       const [sub, setSub] = React.useState(SET_SUBTABS.some(([k]) => k === initialSub) ? initialSub : 'rules')
       return h('div', null,
         h(PageHeader, { title: PAGE_TITLE.settings, intro: PAGE_INTRO.settings }),
@@ -2539,8 +3020,16 @@ window.__ModuleLoader__.load({
       const cfgData = cfg.data || initial || null
       const models = useModels(sub === 'env')
       const diag = useDiagnose()
-      const [draft, setDraft] = React.useState(initial ? { ...initial.values } : null)
-      React.useEffect(() => { if (cfgData && !draft) setDraft({ ...cfgData.values }) }, [cfgData, draft])
+      /* 人设内容不归设置页管（唯一入口在「人设 → 人设卡 → 回滚出口」）：
+       * personaPrompt **不进 draft**，所以设置页既不会显示它、也不会把它写回去
+       * ——否则在本页点一次「恢复默认」就会静默清掉人设页设的回滚开关，且用户看不见。 */
+      function noPersona(o) {
+        const x = { ...(o || {}) }
+        delete x.personaPrompt
+        return x
+      }
+      const [draft, setDraft] = React.useState(initial ? noPersona(initial.values) : null)
+      React.useEffect(() => { if (cfgData && !draft) setDraft(noPersona(cfgData.values)) }, [cfgData, draft])
       const [msg, setMsg] = React.useState('')
       if (!draft) return h('div', { className: 'bf-note' }, '加载中…')
 
@@ -2561,7 +3050,7 @@ window.__ModuleLoader__.load({
       const resetDefault = () => {
         if (typeof window !== 'undefined' && window.confirm
           && !window.confirm('恢复默认会把 ' + dirtyKeys.length + ' 处字段改回默认值（还没保存）。继续？')) return
-        setDraft({ ...cfgData?.defaults })
+        setDraft(noPersona(cfgData?.defaults))
       }
       const followDefault = async () => {
         const patch = { modelProvider: '', modelName: '', modelReasoningEffort: '' }
@@ -2574,13 +3063,94 @@ window.__ModuleLoader__.load({
         models.refresh?.()
       }
 
+      /* 值班节奏：自动值班 + 排班方式（谷时窗口 / 固定间隔 / 指定时间）+ 星期多选。
+       * 老配置没有新字段 ⇒ 按 windows 渲染（逐屏与旧版一致），因此所有新字段都必须有兜底值。
+       * 不新增依赖：复用现有 Switch / Num / Select / Btn / ChipsInput / Row / Group。 */
+      const SCHEDULE_MODES = ['windows', 'interval', 'daily']
+      const scheduleMode = SCHEDULE_MODES.includes(draft.dutyScheduleMode) ? draft.dutyScheduleMode : 'windows'
+      // ⚠️ 不能用 `length ? … : 全选`：空数组是「每天」的合法配置，回填成全选会让「取消最后一个」永远退不回去。
+      const activeWeekdays = Array.isArray(draft.dutyWeekdays)
+        ? draft.dutyWeekdays.filter((n) => Number.isInteger(n) && n >= 1 && n <= 7)
+        : [1, 2, 3, 4, 5, 6, 7]
+      const toggleWeekday = (n) => {
+        const cur = new Set(activeWeekdays)
+        if (cur.has(n)) cur.delete(n)
+        else cur.add(n)
+        set('dutyWeekdays', [...cur].sort((a, b) => a - b))
+      }
+      const weekdayRow = h(Row, { label: '星期', help: '只在勾选的星期触发；全部取消勾选 = 每天', wide: true },
+        h('div', {
+          className: 'bf-weekdays', role: 'group', 'aria-label': '允许触发的星期',
+          style: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+        }, ['一', '二', '三', '四', '五', '六', '日'].map((name, i) => {
+          const n = i + 1
+          const on = activeWeekdays.includes(n)
+          return h(Btn, {
+            key: name, small: true, variant: on ? 'primary' : 'default',
+            'aria-pressed': String(on), 'aria-label': `周${name}`,
+            onClick: () => toggleWeekday(n),
+          }, `周${name}`)
+        })))
+      const intervalValue = Math.min(1440, Math.max(10, Math.round(Number(draft.dutyIntervalMinutes) || 180)))
+      const intervalRows = scheduleMode === 'interval'
+        ? [
+            h(Row, { key: 'interval', label: '间隔分钟', help: '两轮之间至少隔多少分钟（10–1440，默认 180）' },
+              h(Num, {
+                value: intervalValue, min: 10, max: 1440, label: '间隔分钟',
+                onChange: (v) => set('dutyIntervalMinutes', v),
+              })),
+            h(Row, { key: 'active', label: '活跃时段', help: '只在此时段内触发；开始 > 结束表示跨夜（如 22:00–06:00）', wide: true },
+              h('div', { className: 'bf-time-range', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                h('input', {
+                  type: 'time', className: 'bf-input', style: { width: 120 },
+                  value: draft.dutyActiveStart || '00:00', 'aria-label': '活跃时段开始',
+                  onChange: (e) => set('dutyActiveStart', e.target.value),
+                }),
+                h('span', { className: 'bf-note' }, '至'),
+                h('input', {
+                  type: 'time', className: 'bf-input', style: { width: 120 },
+                  value: draft.dutyActiveEnd || '23:59', 'aria-label': '活跃时段结束',
+                  onChange: (e) => set('dutyActiveEnd', e.target.value),
+                }))),
+          ]
+        : []
+      // 指定时间：手输 8:30 也认，统一成 '08:30'（后端还会再校验一次，非法值 400）
+      const timeChip = (x) => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(String(x ?? '').trim())
+        if (!m) return ''
+        const hh = Number(m[1])
+        const mm = Number(m[2])
+        if (hh > 23 || mm > 59) return ''
+        return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+      }
+      const dailyRows = scheduleMode === 'daily'
+        ? [h(Row, { key: 'daily', label: '指定时间', help: '每天这些点各跑一轮（HH:MM，最多 8 个；晚到 20 分钟内补跑）', wide: true },
+            h(ChipsInput, {
+              values: Array.isArray(draft.dutyDailyTimes) ? draft.dutyDailyTimes : [],
+              onChange: (v) => set('dutyDailyTimes', [...new Set(v.map(timeChip).filter(Boolean))].sort().slice(0, 8)),
+              placeholder: '08:30',
+            }))]
+        : []
       const rulesGroup = h(Group, { title: '值班节奏' },
-        h(Row, { label: '自动值班', help: '开启后在谷时窗口自动拉起一轮；关闭后只能手动触发' },
+        h(Row, { label: '自动值班', help: '开启后按下面的排班方式自动拉起一轮；关闭后只能手动触发' },
           h(Switch, { checked: !!draft.autoDuty, label: '自动值班', onChange: (v) => set('autoDuty', v) })),
-        h(Row, { label: '中午窗口', help: '12:00 – 14:00' },
-          h(Switch, { checked: !!draft.noon, label: '中午窗口', onChange: (v) => set('noon', v) })),
-        h(Row, { label: '晚间窗口', help: '18:00 – 次日 09:00' },
-          h(Switch, { checked: !!draft.night, label: '晚间窗口', onChange: (v) => set('night', v) })),
+        h(Row, { label: '排班方式', help: '谷时窗口 = 旧版中午/晚间两个窗口；也可以固定间隔或每天指定时间' },
+          h(Select, {
+            label: '排班方式', value: scheduleMode,
+            onChange: (v) => set('dutyScheduleMode', v),
+            options: [['windows', '谷时窗口'], ['interval', '固定间隔'], ['daily', '指定时间']],
+          })),
+        ...(scheduleMode === 'windows'
+          ? [
+              h(Row, { key: 'noon', label: '中午窗口', help: '12:00 – 14:00' },
+                h(Switch, { checked: !!draft.noon, label: '中午窗口', onChange: (v) => set('noon', v) })),
+              h(Row, { key: 'night', label: '晚间窗口', help: '18:00 – 次日 09:00' },
+                h(Switch, { checked: !!draft.night, label: '晚间窗口', onChange: (v) => set('night', v) })),
+            ]
+          : []),
+        ...intervalRows,
+        ...dailyRows,
+        weekdayRow,
       )
 
       const quotaGroup = h(Group, { title: '配额', note: '0 = 关闭该项' },
@@ -2631,13 +3201,45 @@ window.__ModuleLoader__.load({
           h(Num, { value: Number(draft.growthAutoPromote ?? 3), label: '每日自动转正', onChange: (v) => set('growthAutoPromote', v) })),
       )
 
-      // 人设已独立成「人设」页（人设卡 / 素材库 / 预览与质量），这里不再有旧的人设直通输入框。
-      // personaPrompt 字段仍留在 config 里做兼容（非空 = legacy 直通、整段覆盖卡片），
-      // 但控制台不再编辑它；要退场就改 config.json（删键或置空）。
+      /* W7-2 发言门控 + 质量门转正（本轮新加的配置项，以前只能改配置文件）。
+       * 纪律：观察中 ≠ 已经拦截 —— 文案必须和概览卡、人设页那一行保持一致，别让主人误以为开了就在拦。 */
+      const qualityGateGroup = h(Group, { title: '人设 / 质量门' },
+        h(Row, {
+          label: '发言门控',
+          help: '默认观察中：只记录、不拦（观察中 ≠ 已经拦截）；建议先跑三天看误杀率，再切强制',
+        },
+          h(Select, {
+            label: '发言门控',
+            value: draft.speakGateMode || 'observe',
+            options: [
+              ['off', '关闭（不记录节奏）'],
+              ['observe', '观察中（只记录、不拦，推荐先跑三天）'],
+              ['enforce', '强制（节奏太密时把本轮评论上限压到 1 条）'],
+            ],
+            onChange: (v) => set('speakGateMode', v),
+          })),
+        h(Row, {
+          label: '只转正已确认的候选',
+          help: '开启后只转正人工确认过（checked）的语料候选；关闭 = 按「每日自动转正」数自动推进',
+        },
+          h(Switch, {
+            checked: draft.growthCheckedOnly === true, label: '只转正已确认的候选',
+            onChange: (v) => set('growthCheckedOnly', v),
+          })),
+      )
 
+      const cliPath = ov?.data?.health?.cli
       const envGroup = h(Group, { title: '运行环境' },
-        h(Row, { label: 'dsh CLI', help: ov?.data?.health?.cli || '值班轮会先自动探测' },
-          ov?.data?.health?.cli ? h(Pill, { tone: 'ok' }, '已探测') : h(Pill, { tone: 'warn' }, '未找到')),
+        h(Row, {
+          label: 'dsh CLI',
+          // ⭐ 三态：还没拿到信封 ≠ 没探测到（旧版两者都渲染成「未找到」，一打开就假报警）
+          help: cliPath || (ov?.data?.health ? '值班轮会先自动探测' : '正在读取运行状态…'),
+        },
+          cliPath
+            ? h(Pill, { tone: 'ok' }, '已探测')
+            : ov?.data?.health
+              ? h(Pill, { tone: 'warn' }, '未找到')
+              : h(Pill, { tone: 'off' }, '检测中')),
         h(Row, { label: 'dshBin', help: '留空自动探测（…/@deepseek-ai/dsh/lib/bin.js）', wide: true },
           h('input', {
             className: 'bf-input', value: draft.dshBin || '', style: { width: '100%' },
@@ -2657,7 +3259,9 @@ window.__ModuleLoader__.load({
       const body = sub === 'rules'
         ? h('div', { className: 'bf-config' }, rulesGroup, quotaGroup)
         : sub === 'content'
-          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup)
+          ? h('div', { className: 'bf-config' }, contentGroup, banGroup, growthGroup, qualityGateGroup,
+              h('div', { className: 'bf-note', style: { marginTop: 12 } },
+                '人设内容（身份 / 口吻 / 素材 / 回滚）统一在「人设」页维护；设置页只放运行参数与默认禁令。'))
           : h('div', { className: 'bf-config' },
               h(ModelFields, { draft, onChange: setPatch, models, onFollow: followDefault }),
               envGroup,
@@ -2865,6 +3469,58 @@ window.__ModuleLoader__.load({
     }
 
     /** 今日产出：数字带 + 最近 3 条它说过的话 */
+    /** 当前账号：头像 + 昵称/UID + 关键数字（粉丝/关注/硬币/等级）+ 凭证状态与重新登录
+     *  三态：还没拿到信封（loaded=false）→「读取中」；拿到但未登录 → 登录引导；已登录 → 资料。 */
+    function AccountCard({ account, onLogin, loaded = true }) {
+      const [faceOk, setFaceOk] = React.useState(true)
+      const a = account || null
+      const loggedIn = !!a && a.loggedIn !== false
+      const uname = (a && a.uname) || ''
+      const initial = (uname || 'B').slice(0, 1)
+      const showFace = !!(loggedIn && a && a.face && faceOk)
+      const stat = (v) => (v == null || v === '' ? '—' : (typeof v === 'number' ? fmtNum(v) : String(v)))
+      const stats = [
+        ['粉丝', a ? a.fans : null],
+        ['关注', a ? a.following : null],
+        ['硬币', a ? a.coins : null],
+      ]
+      const note = !loaded ? '读取中…'
+        : !loggedIn ? '未登录'
+          : a.stale ? '凭证有效（信息为缓存）' : '凭证有效'
+      return h(Card, null,
+        h('div', { className: 'bf-card-head' },
+          h('span', { className: 'bf-card-title' }, '当前账号'),
+          h('span', { className: 'bf-card-note' }, note),
+          loggedIn && a.checkedAt
+            ? h('span', { className: 'bf-card-note' }, '· 检查于 ' + hhmmss(a.checkedAt)) : null,
+          h(Sp),
+          h(Btn, { small: true, variant: 'ghost', onClick: onLogin }, loggedIn ? '重新登录' : '扫码登录'),
+        ),
+        h('div', { className: 'bf-account' },
+          h('div', { className: 'bf-avatar', 'aria-hidden': 'true' },
+            showFace
+              ? h('img', {
+                  src: a.face, alt: uname || '头像', referrerPolicy: 'no-referrer',
+                  onError: () => setFaceOk(false),
+                })
+              : initial),
+          h('div', { className: 'bf-account-main' },
+            h('div', { className: 'bf-account-name' },
+              h('span', null, loggedIn ? (uname || '已登录') : (loaded ? '未登录' : '读取中…')),
+              loggedIn && a.vip ? h('span', { className: 'bf-lv' }, '大会员') : null,
+              loggedIn && a.level != null ? h('span', { className: 'bf-lv' }, 'LV' + a.level) : null,
+            ),
+            h('div', { className: 'bf-account-meta' },
+              loggedIn && a.mid ? 'UID ' + a.mid : 'UID —'),
+          ),
+          h('div', { className: 'bf-acct-stats' }, stats.map(([k, v]) => h('div', { className: 'bf-acct-stat', key: k },
+            h('div', { className: 'bf-acct-stat-v' }, stat(v)),
+            h('div', { className: 'bf-acct-stat-k' }, k),
+          ))),
+        ),
+      )
+    }
+
     function TodayCard({ quota, presence, act, onGo }) {
       const limits = quota.limits || {}
       const today = dayKeyOf()
@@ -3048,10 +3704,8 @@ window.__ModuleLoader__.load({
     }
 
     /** 人设一句话 + 健康检查（各一行，可展开） */
-    function PersonaHealthCard({ persona, health, model, onGo }) {
-      // persona 传进来的是 usePoll 的 **hook 对象**（{data,error,at}），数据在 .data 里；
-      // 半兼容 initial.persona（已经是数据本身）。解包错了就会永远「未加载 / 语料 0 条」。
-      const p = (persona && persona.data) || persona || {}
+    function PersonaHealthCard({ persona, health, model, onGo, loaded = true }) {
+      const p = persona || {}
       const ph = p.health || {}
       const pact = p.active || {}
       const preset = (p.presets || []).find((x) => x.id === pact.presetId) || null
@@ -3064,11 +3718,12 @@ window.__ModuleLoader__.load({
       const items = [
         {
           id: 'cred', label: 'B站登录凭证', status: health.cred ? 'pass' : 'warn',
-          detail: health.cred ? '凭证文件存在（未联网校验）' : '没有凭证文件，先扫码登录',
+          detail: health.cred ? '凭证文件存在（未联网校验）'
+            : loaded ? '没有凭证文件，先扫码登录' : '读取中…',
         },
         {
           id: 'cli', label: 'dsh CLI', status: health.cli ? 'pass' : 'warn',
-          detail: health.cli || '未找到（可在设置里指定 dshBin）',
+          detail: health.cli || (loaded ? '未找到（可在设置里指定 dshBin）' : '读取中…'),
         },
         {
           id: 'route', label: '控制台路由', status: health.routeOk ? 'pass' : 'fail',
@@ -3083,7 +3738,8 @@ window.__ModuleLoader__.load({
       return h(Card, null,
         h('div', { className: 'bf-card-head' },
           h('span', { className: 'bf-card-title' }, '人设与健康'),
-          h('span', { className: 'bf-card-note' }, bad ? bad + ' 项需注意' : '全部正常'),
+          h('span', { className: 'bf-card-note' },
+            !loaded ? '读取中…' : bad ? bad + ' 项需注意' : '全部正常'),
           h(Sp),
           h(Btn, { small: true, variant: 'ghost', onClick: () => onGo('persona') }, '人设'),
           h(Btn, { small: true, variant: 'ghost', onClick: () => onGo('settings') }, '设置'),
@@ -3115,8 +3771,53 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 发言门控卡：回答「这轮为什么说 / 不说」（W7-2）。两态：有数据 / 暂无数据。
+     *  数据源就是概览信封的 round.speakGate（口径见 plan §8.5），缺失时退化为「暂无数据」而不是藏掉整块。
+     *  注意后端口径 = currentAcc || lastRound：空闲时这条是**上一轮**的判定，别写成「本轮」。 */
+    function SpeakGateCard({ gate, loaded, running }) {
+      return h('div', { 'data-block': 'overview-speak-gate' },
+        h(Card, null,
+          h('div', { className: 'bf-card-head' },
+            h('span', { className: 'bf-card-title' }, '发言门控'),
+            h('span', { className: 'bf-card-note' },
+              gate ? (running ? '本轮为什么说 / 不说' : '上一轮为什么说 / 不说') : loaded ? '暂无数据' : '正在连接…'),
+            h(Sp),
+            gate ? h(SpeakGateTags, { gate }) : null,
+          ),
+          gate
+            ? h('div', null,
+                gate.reason || gate.featText
+                  ? h('div', { className: 'bf-pf-sub' }, [gate.reason, gate.featText].filter(Boolean).join(' · '))
+                  : h('div', { className: 'bf-note' }, '后端没给理由（只拿到了模式与判定）。'),
+                h('div', { className: 'bf-tools', style: { marginTop: 6 } },
+                  h('span', { className: 'bf-note st' }, '判定'),
+                  h('span', { className: 'bf-strong', style: { fontSize: 13, lineHeight: '20px' } }, gate.decisionText),
+                  gate.decision === 'throttle' && gate.suggestedMaxComments
+                    ? h('span', { className: 'bf-note' }, gate.mode === 'enforce'
+                        ? '· 本轮评论上限压到 ' + gate.suggestedMaxComments + ' 条'
+                        : '· 建议本轮最多 ' + gate.suggestedMaxComments + ' 条（不强制）')
+                    : null,
+                  gate.decision === 'forced'
+                    ? h('span', { className: 'bf-note' }, '· 被回复 / 被 @ 直接放行，仍占配额') : null,
+                ),
+                h('div', { className: 'bf-note', style: { marginTop: 4 } }, gate.modeNote),
+                gate.modeKnown === false
+                  ? h('div', { className: 'bf-note' }, 'mode 字段缺失或无法识别，按观察档显示（不谎称在强制拦截）。')
+                  : null,
+              )
+            : h('div', { className: 'bf-note' },
+                loaded
+                  ? '还没有门控数据：这一轮没跑过带门控的值班，或门控已关闭。'
+                  : '正在连接…'),
+        ),
+      )
+    }
+
     function OverviewPage({ rt, act, persona, live, onRun, onStop, onLogin, onGo }) {
       const data = (rt && rt.data) || {}
+      // ⭐ 真正的信封一定有内容；空对象（首帧未到 / 失败兜底）不算「有数据」，
+      //    否则会把未加载状态渲染成「未登录 / 未找到 / 数据 刚刚」这类假结论。
+      const hasData = !!(rt && rt.data && Object.keys(rt.data).length > 0)
       const duty = data.duty || {}
       const round = data.round || {}
       const quota = data.quota || {}
@@ -3130,9 +3831,7 @@ window.__ModuleLoader__.load({
       const mode = (rt && rt.mode) || 'poll'
       const ageMs = (rt && rt.ageMs) || 0
       const err = (rt && rt.error) || ''
-      // 信封还没到时 data 是 {}：此时 health.cli 必然是 undefined，如果照样渲染横幅
-      // 就会把「加载中」误报成「找不到 dsh CLI」（2026-10-28 真机就踩过）。
-      const loaded = !!Object.keys(data).length
+      const speakGate = speakGateOf(round.speakGate)
 
       const statusLine = h('div', { className: 'bf-statusline' },
         running ? h(Pill, { tone: 'ok' }, '运行中') : h(Pill, { tone: 'off' }, '空闲'),
@@ -3143,7 +3842,7 @@ window.__ModuleLoader__.load({
           : h(Pill, { tone: 'ok' }, account ? (account.uname || '已登录') : '登录检查中'),
         inbox && Number(inbox.pendingReply) > 0 ? h(Pill, { tone: 'warn' }, '待回 ' + inbox.pendingReply) : null,
         h(Sp),
-        h(Freshness, { ageMs, mode, error: err }),
+        h(Freshness, { ageMs, mode, error: err, hasData }),
       )
 
       return h('div', null,
@@ -3155,15 +3854,17 @@ window.__ModuleLoader__.load({
             running ? T.stop : T.run),
         ),
         h('div', { className: 'bf-pagemain' },
-          h(Banner, { health: loaded ? health : null, account: loaded ? account : null, round: loaded ? round : {}, onLogin }),
+          h(Banner, { health, account, round, onLogin }),
           statusLine,
+          h(AccountCard, { account, onLogin, loaded: hasData }),
           h(TodayCard, { quota, presence, act, onGo }),
           h(ProactiveCard, { quota, round, act, onGo }),
+          h(SpeakGateCard, { gate: speakGate, loaded: hasData, running }),
           h(RunningDetail, { live, round, onRun, onStop }),
           h(QuotaCard, { quota }),
           h('div', { className: 'bf-grid-2' },
             h(PresenceCard, { presence }),
-            h(PersonaHealthCard, { persona, health, model, onGo }),
+            h(PersonaHealthCard, { persona, health, model, onGo, loaded: hasData }),
           ),
           h('div', { className: 'bf-note', style: { paddingTop: 8, borderTop: '.5px solid var(--border-l2)' } },
             '数据来源：账本 ' + (data.ledgerFile || '—') + ' · 家目录 ' + (data.home || '—') +
@@ -3250,8 +3951,9 @@ window.__ModuleLoader__.load({
               ? h(PersonaPage, {
                   persona, initial: init?.personaPage || props?.persona,
                   initialTab: props?.initialPersonaTab,
+                  ov: data,
                 })
-              : h(SettingsPage, { ov: { data }, initial: init?.config, initialSub: props?.initialSettingsSub })
+              : h(SettingsPage, { ov: { data }, initial: init?.config, initialSub: props?.initialSub })
 
       return h('div', { className: 'bf-console bf-root', 'data-tab': tab },
         h('div', { className: 'bf-page' },
@@ -3323,7 +4025,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return {
+    const plugin = {
       inject: ['slots', 'layout'],
       apply(ctx) {
         ctxLayout = ctx.get?.('layout') ?? ctx.layout ?? ctxLayout
@@ -3350,5 +4052,9 @@ window.__ModuleLoader__.load({
         } catch (e) { console.error('[bili-fenshen] 注册设置页入口失败：', e) }
       },
     }
+    // 测试钩子（render-smoke / 单测验证 W4-4 的 30s 复用）只在测试沙箱里暴露：
+    // 生产包不带这个全局面（宿主只读 inject / apply，本来也不碰它）。
+    if (globalThis.__BF_TEST__) plugin.__bfTest = { cachedGet, resetGetCache, GET_CACHE, GET_TTL_MS }
+    return plugin
   },
 })

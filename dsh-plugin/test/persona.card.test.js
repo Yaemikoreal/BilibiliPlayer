@@ -90,6 +90,59 @@ test('injectedText 不含 creatorNotes（写给人看不烧 token）', () => {
   assert.ok(!injectedText(card).includes('绝对不能被编译进 prompt'))
 })
 
+/**
+ * W1-4 口径一致性：L0/injectedText 认作"已注入"的**单值字段**，其实必须真出现在编译文本里。
+ *
+ * 为什么只查单值字段：示例（samples）、traits/contradictions/canon/loreIndex 都是**抽样**注入
+ * （3–5 条 / 前 N 条），要求逐条出现是错的；单值字段没有抽样空间，少一个就是口径分叉。
+ * 这次修掉的 3 项正是：behaviorStyle.interestFirst、stance[].misread、voice.jargon.allow。
+ */
+test('口径一致性：L0 认作已注入的单值字段，片段必须真出现在 compilePersona().text', async () => {
+  const { compilePersona } = await import('../lib/persona/compile.js')
+  const { deriveState } = await import('../lib/persona/state.js')
+  const now = new Date(2026, 9, 26, 15, 0)
+  const card = smokeCard()
+  const text = compilePersona(card, { state: deriveState({ events: [], card, now }), bank: null, roundId: 'L0' }).text
+
+  const pairs = [
+    ['identity.oneLiner', card.identity.oneLiner],
+    ['identity.background', card.identity.background],
+    ['identity.selfAwareness', card.identity.selfAwareness],
+    ...card.identity.boundaries.map((x, i) => [`identity.boundaries[${i}]`, x]),
+    ...card.voice.register.map((x, i) => [`voice.register[${i}]`, x]),
+    ...card.voice.moves.map((x, i) => [`voice.moves[${i}]`, x]),
+    ...card.voice.jargon.allow.map((x, i) => [`voice.jargon.allow[${i}]`, x]),
+    ...Object.entries(card.voice.intensity).map(([k, x]) => [`voice.intensity.${k}`, x]),
+    ...card.voice.avoid.aiCues.map((x, i) => [`voice.avoid.aiCues[${i}]`, x]),
+    ...card.voice.avoid.bookish.map((x, i) => [`voice.avoid.bookish[${i}]`, x]),
+    ...card.voice.avoid.bannedWords.map((x, i) => [`voice.avoid.bannedWords[${i}]`, x]),
+    ['mindset.emotion.breakingPoint', card.mindset.emotion.breakingPoint],
+    ...card.taste.watch.slice(0, 5).map((x, i) => [`taste.watch[${i}]`, x]),
+    ...card.taste.avoid.slice(0, 5).map((x, i) => [`taste.avoid[${i}]`, x]),
+    ...card.stance.slice(0, 3).flatMap((s, i) => [
+      [`stance[${i}].topic`, s.topic], [`stance[${i}].attitude`, s.attitude],
+      [`stance[${i}].how`, s.how], [`stance[${i}].misread`, s.misread],
+    ]),
+    ...card.redlines.slice(0, 4).flatMap((r, i) => [
+      [`redlines[${i}].rule`, r.rule], [`redlines[${i}].instead`, r.instead],
+    ]),
+    ...card.canon.slice(0, 4).flatMap((c) => [['canon.when', c.when], ['canon.say', c.say]]),
+    ['behaviorStyle.interestFirst', card.behaviorStyle.interestFirst],
+    ['loreIndex[0].oneLine', card.loreIndex[0].oneLine],
+  ]
+  const missing = pairs.filter(([, frag]) => frag && !text.includes(frag)).map(([p]) => p)
+  assert.deepEqual(missing, [], `L0 认作已注入、prompt 里却找不到：${missing.join('、')}`)
+  // 反向：抽样字段不要求逐条（写清楚为什么，避免后人又把它改回"全量必须出现"）
+  const whaleCard = JSON.parse(readFileSync(join(PRESETS_DIR, 'whale.card.json'), 'utf8'))
+  assert.ok(whaleCard.voice.samples.good.length > 4, 'whale 卡样本 > 每轮注入上限，抽样注入是设计')
+
+  // 真卡（whale）上再验一次三处真分叉
+  const wtext = compilePersona(whaleCard, { state: deriveState({ events: [], card: whaleCard, now }), bank: null, roundId: 'L0' }).text
+  assert.ok(wtext.includes(`低频词可用但少用：${whaleCard.voice.jargon.allow.join('、')}`), 'voice.jargon.allow 没进 P1')
+  assert.ok(wtext.includes(`别误解成：${whaleCard.stance[0].misread}`), 'stance[0].misread 没进 P1 立场括号')
+  assert.ok(wtext.includes(whaleCard.behaviorStyle.interestFirst), 'behaviorStyle 没进 P5 尾注')
+})
+
 test('迁移器：能拆 v1 markdown，且未识别段落进 creatorNotes + 标 needsReview', () => {
   const md = readFileSync(preset('persona-whale.md'), 'utf8')
   const { card, report } = migrateLegacyMarkdown(md, { id: 'migrated', name: '迁移测试' })

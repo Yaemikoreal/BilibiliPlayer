@@ -152,6 +152,9 @@ const PERSONA_PAGE = {
   personaPage: {
     persona: FIX['/api/bili-fenshen/persona'],
     preview: FIX['/api/bili-fenshen/persona/preview'],
+    // W5 人设页四块：体检 / 换卡对比两个新端点，补上才是「有数据」态（上一轮截图里这两块是空态）
+    checkup: FIX['/api/bili-fenshen/persona/checkup'],
+    history: FIX['/api/bili-fenshen/persona/history'],
   },
 }
 
@@ -199,6 +202,14 @@ const PAGES = {
     },
   },
   settings: { label: '设置 · 节奏与配额', props: { initialTab: 'settings', initialData: DATA } },
+  'settings-content': {
+    label: '设置 · 内容与禁令',
+    props: { initialTab: 'settings', initialSub: 'content', initialData: DATA },
+  },
+  'settings-env': {
+    label: '设置 · 运行环境',
+    props: { initialTab: 'settings', initialSub: 'env', initialData: DATA },
+  },
   'settings-entry': { label: '设置页入口（settings.section）', entry: true },
 }
 

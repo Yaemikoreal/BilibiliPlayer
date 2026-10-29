@@ -13,9 +13,12 @@ import base64
 import logging
 import aiohttp
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
@@ -646,6 +649,274 @@ async def bili_video_info(bvid: str) -> str:
     }, ensure_ascii=False)
 
 
+# ========== 质量门 lint：只读规则文件、哑执行（单一事实来源在 dsh-plugin/lib/persona/lint.js） ==========
+#
+# 分工（计划 §6.3 / §8.1）：
+#   - 判据、词表、阈值全部由 JS 导出的 <家目录>/persona/lint-rules.json 决定；
+#     本段只有"解释器"，**不复制任何规则**——改判据改 JS，重导一遍即可。
+#   - 文件缺失 / 解析失败 / 判据写坏 → **放行 + 告警**（绝不因规则坏了全线停摆）。
+#   - 只有 level=='block' 且文件里 mode=='block' 才不发；mode=='warn'（默认先跑三天）
+#     照发，但把 lint 结果塞进返回体，让模型当轮就能看见"这条本该被拦"。
+
+_LINT_EMOJI_RE = re.compile(r"\[[^\]]{1,12}\]|[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]")
+_LINT_TAIL_RE = re.compile(r'[\s。！!？?～~….,，、:：;；·）」』"”’）)】]+$')
+_LINT_SENTENCE_RE = re.compile(r"[。！？!?；;\n]+")
+_LINT_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("“", "”"), ('"', '"'), ("‘", "’"))
+_LINT_FORMS = ("comment", "reply", "dynamic")
+
+
+def _persona_home() -> Path:
+    """插件家目录：与 dsh-plugin/lib/persona/store.js 的 homeDir() 同源（BILI_FENSHEN_HOME 优先）。"""
+    home = os.environ.get("BILI_FENSHEN_HOME") or os.path.join(
+        os.environ.get("HOME") or os.environ.get("USERPROFILE") or ".", ".dsh", "bili-fenshen")
+    return Path(home)
+
+
+def _lint_rules_file() -> Path:
+    """质量门规则文件路径；由 dsh-plugin/scripts/export-lint-rules.mjs 写出。"""
+    return _persona_home() / "persona" / "lint-rules.json"
+
+
+def _lint_strip_emoji(s: str) -> str:
+    return _LINT_EMOJI_RE.sub("", s)
+
+
+def _lint_char_len(s: str) -> int:
+    """字数口径与 JS 的 charLen 一致：去表情 token、去空白后按码点算。"""
+    return len(re.sub(r"\s+", "", _lint_strip_emoji(s)))
+
+
+def _lint_ngrams(s: str, n: int = 2) -> set:
+    t = re.sub(r"\s+", "", _lint_strip_emoji(s))
+    return {t[i:i + n] for i in range(max(0, len(t) - n + 1))}
+
+
+def _lint_jaccard(a: str, b: str, n: int = 2) -> float:
+    """与 JS text.js 的 jaccard 同口径（两边都太短则退化为"是否相同"）。"""
+    x, y = _lint_ngrams(a, n), _lint_ngrams(b, n)
+    if not x or not y:
+        return 1.0 if a.strip() == b.strip() else 0.0
+    hit = len(x & y)
+    return hit / (len(x) + len(y) - hit)
+
+
+def _lint_render(template, variables: dict) -> str:
+    """按规则里的 reasonTemplate 渲染理由：占位符也来自 JS，Python 不自造文案。"""
+    out = str(template or "")
+    for key, value in variables.items():
+        out = out.replace("{" + key + "}", str(value))
+    return out
+
+
+def _lint_eval_check(check: dict, text: str, form: str, limits: dict, rules: dict):
+    """跑一条声明式判据；命中返回 {code, level, reason, advice}，否则 None。
+
+    只认 lint.js 导出的 kind；未知 kind、缺阈值、坏正则一律跳过（规则升级时宁可漏判不误杀）。
+    """
+    if not isinstance(check, dict):
+        return None
+    kind = str(check.get("kind") or "")
+    variables: dict = {}
+
+    if kind == "endsWithAny":
+        tail = _LINT_TAIL_RE.sub("", _lint_strip_emoji(text)).strip()
+        hit = next((w for w in (check.get("words") or [])
+                    if isinstance(w, str) and w and tail.endswith(w)), None)
+        if not hit:
+            return None
+        variables["hit"] = hit
+    elif kind == "startsWithAny":
+        segments = [s.strip() for s in _LINT_SENTENCE_RE.split(_lint_strip_emoji(text).strip()) if s.strip()]
+        head = segments[0] if segments else ""
+        hit = next((w for w in (check.get("words") or [])
+                    if isinstance(w, str) and w and head.startswith(w)), None)
+        if not hit:
+            return None
+        variables["hit"] = hit
+    elif kind == "quotedOnly":
+        raw = text.strip()
+        inner_len = -1
+        for open_q, close_q in _LINT_QUOTE_PAIRS:
+            if raw.startswith(open_q) and raw.endswith(close_q) and len(raw) > len(open_q) + len(close_q):
+                inner_len = _lint_char_len(raw[len(open_q):len(raw) - len(close_q)])
+                break
+        min_chars = check.get("minChars")
+        if inner_len < 0 or not isinstance(min_chars, (int, float)) or inner_len < min_chars:
+            return None
+        variables["len"] = inner_len
+    elif kind == "maxJaccard":
+        threshold = check.get("threshold")
+        if not isinstance(threshold, (int, float)):
+            return None
+        ngram = check.get("ngram")
+        ngram = ngram if isinstance(ngram, int) and ngram > 0 else 2
+        texts = (rules.get("bank") or {}).get("active") or []
+        if not isinstance(texts, list) or not texts:
+            return None
+        best, best_text = 0.0, ""
+        for candidate in texts:
+            if not isinstance(candidate, str):
+                continue
+            score = _lint_jaccard(text, candidate, ngram)
+            if score > best:
+                best, best_text = score, candidate
+        if not best > threshold:
+            return None
+        variables["overlap"] = f"{best:.2f}"
+        variables["threshold"] = f"{threshold:.2f}"
+        variables["text"] = best_text[:12]
+    elif kind == "maxChars":
+        limit = limits.get(form)
+        if not isinstance(limit, (int, float)):
+            return None  # 规则里没这本场域的上限 ⇒ 这条判据不生效（不抄缺省值）
+        length = _lint_char_len(text)
+        if length <= limit:
+            return None
+        variables["len"] = length
+        variables["limit"] = limit
+        variables["mode"] = form
+    elif kind == "maxCount":
+        char = check.get("char")
+        max_n = check.get("max")
+        if not isinstance(char, str) or not char or not isinstance(max_n, (int, float)):
+            return None
+        count = text.count(char)
+        if count <= max_n:
+            return None
+        variables.update({"count": count, "max": max_n, "char": char})
+    elif kind == "maxCountEmoji":
+        max_n = check.get("max")
+        if not isinstance(max_n, (int, float)):
+            return None
+        count = len(_LINT_EMOJI_RE.findall(text))
+        if count <= max_n:
+            return None
+        variables.update({"count": count, "max": max_n})
+    elif kind == "containsAny":
+        hit = next((w for w in (check.get("words") or [])
+                    if isinstance(w, str) and w and w in text), None)
+        if not hit:
+            return None
+        variables["hit"] = hit
+    elif kind == "regexAny":
+        pattern = check.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            return None
+        try:
+            matched = re.search(pattern, text)
+        except re.error as e:
+            logger.warning("质量门正则无效，跳过该判据：%s（%s）", pattern, e)
+            return None
+        if not matched:
+            return None
+        variables["hit"] = matched.group(0)[:20]
+    else:
+        return None
+
+    return {
+        "code": str(check.get("code") or kind),
+        "level": "block" if check.get("level") == "block" else "warn",
+        "reason": _lint_render(check.get("reasonTemplate"), variables) or f"{check.get('code') or kind} 未通过",
+        "advice": str(check.get("advice") or ""),
+    }
+
+
+def _lint_eval(text: str, mode: str, rules: dict) -> dict:
+    """哑执行：按规则文件里的 checks 逐条跑；返回与 JS lintComment 同形的结果。"""
+    form = mode if mode in _LINT_FORMS else "comment"
+    limits = rules.get("limits") if isinstance(rules.get("limits"), dict) else {}
+    hits = []
+    for check in rules.get("checks") or []:
+        hit = _lint_eval_check(check, text, form, limits, rules)
+        if hit:
+            hits.append(hit)
+    codes, reasons, advices = [], [], []
+    for hit in hits:
+        if hit["code"] not in codes:
+            codes.append(hit["code"])
+        if hit["reason"] and hit["reason"] not in reasons:
+            reasons.append(hit["reason"])
+        if hit["advice"] and hit["advice"] not in advices:
+            advices.append(hit["advice"])
+    return {
+        "ok": not hits,
+        "level": "block" if any(h["level"] == "block" for h in hits) else "warn",
+        "codes": codes,
+        "reasons": reasons,
+        "advice": "；".join(advices),
+    }
+
+
+def _lint_precheck(text: str, mode: str) -> dict:
+    """发布前质量门。返回 {"blocked": bool, "payload": dict|None, "warn": dict|None, "notice": str}。
+
+    blocked=True 时 payload 就是工具对外返回的 JSON；放行时 warn 非空表示"本该被拦但当前档位只告警"。
+    任何意外（文件缺失/坏 JSON/判据异常）都走放行，绝不让质量门把发布整条链路拖死。
+    """
+    try:
+        rules, why = _load_lint_rules()
+        if rules is None:
+            logger.warning("质量门规则不可用（%s）：本次放行", why)
+            return {"blocked": False, "payload": None, "warn": None, "notice": f"lint 规则不可用，已放行：{why}"}
+        apply_mode = str(rules.get("mode") or "warn").strip().lower()
+        if apply_mode not in ("off", "warn", "block"):
+            apply_mode = "warn"  # 写坏档位按最保守的 warn 处理，不擅自拦
+        if apply_mode == "off":
+            return {"blocked": False, "payload": None, "warn": None, "notice": ""}
+        verdict = _lint_eval(text, mode, rules)
+        if verdict["ok"]:
+            return {"blocked": False, "payload": None, "warn": None, "notice": ""}
+        summary = "；".join(verdict["reasons"])
+        if apply_mode == "block" and verdict["level"] == "block":
+            logger.warning("质量门拦截（%s/%s）：%s", mode, apply_mode, ",".join(verdict["codes"]))
+            return {
+                "blocked": True,
+                "payload": {
+                    "success": False,
+                    "ok": False,
+                    "code": "LINT_BLOCKED",
+                    "codes": verdict["codes"],
+                    "reasons": verdict["reasons"],
+                    "advice": verdict["advice"],
+                    "error": f"发布前质量门拦截：{summary}",
+                },
+                "warn": None,
+                "notice": "",
+            }
+        logger.warning("质量门告警（%s/%s）：%s", mode, apply_mode, ",".join(verdict["codes"]))
+        return {
+            "blocked": False,
+            "payload": None,
+            "warn": {
+                "level": verdict["level"],
+                "codes": verdict["codes"],
+                "reasons": verdict["reasons"],
+                "advice": verdict["advice"],
+            },
+            "notice": "",
+        }
+    except Exception as e:  # 兜底：质量门自身出 bug 也只告警放行
+        logger.warning("质量门执行异常，本次放行：%s", e)
+        return {"blocked": False, "payload": None, "warn": None, "notice": f"lint 执行异常，已放行：{e}"}
+
+
+def _load_lint_rules():
+    """读 <家目录>/persona/lint-rules.json。返回 (rules|None, 原因)；读不到/写坏都返回 None。"""
+    file = _lint_rules_file()
+    try:
+        if not file.exists():
+            return None, f"规则文件缺失：{file}"
+        with open(file, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None, "规则文件内容不是对象"
+        if not isinstance(data.get("checks"), list):
+            return None, "规则文件缺 checks 数组"
+        return data, ""
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
 # ========== Tool 6: 回复评论 ==========
 
 @_gated_tool()
@@ -666,6 +937,12 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
     Returns:
         发表结果
     """
+    # 发布前质量门：规则来自 <家目录>/persona/lint-rules.json（JS 导出）；缺失/损坏则放行 + 告警
+    gate = _lint_precheck(text, "reply" if rpid else "comment")
+    if gate["blocked"]:
+        return json.dumps(gate["payload"], ensure_ascii=False)
+    lint_warn = gate.get("warn")
+
     try:
         cred = get_cred()
         v = video.Video(bvid=bvid, credential=cred)
@@ -697,12 +974,15 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         rpid_out = None
         if isinstance(result, dict):
             rpid_out = result.get("rpid") or (result.get("data") or {}).get("rpid")
-        return json.dumps({
+        payload = {
             "success": True,
             "message": "评论发送成功",
             "bvid": bvid,
             "rpid": rpid_out,
-        }, ensure_ascii=False)
+        }
+        if lint_warn:
+            payload["lint"] = lint_warn  # warn 档：照发，但把"本该被拦"的判据回给模型
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         return _err(f"评论发送失败: {e}", bvid=bvid)
 
@@ -843,6 +1123,12 @@ async def bili_send_dynamic(
     if not text or not text.strip():
         return json.dumps({"success": False, "error": "text 不能为空"}, ensure_ascii=False)
 
+    # 发布前质量门：与 bili_reply 同一份规则文件（动态场域上限从规则里读）
+    gate = _lint_precheck(text.strip(), "dynamic")
+    if gate["blocked"]:
+        return json.dumps(gate["payload"], ensure_ascii=False)
+    lint_warn = gate.get("warn")
+
     cred = get_cred()
 
     dyn = dynamic.BuildDynamic.empty()
@@ -861,11 +1147,14 @@ async def bili_send_dynamic(
 
     try:
         result = await dynamic.send_dynamic(info=dyn, credential=cred)
-        return json.dumps({
+        payload = {
             "success": True,
             "message": "动态发布成功",
             "data": result if isinstance(result, dict) else str(result),
-        }, ensure_ascii=False)
+        }
+        if lint_warn:
+            payload["lint"] = lint_warn  # warn 档：照发，但把"本该被拦"的判据回给模型
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
@@ -1646,6 +1935,551 @@ async def bili_followings(pn: int = 1, ps: int = 50, sort: str = "attention", ke
     })
 
 
+# ========== 值班轮工具 A：内容源一次拉齐（关注池最新投稿 + 账本过滤） ==========
+#
+# 为什么要有这个工具（计划 §16.5-1 / §17）：
+#   以前一轮的发现阶段是「bili_followings + 每个 UP 一次 bili_user_videos」——
+#   2026-10-29 真实日志：第三轮查了 6 个 UP ≈ 6 次调用，20 次预算被吃掉一大块，
+#   模型还得在「先扫哪几个」上反复权衡（配置写的还是 40）。服务端一次循环解决：
+#   关注池取前 N 个 → 并行拉每人最新 M 条 → 用账本过滤掉已看过的 → 只把没看过的返回。
+# 纪律：
+#   1. 纯读；单个 UP 失败只进 failures，不影响其他 UP；
+#   2. 账本过滤是"尽力而为"：读不到账本就照常全部返回（seen 全 false），绝不因此失败；
+#   3. 返回体积可控：默认 8 个 UP × 3 条，最多 20 × 5。
+
+_FEED_MAX_UPS = 20
+_FEED_MAX_PER_UP = 5
+_FEED_CONCURRENCY = 4
+_BV_FULL_RE = re.compile(r"^BV[0-9A-Za-z]{8,12}$")
+
+
+def _iso_local(ts) -> str:
+    """unix 秒 → 本地时区 ISO（模型看"几小时前"比看 epoch 有用）。"""
+    try:
+        return datetime.fromtimestamp(int(ts)).astimezone().isoformat(timespec="seconds")
+    except Exception:
+        return ""
+
+
+def _ledger_read_events(limit: int = 0) -> list:
+    """读账本事件。
+
+    一行可能塞了多个对象（2026-10-25 的真实事故：`{...}{...}` 导致整行解析失败、
+    当天配额全消失）——所以这里用 raw_decode 逐个扫，容忍老账本里的坏行。
+    """
+    out: list = []
+    path = _persona_home() / "ledger.jsonl"
+    try:
+        if not path.exists():
+            return out
+        dec = json.JSONDecoder()
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+                i = 0
+                while i < len(s):
+                    while i < len(s) and s[i] in " \t":
+                        i += 1
+                    if i >= len(s):
+                        break
+                    try:
+                        obj, j = dec.raw_decode(s, i)
+                    except Exception:
+                        break
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                    i = j
+    except Exception:
+        return out
+    return out[-limit:] if limit and limit > 0 else out
+
+
+def _ledger_seen_bvids() -> set:
+    """账本里"看过/动作过"的 BV（与 dsh-plugin/lib/seen.js 同口径：任何带合法 BV 的事件都算）。"""
+    seen: set = set()
+    for ev in _ledger_read_events():
+        bv = ev.get("bvid")
+        if isinstance(bv, str) and _BV_FULL_RE.match(bv):
+            seen.add(bv)
+    return seen
+
+
+@_gated_tool()
+async def bili_feed(limit_up: int = 8, per_up: int = 3, only_new: bool = True) -> str:
+    """
+    一次拿到「最常访问」前 N 个关注 UP 主的最新投稿，并已按账本标好"看过/没看过"
+
+    这是"拉内容源"的第一档首选：一次调用顶掉「bili_followings + N 次 bili_user_videos」。
+    返回里 seen=True 的视频**直接丢**（账本里已经看过/赞过/评过/跳过过），别再花调用。
+
+    Args:
+        limit_up: 取前几个常看 UP 主，默认 8（上限 20）
+        per_up: 每个 UP 主拉最新几条，默认 3（上限 5）
+        only_new: True=只返回账本里没看过的（默认）；False=全返回并带 seen 标记
+
+    Returns:
+        videos（按发布时间倒序的候选，带 up/mid/seen）、ups（每个 UP 的新旧计数）、
+        skippedSeen、failures（单个 UP 失败不影响其他人）
+    """
+    cred = get_cred()
+    uid = str(cred.dedeuserid or "").strip()
+    if not uid.isdigit():
+        return _err("凭证里缺少 dedeuserid，无法拉关注池；请重新扫码登录")
+    limit = max(1, min(int(limit_up or 8), _FEED_MAX_UPS))
+    per = max(1, min(int(per_up or 3), _FEED_MAX_PER_UP))
+    me = user.User(uid=int(uid), credential=cred)
+    try:
+        fol = await me.get_followings(pn=1, ps=limit, attention=True, order=user.OrderType.desc)
+    except Exception as e:
+        return _err(f"拉关注列表失败: {e}（可退回 bili_followings + bili_user_videos）")
+    ups = [x for x in (fol.get("list") or []) if x.get("mid")]
+    if not ups:
+        return _ok({"success": True, "videos": [], "ups": [], "skippedSeen": 0, "failures": [],
+                    "hint": "关注列表是空的（先关注几个 UP 主，或改用关键词搜索）"})
+    seen = _ledger_seen_bvids()
+    sem = asyncio.Semaphore(_FEED_CONCURRENCY)
+
+    async def pull(x):
+        mid = int(x.get("mid"))
+        name = str(x.get("uname") or "")
+        async with sem:
+            try:
+                r = await user.User(uid=mid, credential=cred).get_videos(
+                    pn=1, ps=per, order=user.VideoOrder.PUBDATE)
+            except Exception as e:
+                return {"mid": mid, "uname": name, "error": str(e)[:120], "videos": []}
+        vlist = ((r.get("list") or {}).get("vlist")) or []
+        out = []
+        for it in vlist:
+            bv = str(it.get("bvid") or "")
+            out.append({
+                "bvid": bv,
+                "title": str(it.get("title") or ""),
+                "play": it.get("play", 0),
+                "comment": it.get("comment", 0),
+                "created": it.get("created", 0),
+                "publishedAt": _iso_local(it.get("created")),
+                "length": str(it.get("length") or ""),
+                "description": str(it.get("description") or "")[:100],
+                "seen": bv in seen,
+            })
+        return {"mid": mid, "uname": name, "error": "", "videos": out}
+
+    results = await asyncio.gather(*[pull(x) for x in ups])
+    videos: list = []
+    failures: list = []
+    up_rows: list = []
+    skipped = 0
+    for r in results:
+        if r.get("error"):
+            failures.append({"mid": r["mid"], "uname": r["uname"], "error": r["error"]})
+            continue
+        fresh = [v for v in r["videos"] if not v["seen"]]
+        skipped += len(r["videos"]) - len(fresh)
+        up_rows.append({"mid": r["mid"], "uname": r["uname"], "new": len(fresh),
+                        "seen": len(r["videos"]) - len(fresh), "total": len(r["videos"])})
+        for v in (fresh if only_new else r["videos"]):
+            v2 = dict(v)
+            v2["up"] = r["uname"]
+            v2["mid"] = r["mid"]
+            videos.append(v2)
+    videos.sort(key=lambda v: int(v.get("created") or 0), reverse=True)
+    return _ok({
+        "success": True,
+        "videos": videos,
+        "ups": up_rows,
+        "newVideos": sum(1 for v in videos if not v["seen"]),
+        "skippedSeen": skipped,
+        "failures": failures,
+        "note": "seen=true 的别再看/别再评；只挑真正没看过的判",
+    })
+
+
+# ========== 值班轮工具 B：记账 / 报告（宿主写盘，模型不必碰文件编码） ==========
+#
+# 为什么要把「写账本 / 写报告」变成工具（计划 §16.5-2）：
+#   模型现在用 pwsh here-string 手拼 JSONL / Markdown —— 2026-10-25 出过"一行塞两条 ⇒
+#   当天配额全消失"的事故；2026-10-29 又为"控制台乱码"白烧了 2 次调用去回读校验。
+#   工具化之后：t / round 由宿主补（模型不可能写错），字段按类型校验，重复条目直接拒，
+#   UTF-8 一次写一行 —— 编码问题从"模型要小心"变成"结构上不可能"。
+
+_LEDGER_REQUIRED = {
+    "view": ("bvid",),
+    "like": ("bvid",),
+    "comment": ("bvid", "text"),
+    "dynamic": ("text",),
+    "skip": ("bvid", "reason"),
+    "reply-out": ("bvid", "parent", "text"),
+    "reply-scan": ("bvid", "decision"),
+    "note": ("text",),
+}
+_LEDGER_MAX_EVENTS = 40
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _current_round_id() -> str:
+    """本轮 round id = 宿主起轮时写进 state.json 的 lastRunStartedAt（与 prompt 里那个值同源）。"""
+    st = _persona_read_json(_persona_home() / "state.json") or {}
+    return str(st.get("lastRunStartedAt") or "")
+
+
+def _validate_ledger_event(ev, idx: int, round_id: str):
+    """单条事件校验 + 补 t/round。返回 (obj, error)。"""
+    if not isinstance(ev, dict):
+        return None, "不是对象"
+    kind = str(ev.get("type") or "").strip()
+    if kind not in _LEDGER_REQUIRED:
+        return None, f"type 只允许 {'/'.join(_LEDGER_REQUIRED)}，收到 {kind or '空'}"
+    for key in _LEDGER_REQUIRED[kind]:
+        val = ev.get(key)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            return None, f"{kind} 缺必填字段 {key}"
+    bv = ev.get("bvid")
+    if bv not in (None, "") and not _BV_FULL_RE.match(str(bv)):
+        return None, f"bvid 格式不合法: {bv}"
+    if kind == "reply-scan":
+        decision = str(ev.get("decision") or "").strip()
+        if decision not in ("posted", "skipped"):
+            return None, "reply-scan.decision 只能是 posted / skipped"
+        if decision == "posted" and ev.get("targetRpid") is None:
+            return None, "reply-scan(decision=posted) 必须带 targetRpid"
+    if kind == "reply-out":
+        try:
+            int(ev.get("parent"))
+        except Exception:
+            return None, "reply-out.parent 必须是对方评论 rpid（整数）"
+    out = dict(ev)
+    out.setdefault("t", _now_iso())
+    if not out.get("round"):
+        out["round"] = round_id
+    return out, ""
+
+
+@_gated_tool()
+async def bili_ledger_append(events: list[dict]) -> str:
+    """
+    把本轮动作一次性追加进账本（宿主补 t/round、校验字段、去重、UTF-8 落盘）
+
+    **首选这个，不要用 pwsh 手写 ledger.jsonl**。每条事件的 `t` 和 `round` 缺省由宿主补，
+    你只需要写业务字段。被拒的条目看 rejected 里的 reason 改完再发（不要重试同一条）。
+
+    Args:
+        events: 事件数组，每个对象带 type 与必填字段。例：
+            [{"type":"view","bvid":"BV1xx","title":"…","author":"…","views":123,"duration":892,"source":"follow","grade":"worth"},
+             {"type":"comment","bvid":"BV1xx","text":"正文","rpid":318480352401},
+             {"type":"reply-scan","bvid":"BV1xx","candidates":[],"decision":"skipped","reason":"热评全在站队"}]
+
+    Returns:
+        written（写入条数）、rejected（[{index,reason}]）、round（本轮 round id）
+    """
+    if not isinstance(events, list) or not events:
+        return _err("events 必须是非空数组（一次可传多条，别再一行塞两个对象）")
+    if len(events) > _LEDGER_MAX_EVENTS:
+        return _err(f"一次最多 {_LEDGER_MAX_EVENTS} 条（收到 {len(events)}）")
+    round_id = _current_round_id()
+    if not round_id:
+        return _err("读不到本轮 round id（state.json 缺 lastRunStartedAt）；退回直接写文件")
+    existing = _ledger_read_events(limit=800)
+    seen_keys = {(e.get("round"), e.get("type"), e.get("bvid"), e.get("text")) for e in existing}
+    path = _persona_home() / "ledger.jsonl"
+    lines: list = []
+    rejected: list = []
+    for idx, ev in enumerate(events):
+        obj, why = _validate_ledger_event(ev, idx, round_id)
+        if obj is None:
+            rejected.append({"index": idx, "reason": why})
+            continue
+        if "\ufffd" in json.dumps(obj, ensure_ascii=False):
+            rejected.append({"index": idx, "reason": "文本里有 U+FFFD（编码坏了），重发一次"})
+            continue
+        key = (obj.get("round"), obj.get("type"), obj.get("bvid"), obj.get("text"))
+        if key in seen_keys:
+            rejected.append({"index": idx, "reason": "重复条目（账本里已有同 round/type/bvid/text）"})
+            continue
+        seen_keys.add(key)
+        lines.append(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+    if not lines:
+        return _ok({"success": False, "written": 0, "rejected": rejected, "round": round_id,
+                    "error": "没有一条通过校验，账本未改动"})
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        blob = "\n".join(lines) + "\n"
+        if path.exists() and path.stat().st_size > 0:
+            with open(path, "rb") as f:
+                f.seek(-1, os.SEEK_END)
+                tail = f.read(1)
+            if tail not in (b"\n", b"\r"):
+                blob = "\n" + blob
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(blob)
+    except Exception as e:
+        return _err(f"账本写入失败: {e}")
+    return _ok({"success": True, "written": len(lines), "rejected": rejected, "round": round_id,
+                "path": str(path)})
+
+
+_REPORT_HEADING_RE = re.compile(
+    r"^##\s+.*?round\s*id\s*[:：]?\s*([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)", re.I | re.M)
+
+
+@_gated_tool()
+async def bili_report_append(markdown: str) -> str:
+    """
+    把本轮报告整段追加到 out/<今天>.md（宿主校验标题里的 round id，重复提交会被拒）
+
+    **首选这个，不要用 pwsh 手拼 Markdown**。标题必须是 `## <时段>轮（round id <ISO>）`，
+    否则宿主回填/控制台对不上账。同一个 round id 已经写过一次 ⇒ 拒绝（防止重复追加）。
+
+    Args:
+        markdown: 本轮报告全文（从 `## …轮（round id …）` 开始，到本轮总结行为止）
+
+    Returns:
+        file、bytes、roundId
+    """
+    text = (markdown or "").strip("\n")
+    if not text.strip():
+        return _err("markdown 不能为空")
+    if len(text) > 20000:
+        return _err(f"单轮报告超长（{len(text)} > 20000 字）；分段发或精简")
+    if "\ufffd" in text:
+        return _err("文本里有 U+FFFD（编码坏了）；重发一次，别手抄")
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    if not first.startswith("## "):
+        return _err("第一行必须是 `## <时段>轮（round id <ISO>）`（否则控制台对不上账）")
+    hit = _REPORT_HEADING_RE.search(text)
+    if not hit:
+        return _err("找不到 round id：标题要写成 `## 凌晨轮（round id 2026-10-28T16:07:49.108Z）`（只写时段名+round id，别写「第三轮」这种全局编号）")
+    round_id = hit.group(1)
+    home = _persona_home()
+    day = datetime.now().astimezone().strftime("%Y-%m-%d")
+    path = home / "out" / f"{day}.md"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old = path.read_text(encoding="utf-8") if path.exists() else ""
+        if round_id in old:
+            return _ok({"success": False, "code": "DUPLICATE_ROUND", "error": f"这一轮（{round_id}）已经写进报告了，别重复追加",
+                        "file": str(path), "roundId": round_id})
+        head = "" if old else f"# {day}\n\n"
+        sep = "" if not old or old.endswith("\n\n") else ("\n" if old.endswith("\n") else "\n\n")
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(head + sep + text + "\n")
+    except Exception as e:
+        return _err(f"报告写入失败: {e}")
+    return _ok({"success": True, "file": str(path), "roundId": round_id,
+                "bytes": len((head + sep + text + "\n").encode("utf-8")),
+                "message": "报告已追加；账本用 bili_ledger_append 写"})
+
+
+# ========== Tool: 见闻正文按需取用（C3 生成期通道 · 路径 A / W6-1） ==========
+#
+# 为什么要有这个工具（计划 §2.2/§2.5/§5.6/§8.3）：
+#   候选视频是子进程「拉内容源」之后才出现的，而 argv 里的 prompt 在 spawn 前就定死了；
+#   所以见闻只能「索引常驻、正文按需读」：模型看见视频标题/字幕/热评之后，再调本工具命中正文，
+#   不占 argv 24k 硬线 —— 这正是酒馆（世界书全在编译期）做不到的「生成期世界书」。
+# 三条纪律：
+#   1. 中文**子串匹配**（NFKC 全角半角归一 + casefold 大小写不敏感），**绝不做整词边界** ——
+#      酒馆官方自己说 match whole words 对中日文有害（中文没有空格分词）；
+#   2. 排序 直命中（keys 命中数多）> 今天未用 > 索引顺序；今天用过只降权不淘汰；
+#      预算 C3：≤2 条、总正文 ≤600 字，超了截断并标 truncated；
+#   3. 纯读、不联网；任何异常（卡坏/目录缺失/正文缺失）都**静默降级**成 ok:false，绝不抛。
+
+_PERSONA_LORE_MAX_ITEMS = 2
+_PERSONA_LORE_MAX_CHARS = 600
+_PERSONA_LORE_NO_HIT = "没有命中的见闻（这很正常，别硬凑）"
+_PERSONA_LORE_HINT = "见闻是这个号自己的经历；用得上就借一句细节或一个角度，别整段复述、别当外部事实讲"
+
+
+def _persona_read_json(path):
+    """只读 JSON：读不到/坏 JSON/顶层不是对象都返回 None（人设工具一律按「缺失即降级」处理）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _persona_presets_dir() -> Path:
+    """内置预设卡目录：<仓库根>/dsh-plugin/prompts/persona（与 store.js 的 PRESETS_DIR 同源）。"""
+    return Path(__file__).resolve().parent / "dsh-plugin" / "prompts" / "persona"
+
+
+def _persona_resolve_card():
+    """按 active.json 解析生效卡 + 资产根目录（规则与 store.js 的 readActive/loadCard/assetDir 同源）。
+
+    - preset：卡与见闻都在 <插件>/prompts/persona（随包只读）；
+    - file：卡在 <家目录>/persona/card.json（或 active.path），见闻正文在 <家目录>/persona；
+    - active.json 缺失/读坏 → 按缺省 preset whale；file 卡读不到 → 回落 preset whale。
+    返回 (card|None, assets_dir)；card is None = 连 whale 预设都读不到，调用方静默降级。
+    """
+    persona = _persona_home() / "persona"
+    presets = _persona_presets_dir()
+    active = _persona_read_json(persona / "active.json")
+    if not isinstance(active, dict) or active.get("mode") not in ("preset", "file"):
+        active = {"mode": "preset", "presetId": "whale"}
+    if active.get("mode") == "file":
+        path = Path(str(active.get("path") or (persona / "card.json")))
+        card = _persona_read_json(path) or _persona_read_json(persona / "card.json")
+        if card is not None:
+            return card, persona
+        active = {"mode": "preset", "presetId": "whale"}  # 用户卡读坏 → 回落预设，别让工具整个死
+    preset_id = str(active.get("presetId") or "whale")
+    card = (_persona_read_json(presets / f"{preset_id}.card.json")
+            or _persona_read_json(presets / "whale.card.json"))
+    return card, presets
+
+
+def _persona_lore_norm(text) -> str:
+    """子串匹配前的归一：NFKC（全角→半角） + casefold（大小写不敏感）。中文本身不受影响。"""
+    return unicodedata.normalize("NFKC", str(text or "")).casefold()
+
+
+def _persona_lore_strip_front_matter(text: str) -> str:
+    """剥掉见闻 md 的 YAML front-matter（仅当首行是 --- 且后面有闭合行）。"""
+    raw = str(text or "").lstrip("\ufeff")
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return raw.strip()
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            return "\n".join(lines[i + 1:]).strip()
+    return raw.strip()  # 没有闭合行：当正文就是全部（宁可多给，也别把正文吞掉）
+
+
+def _persona_lore_used_today(lore_used, lore_id: str, now=None) -> bool:
+    """state.loreUsed[id] 是不是「今天」。时间戳按**本地时区**判日；非 ISO 串退回前 10 位比较。"""
+    at = lore_used.get(lore_id) if isinstance(lore_used, dict) else None
+    if not isinstance(at, str) or not at.strip():
+        return False
+    now = now or datetime.now().astimezone()
+    raw = at.strip()
+    try:
+        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw[:10] == now.strftime("%Y-%m-%d")
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(now.tzinfo) if now.tzinfo is not None else stamp.astimezone()
+    return stamp.strftime("%Y-%m-%d") == now.strftime("%Y-%m-%d")
+
+
+def _persona_lore_degrade(reason: str) -> dict:
+    return {"ok": False, "matched": [], "total": 0, "note": f"见闻库暂时不可用：{reason}"}
+
+
+def _persona_lore_match(keyword, card, state=None, assets_dir=None, now=None) -> dict:
+    """W6-1 核心（纯函数，可单测）：子串命中 → 冷却降权 → 取正文，≤2 条 ≤600 字。
+
+    参数：keyword 现场关键词（标题 + 字幕要点 + 热评关键词）；card 人设卡；state 今日状态（读 loreUsed）；
+         assets_dir 资产根（preset = 插件 prompts/persona，file = <家目录>/persona）；now 注入时钟（测试用）。
+    返回 {ok, matched:[{id,oneLine,usedToday,body,chars,truncated}], total, note}；total = 命中总条数（截断前）。
+    任何异常都返回 ok:false 的降级体，绝不抛（C3 纪律：失败必须静默降级）。
+    """
+    try:
+        if not isinstance(card, dict) or not isinstance(card.get("loreIndex"), list):
+            return _persona_lore_degrade("人设卡缺失或没有 loreIndex")
+        if not assets_dir:
+            return _persona_lore_degrade("见闻目录未知")
+        assets = Path(assets_dir)
+        if not assets.is_dir():
+            return _persona_lore_degrade(f"见闻目录缺失：{assets}")
+        lore_used = state.get("loreUsed") if isinstance(state, dict) else None
+        needle = _persona_lore_norm(keyword)
+
+        hits = []
+        for order, entry in enumerate(card["loreIndex"]):
+            if not isinstance(entry, dict):
+                continue
+            lore_id = str(entry.get("id") or "").strip()
+            if not lore_id:
+                continue
+            keys = [str(k).strip() for k in (entry.get("keys") or []) if str(k).strip()]
+            # 子串匹配：normalize(键) 出现在 normalize(关键词) 里即命中；不做整词边界
+            hit_count = sum(1 for k in keys if _persona_lore_norm(k) and _persona_lore_norm(k) in needle)
+            if not hit_count:
+                continue
+            hits.append({
+                "id": lore_id,
+                "oneLine": str(entry.get("oneLine") or "").strip(),
+                "usedToday": _persona_lore_used_today(lore_used, lore_id, now),
+                "_hitCount": hit_count,
+                "_order": order,
+            })
+        if not hits:
+            return {"ok": True, "matched": [], "total": 0, "note": _PERSONA_LORE_NO_HIT}
+
+        # 排序：直命中（keys 命中数多）> 今天未用 > 索引顺序（今天用过只降权、仍可返回）
+        hits.sort(key=lambda h: (-h["_hitCount"], h["usedToday"], h["_order"]))
+
+        matched = []
+        remaining = _PERSONA_LORE_MAX_CHARS
+        capped = False
+        for hit in hits[:_PERSONA_LORE_MAX_ITEMS]:
+            if remaining <= 0:
+                capped = True
+                break
+            body_file = assets / "lore" / f"{hit['id']}.md"
+            try:
+                raw = body_file.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return _persona_lore_degrade(f"见闻正文缺失：{body_file}")
+            body = _persona_lore_strip_front_matter(raw)
+            if not body:
+                return _persona_lore_degrade(f"见闻正文为空：{body_file}")
+            truncated = False
+            if len(body) > remaining:
+                # 留 1 字给省略号，保证总正文严格 ≤600 字
+                body = body[: max(remaining - 1, 0)] + "…" if remaining >= 2 else "…"
+                truncated = capped = True
+            remaining -= len(body)
+            matched.append({
+                "id": hit["id"],
+                "oneLine": hit["oneLine"],
+                "usedToday": hit["usedToday"],
+                "body": body,
+                "chars": len(body),
+                "truncated": truncated,
+            })
+
+        note = _PERSONA_LORE_HINT
+        if len(hits) > len(matched) or capped:
+            note += f"；命中 {len(hits)} 条，按相关度与冷却只给了 {len(matched)} 条（C3 预算 ≤2 条 ≤600 字）"
+        return {"ok": True, "matched": matched, "total": len(hits), "note": note}
+    except Exception as e:  # 兜底：工具自身出 bug 也只降级，不阻断本轮
+        return _persona_lore_degrade(f"{type(e).__name__}: {e}")
+
+
+@_gated_tool()
+async def bili_persona_lore(keyword: str) -> str:
+    """
+    按现场关键词取最多 2 条「见闻正文」（生成期世界书：看见视频/热评之后再决定用哪条）。
+
+    只在**准备写评论/回复/动态**、且标题或热评让你想起「我好像有类似经历」时调用一次；
+    纯本地只读、不联网。
+
+    Args:
+        keyword: 现场关键词（把视频标题 + 字幕要点 + 热评关键词拼起来最准，如"无畏契约 上分 残局"）
+
+    Returns:
+        JSON：{ok, matched:[{id, oneLine, usedToday, body, chars, truncated}], total, note}
+        - 命中：matched 最多 2 条、总正文 ≤600 字；usedToday=true 表示今天已经用过（可返回但该换一条）；
+        - 没命中：matched 为空（这很正常，别硬凑，也别凭印象编细节）；
+        - 见闻库不可用：ok=false、matched 为空 → 本轮照常进行，别重试。
+    """
+    try:
+        keyword = str(keyword or "")
+        card, assets_dir = _persona_resolve_card()
+        state = _persona_read_json(_persona_home() / "persona" / "state.json") or {}
+        return _ok(_persona_lore_match(keyword, card, state, assets_dir))
+    except Exception as e:  # 兜底：C3 通道失败必须静默降级，绝不阻断本轮
+        logger.warning("见闻库不可用（静默降级）：%s", e)
+        return _ok(_persona_lore_degrade(f"{type(e).__name__}: {e}"))
+
+
 # ========== Tool: 人设沉淀候选（自演化管道；薄工具——只做结构预检 + 追加 pending，质检/入库在宿主 JS） ==========
 
 def _persona_pending_file() -> Path:
@@ -1664,6 +2498,7 @@ async def bili_persona_note(
     text: str = "",
     origin: str = "self",
     source: str = "",
+    originalText: str = "",
     id: str = "",
     keys: list[str] | None = None,
     oneLine: str = "",
@@ -1674,7 +2509,8 @@ async def bili_persona_note(
 
     两种用法：
     - kind="corpus"：沉淀一句语料（自己说过且想再用的话用 origin="self"；
-      社区都在用的公共梗用 origin="community" 并写明 source；**别人评论的原句绝对不许提交**）
+      社区都在用的公共梗用 origin="community" 并写明 source，**且必须带 originalText（原帖热评原文）**；
+      **别人评论的原句绝对不许提交**）
     - kind="lore"：沉淀一条见闻（这个号的生活碎片，如"照着做菜视频煮翻车了"；
       只能编角色的生活细节，不许出现可被当真的现实事实）
 
@@ -1684,6 +2520,7 @@ async def bili_persona_note(
         text: corpus 必填：语料原文（≤100 字）
         origin: corpus 用：'self'（自己发过的，宿主会跟账本对账）或 'community'（公共梗，≤30 字）
         source: 来源说明（community 必填；self 可写互动情况，如"被赞 5 次"）
+        originalText: **corpus/community 必填**：原帖热评原文（宿主用它做"与原帖"改写检查；缺了会被拒）
         id: lore 可选：见闻 id（字母数字-连字符；缺了宿主生成）
         keys: lore 必填：触发词列表（命中这些词时才读正文）
         oneLine: lore 必填：一行摘要（≤40 字，会常驻 prompt）
@@ -1729,7 +2566,13 @@ async def bili_persona_note(
             return _err(f"公共梗应 ≤30 字（当前 {len(text)}），太长说明不是梗，是自己写的——用 origin=self 或别交")
         if origin == "community" and not (source or "").strip():
             return _err("公共梗必须写 source（出处性质）")
+        original_text = (originalText or "").strip()
+        if origin == "community" and not original_text:
+            # W2-3 的入库闸门要求 community 能跑「与原帖」改写检查；工具层先拦，免得宿主质检时才拒
+            return _ok({"ok": False, "code": "NEED_ORIGINAL_TEXT", "error": "community 语料必须附原帖原文"})
         entry.update({"form": form, "text": text, "origin": origin, "source": (source or "").strip()})
+        if original_text:
+            entry["originalText"] = original_text
     elif kind == "lore":
         kid = (id or "").strip()
         if kid and not all(ch.isalnum() or ch in "-_" for ch in kid):

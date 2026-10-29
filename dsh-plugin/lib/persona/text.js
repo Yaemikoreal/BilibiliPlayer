@@ -15,6 +15,22 @@ export const stripEmoji = (s) =>
     .replace(/\[[^\]]{1,12}\]/g, '')
     .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, '')
 
+/**
+ * 表情 token：B 站 `[doge]` 这类标签 + Unicode emoji —— **全仓唯一口径**（别再各写一份）。
+ *
+ * 为什么单独拎出来：checkup.js 曾经自己写了一份只认 Unicode 的版本，于是「体检 → 表情占比」
+ * 对我们真实的评论恒判 0%（B 站评论几乎只用 `[doge]`，Unicode 表情 0 条），2026-10-29 连续两轮
+ * 误报「你几乎不带表情了」并注入 selfCorrect —— 而同一批评论按标签算其实是 41.7%，正好等于基线。
+ * 口径分叉的那一处，永远是最难发现的那一处。
+ */
+export const EMOJI_RE = /\[[^\]]{1,12}\]|[\p{Extended_Pictographic}\u{2600}-\u{27BF}\u{FE0F}\u{20E3}]/u
+
+/** 这句里有没有表情（B 站标签或 Unicode）。 */
+export const hasEmoji = (s) => EMOJI_RE.test(String(s ?? ''))
+
+/** 数表情个数（质量门的 L 系列用它；全局正则每次新建，避免 lastIndex 状态）。 */
+export const countEmoji = (s) => (String(s ?? '').match(new RegExp(String(EMOJI_RE.source), 'gu')) || []).length
+
 /** 字数口径：去表情、去空白后的字符数（与 `corpus` 文档「去 [表情] 与空白」一致）。 */
 export const charLen = (s) => [...stripEmoji(s).replace(/\s+/g, '')].length
 

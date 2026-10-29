@@ -65,6 +65,43 @@ export const FIX = {
         counts: { views: 2, likes: 2, comments: 1, replies: 1, proactive: 1, dynamics: 0, skips: 1, scans: 1 },
         proactiveMissing: false,
       },
+      // W2-1 归因 + W5「本轮实际注入 / 页头一行」：形状与 lib/persona/attribution.js 的账本事件一致
+      personaTag: 'whale@2.0.0',
+      personaInject: {
+        t: '2026-10-23T08:26:05Z',
+        round: '2026-10-23T08:26:00Z',
+        type: 'persona-inject',
+        personaTag: 'whale@2.0.0',
+        mode: 'card',
+        channel: 'c1',
+        layers: [
+          { name: 'core', chars: 1281, max: 1500 },
+          { name: 'lore', chars: 236, max: 300 },
+          { name: 'state', chars: 112, max: 500 },
+          { name: 'samples', chars: 140, max: 450 },
+          { name: 'tail', chars: 159, max: 250 },
+        ],
+        total: 1913,
+        totalMax: 3000,
+        hits: [
+          { kind: 'lore', id: 'wuchang-ranked' },
+          { kind: 'canon', id: '问是不是 AI' },
+          { kind: 'expression', id: 'reaction#1' },
+        ],
+        degraded: ['lore:shrink'],
+        guard: { level: 'warn', len: 21000, softMax: 20000, hardMax: 24000 },
+        notes: ['P4 用表达库（question，4 条）'],
+      },
+      // W7-2 发言门控（buildRoundGate → gateView 形状，见 plan §8.5）：
+      // base 取「观察中 + 收紧」——最容易让主人误判成「已经在拦」的一档，所以 UI 必须写明「不拦」。
+      speakGate: {
+        mode: 'observe',
+        decision: 'throttle',
+        reason: '节奏偏密：最近 5 个动作里说了 3 次（观察中，不强制；建议本轮最多 1 条）',
+        suggestedMaxComments: 1,
+        enforced: false,
+        features: { recentShare: 0.6, recentWindow: 5, recentSpoke: 3, gapMinutes: 12, pendingReplies: 0 },
+      },
       nextRunAt: 1793000000000,
       nextWindowLabel: '中午 12:00（2h54m 后）',
     },
@@ -158,6 +195,8 @@ export const FIX = {
       followAuto: true, followPerRound: 8, avoidList: ['引战'], keywords: ['AI 实测'], followUids: [10000001],
       banPrivacy: true, banImpersonation: true, banControversy: true, banRepeat: true, banReplyRefusal: true,
       dynamicPureText: false, growthEnable: true, growthAutoPromote: 3,
+      // W7-2 / W2-3 本轮新加配置项（设置页「人设 / 质量门」分组）
+      speakGateMode: 'observe', growthCheckedOnly: false,
       personaPrompt: '', reportLevel: 'full', dshBin: '', headlessProfile: 'headless', dutyTools: [],
       modelProvider: '', modelName: '', modelReasoningEffort: '',
     },
@@ -168,6 +207,8 @@ export const FIX = {
       followAuto: true, followPerRound: 8, avoidList: [], keywords: [], followUids: [],
       banPrivacy: true, banImpersonation: true, banControversy: true, banRepeat: true, banReplyRefusal: true,
       dynamicPureText: false, growthEnable: true, growthAutoPromote: 3,
+      // W7-2 / W2-3 本轮新加配置项（设置页「人设 / 质量门」分组）
+      speakGateMode: 'observe', growthCheckedOnly: false,
       personaPrompt: '', reportLevel: 'full', dshBin: '', headlessProfile: 'headless', dutyTools: [],
       modelProvider: '', modelName: '', modelReasoningEffort: '',
     },
@@ -280,17 +321,62 @@ export const FIX = {
   '/api/bili-fenshen/persona/expression': {
     ok: true, total: 23,
     buckets: {
-      question: [{ text: '封面能不能好好做？', source: 'comment-reception', len: 9, status: 'active', heat: 1 }],
+      question: [
+        { text: '封面能不能好好做？', source: 'comment-reception', len: 9, status: 'active', heat: 1 },
+        // W3-3：软删除留痕 —— disabled:true 的条目在回收站里可恢复/彻底删除
+        { text: '这是被软删的语料', source: 'comment-reception', len: 8, status: 'active', heat: 0, disabled: true },
+      ],
       reaction: [{ text: '啊这', source: 'comment-reception', len: 2, status: 'active', heat: 0 }],
     },
   },
   '/api/bili-fenshen/persona/lore': {
     ok: true,
-    entries: [{ id: 'wuchang-ranked', keys: ['无畏契约'], oneLine: '常年白银边缘', usedToday: false, chars: 12, body: '正文内容' }],
+    entries: [
+      { id: 'wuchang-ranked', keys: ['无畏契约'], oneLine: '常年白银边缘', usedToday: false, chars: 12, body: '正文内容' },
+      // W3-3：软删除的见闻条目
+      { id: 'old-meme', keys: ['旧梗'], oneLine: '已删除的旧见闻', usedToday: false, chars: 6, body: '旧正文', disabled: true },
+    ],
   },
   '/api/bili-fenshen/persona/versions': {
     ok: true,
     versions: [{ name: 'whale-2.0.0-2026-10-26.json', mtime: 1761400000000 }],
+  },
+  // W5-2 体检（GET /persona/checkup）：近 12 条 vs 247 条基线，一处表情占比偏离 → warn
+  '/api/bili-fenshen/persona/checkup': {
+    ok: true,
+    windowDays: 14,
+    n: 12,
+    metrics: { medianChars: 24, periodPerComment: 0.083, emojiRatio: 0.75, questionRatio: 0.167, avoidHits: 0 },
+    baseline: { medianChars: 27, periodPerComment: 0.109, emojiRatio: 0.417, questionRatio: 0.126 },
+    verdict: {
+      level: 'warn',
+      reasons: ['表情占比 75%（基线 42%，偏离 +33%）'],
+    },
+    samples: [
+      { bvid: 'BV1xrnz6gEVD', text: '原来不是打码，是他自己秒切的屏', t: '2026-10-23T08:27:00Z' },
+      { bvid: 'BV1CqnW6oE8B', text: '这句真的是设计师本命', t: '2026-10-23T08:29:30Z' },
+      { bvid: 'BV1xrnz6gEVD', text: '拿个爆能机还要说「这个归我了」，欠得很', t: '2026-10-23T09:10:00Z' },
+    ],
+  },
+  // W5 换卡对比（GET /persona/history）：按 personaTag 分组，各 3 条评论 + 赞
+  '/api/bili-fenshen/persona/history': {
+    ok: true,
+    tags: [
+      {
+        personaTag: 'whale@2.0.0', rounds: 3, lastAt: '2026-10-23T09:10:00Z', likes: 7,
+        samples: [
+          { bvid: 'BV1xrnz6gEVD', text: '原来不是打码，是他自己秒切的屏', t: '2026-10-23T08:27:00Z', likes: 4 },
+          { bvid: 'BV1CqnW6oE8B', text: '这句真的是设计师本命', t: '2026-10-23T08:29:30Z', likes: 2 },
+          { bvid: 'BV1xrnz6gEVD', text: '拿个爆能机还要说「这个归我了」，欠得很', t: '2026-10-23T09:10:00Z', likes: 1 },
+        ],
+      },
+      {
+        personaTag: 'elaina@2.0.0', rounds: 1, lastAt: '2026-10-21T09:00:00Z', likes: 0,
+        samples: [
+          { bvid: 'BV1xrnz6gEVD', text: '封面能不能好好做？', t: '2026-10-21T08:30:00Z', likes: 0 },
+        ],
+      },
+    ],
   },
   // 一键诊断：9 pass / 1 warn / 0 fail
   '/api/bili-fenshen/diagnose': {
@@ -410,5 +496,84 @@ export const MISSING_PROACTIVE_OVERVIEW = {
       counts: { views: 2, likes: 2, comments: 1, replies: 1, proactive: 0, dynamics: 0, skips: 1, scans: 0 },
       proactiveMissing: true,
     },
+  },
+}
+
+/* ═══ W5 人设页「无数据」两态 fixture ═══
+ * 新端点（/persona/checkup、/persona/history）的**空数据变体**：服务端 200 + ok:true + 空结构，
+ * 页面必须渲染「暂无数据」而不是崩或「未找到」。另给一份「概览有、但本轮没注入」的信封。 */
+export const PERSONA_CHECKUP_EMPTY = {
+  ok: true,
+  windowDays: 14,
+  n: 0,
+  metrics: { medianChars: 0, periodPerComment: 0, emojiRatio: 0, questionRatio: 0, avoidHits: 0 },
+  baseline: { medianChars: 27, periodPerComment: 0.109, emojiRatio: 0.417, questionRatio: 0.126 },
+  verdict: { level: 'ok', reasons: ['数据不足（最近 0 条，至少 5 条才体检）'] },
+  samples: [],
+}
+
+export const PERSONA_HISTORY_EMPTY = { ok: true, tags: [] }
+
+/** 概览信封在、但本轮没走卡链路（round.personaInject = null）⇒ 页面「暂无数据」而不是「正在连接…」。 */
+export const NO_PERSONA_INJECT_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1310,
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    personaTag: '',
+    personaInject: null,
+  },
+}
+
+/* ═══ W7-2 发言门控 fixture：概览信封 round.speakGate 的四种形态 ═══
+ * base FIX 已是 observe+throttle（观察中、不拦）；这里补 null / enforce+normal / forced / 字段半截。
+ * 注意：门控**独立于**人设注入——可能这轮没走卡链路，但门控照样有记录（反之亦然）。 */
+export const NO_SPEAK_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1320,
+  round: { ...FIX['/api/bili-fenshen/overview'].round, speakGate: null },
+}
+
+/** 强制档 + 正常放行：mode=enforce 必须显示「强制」，不能仍写「观察中」。 */
+export const ENFORCE_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1321,
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    speakGate: {
+      mode: 'enforce',
+      decision: 'normal',
+      reason: '节奏正常（近 5 个动作说了 1 次，距上次 42 分钟）',
+      suggestedMaxComments: 2,
+      enforced: false,
+      features: { recentShare: 0.2, recentWindow: 5, recentSpoke: 1, gapMinutes: 42, pendingReplies: 0 },
+    },
+  },
+}
+
+/** 被回复 / 被 @：直接放行（仍占配额）——门控判定 forced。 */
+export const FORCED_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1322,
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    speakGate: {
+      mode: 'enforce',
+      decision: 'forced',
+      reason: '有 2 条回复还没回，优先回（放行且不收紧）',
+      suggestedMaxComments: 2,
+      enforced: false,
+      features: { recentShare: 0.2, recentWindow: 5, recentSpoke: 1, gapMinutes: 30, pendingReplies: 2 },
+    },
+  },
+}
+
+/** 字段半截：只有 decision，mode/reason/features 都缺 ⇒ 必须退化渲染（不抛错、不渲染 undefined）。 */
+export const PARTIAL_GATE_OVERVIEW = {
+  ...FIX['/api/bili-fenshen/overview'],
+  seq: 1323,
+  round: {
+    ...FIX['/api/bili-fenshen/overview'].round,
+    speakGate: { decision: 'throttle' },
   },
 }

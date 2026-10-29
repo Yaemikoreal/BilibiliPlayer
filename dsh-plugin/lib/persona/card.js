@@ -8,6 +8,7 @@
  * 这些都能纯字符串判定，所以放 L0（保存/CI 时跑，零运行时成本），不交给模型自觉。
  */
 import { jaccard, sentences, stripEmoji } from './text.js'
+import { BUDGET, RENDER_POSITIONS } from './budget.js'
 
 export const SPEC = 'bili-fenshen.persona/v2'
 export const FORMS = ['reaction', 'question', 'experience', 'meme', 'detail', 'rant']
@@ -27,8 +28,17 @@ const arr = (v) => (Array.isArray(v) ? v : [])
 /* ───────────────────────── 注入文本（L0 判据的考察对象） ───────────────────────── */
 
 /**
- * 把"会被注入 prompt 的字段"拼成一段纯文本（不含 creatorNotes）。
- * L0 的禁止句占比、词频、签名梗都在这段文本上算 —— 口径与真实注入一致。
+ * 把"L0 要考察的字段"拼成一段纯文本（不含 creatorNotes）。
+ * L0 的禁止句占比、词频、签名梗都在这段文本上算。
+ *
+ * 口径说明（W1-4）：这里是 **L0 考察对象**，不是"逐字注入清单"——
+ *   - 示例（samples）、traits/contradictions/canon/loreIndex 等按**抽样**注入（3–5 条 / 前 N 条），
+ *     所以要求"每一条都出现在 compilePersona().text 里"是错的；
+ *   - 但**单值字段**（identity.*、voice 事实、stance 的 topic/attitude/how/misread、
+ *     redlines 的 rule/instead、behaviorStyle.interestFirst）必须真被注入，
+ *     否则就是"卡里写了、L0 算它已注入、prompt 里没有"的口径分叉（W1-4 修的就是这 3 项）。
+ *   - `mindset.judgement` / `voice.jargon.quotaPerDay|cooldownRounds` 不在本函数里：
+ *     它们不是"注入文本"，quota 由宿主账本执行、judgement 是配比自述（定论见 compile.js voiceFacts 注释）。
  */
 export const injectedText = (card = {}) => {
   const parts = []
@@ -161,6 +171,33 @@ export const validateCard = (card) => {
 
   for (const [i, c] of arr(card.canon).entries()) {
     if (!isStr(c?.when) || !isStr(c?.say)) err(`canon[${i}]`, 'canon 每条要有 when + say')
+  }
+
+  // render 段（W1-3）：卡内预算与注入位置是**生效配置**（读卡优先、budget.js 作缺省）。
+  // 数值写错不致命（运行时回落缺省），但会让"卡里写的"和"实际跑的"再次分叉，所以这里拦。
+  if (card.render !== undefined) {
+    const r = card.render
+    if (!r || typeof r !== 'object' || Array.isArray(r)) err('render', 'render 必须是对象')
+    else {
+      if (r.budget !== undefined) {
+        if (!r.budget || typeof r.budget !== 'object' || Array.isArray(r.budget)) err('render.budget', 'render.budget 必须是对象')
+        else {
+          for (const [k, v] of Object.entries(r.budget)) {
+            if (!(k in BUDGET)) warn(`render.budget.${k}`, `未知块名（可用：${Object.keys(BUDGET).join(' / ')}）`)
+            else if (!(Number.isFinite(Number(v)) && Number(v) > 0)) err(`render.budget.${k}`, '必须是正数（字符预算）')
+          }
+        }
+      }
+      if (r.position !== undefined) {
+        if (!r.position || typeof r.position !== 'object' || Array.isArray(r.position)) err('render.position', 'render.position 必须是对象')
+        else {
+          for (const [k, v] of Object.entries(r.position)) {
+            if (!(k in BUDGET)) warn(`render.position.${k}`, `未知块名（可用：${Object.keys(BUDGET).join(' / ')}）`)
+            else if (!RENDER_POSITIONS.includes(v)) err(`render.position.${k}`, `必须是 ${RENDER_POSITIONS.join(' / ')}`)
+          }
+        }
+      }
+    }
   }
 
   return { ok: errors.length === 0, errors, warnings }

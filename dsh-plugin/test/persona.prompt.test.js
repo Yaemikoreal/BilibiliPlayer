@@ -40,10 +40,10 @@ test('v2 卡：prompt 有"前段（身份+生活）"和"后段（状态+手感+�
   assert.match(p, /===== 人设（smoke@2\.0\.0 · 按这个来说话） =====/)
   assert.match(p, /一个测试用的普通网友/)
   assert.match(p, /===== 你这会儿的状态 =====/)
-  assert.match(p, /===== 写之前，最后看三行 =====/)
+  assert.match(p, /===== 写之前，最后看几行 =====/)
   // 位置纪律：身份在前段、尾注在整段最后
   assert.ok(p.indexOf('一个测试用的普通网友') < p.indexOf('值班章程'), '身份必须在章程之前')
-  assert.ok(p.indexOf('写之前，最后看三行') > p.indexOf('本轮参数'), '尾注必须在参数之后')
+  assert.ok(p.indexOf('写之前，最后看几行') > p.indexOf('本轮参数'), '尾注必须在参数之后')
   assert.ok(p.length < 24000, `prompt 过长：${p.length}`)
 })
 
@@ -64,6 +64,18 @@ test('本轮参数：主动接话（硬步骤）+ 已接话清单 + 空账本的
   assert.match(p, /已接话清单（宿主从账本算好，近 14 天/, '要注入已接话清单（去重弹药）')
   assert.match(p, /已看过清单（宿主从账本算好，最近 14 天，命中 = 之前看过\/评过\/赞过\/跳过过）：（空/, '空账本要明说清单为空')
   assert.match(p, /照常逐条判/, '空态要给出正常判重的指令')
+})
+
+/* 2026-10-29 真实日志：配置 followPerRound=40，模型在「先扫哪几个 UP」上反复权衡，
+ * 20 次工具预算先烧掉一截，最后只看了 4 个。注入时收口到 8，并把「配置写了几」明说。 */
+test('本轮参数：每轮抽查 40 收口到 8，并说明是预算收口', () => {
+  const p = buildDutyPrompt({ ...baseCfg, personaPrompt: '', followAuto: true, followPerRound: 40 }, 'R-follow')
+  assert.match(p, /取前 8 个/)
+  assert.match(p, /配置写的是 40/)
+  assert.doesNotMatch(p, /取前 40 个/)
+  // 配置本身不超上限时不该出现收口说明
+  const p8 = buildDutyPrompt({ ...baseCfg, personaPrompt: '', followAuto: true, followPerRound: 8 }, 'R-follow8')
+  assert.doesNotMatch(p8, /配置写的是/)
 })
 
 test('本轮参数：账本里看过的 BV 注入清单，命中纪律完整', () => {

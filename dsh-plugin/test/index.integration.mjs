@@ -1,7 +1,7 @@
 // index.js 集成测试（离线）：真 import index.js → apply(fake ctx) → 捕获 prefix 路由 handler，
 // 对组合分发逻辑（工厂端点 / legacy 端点 / 404 兜底）做逐项断言。
 // ⭐ BILI_FENSHEN_HOME 必须在 import 前指向临时目录，避免污染真实家目录。
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -34,7 +34,9 @@ writeFileSync(join(home, 'ledger.jsonl'), [
   '',
 ].join('\n'))
 
-const { apply } = await import('../index.js')
+const { apply, getLedgerReaderStats } = await import('../index.js')
+// W3-3：编译读口（与列表接口不同 —— 列表要能看到回收站，编译必须跳过 disabled）
+const { resolveLoreIndex, loadCard } = await import('../lib/persona/index.js')
 
 // ── fake ctx ──
 let routeHandler = null
@@ -76,6 +78,16 @@ check('/overview home 指向临时目录', ov.json?.home === home, ov.json?.home
 check('/overview 配额按账本计数（picked=1 comments=1 likes=0 dynamics=0）',
   ov.json?.quota?.picked === 1 && ov.json?.quota?.comments === 1 && ov.json?.quota?.likes === 0 && ov.json?.quota?.dynamics === 0,
   ov.json?.quota)
+
+// ⭐ W4-2：11 处 `readEvents(LEDGER_FILE)` 收敛成一个 ledgerReader 实例 ——
+//    重复请求同一个账本应该是「0 字节增量读盘 + 命中缓存」，而不是每次全量 readFileSync。
+const rdr1 = getLedgerReaderStats()
+await call('GET', '/api/bili-fenshen/status')
+await call('GET', '/api/bili-fenshen/status')
+const rdr2 = getLedgerReaderStats()
+check('W4-2：账本读收敛到单 reader（重复请求 0 字节增量读盘、cacheHits 增长）',
+  rdr2.bytesRead === rdr1.bytesRead && rdr2.cacheHits > rdr1.cacheHits,
+  { bytesDelta: rdr2.bytesRead - rdr1.bytesRead, cacheHitsDelta: rdr2.cacheHits - rdr1.cacheHits })
 
 const act = await call('GET', '/api/bili-fenshen/activity')
 check('GET /activity 200 且 days[0] 含 BV1', act.status === 200 && act.json?.days?.[0]?.rounds?.[0]?.items?.some((x) => x.bvid === 'BV1'), act.json)
@@ -208,6 +220,95 @@ check('restore 拒绝路径穿越', restoreBad.status === 400, { status: restore
 const snapName = (pv1.json?.versions || [])[0]?.name
 const restore = await call('POST', '/api/bili-fenshen/persona/versions/restore', { name: snapName })
 check('POST /persona/versions/restore 200', restore.status === 200 && restore.json?.ok === true, { status: restore.status })
+
+/* ───────── W5-3 服务端端点：无数据也必须 200 + ok:true + 空结构 ───────── */
+
+const ck0 = await call('GET', '/api/bili-fenshen/persona/checkup')
+check('GET /persona/checkup 200 + 契约字段齐全（空/少数据不 500）',
+  ck0.status === 200 && ck0.json?.ok === true && ck0.json?.windowDays === 14
+  && typeof ck0.json?.n === 'number' && ck0.json?.verdict && typeof ck0.json.verdict.level === 'string'
+  && Array.isArray(ck0.json?.verdict?.reasons) && Array.isArray(ck0.json?.samples)
+  && ck0.json?.baseline && typeof ck0.json.baseline.medianChars === 'number', ck0.json)
+const hs0 = await call('GET', '/api/bili-fenshen/persona/history')
+check('GET /persona/history 200 + tags 数组', hs0.status === 200 && hs0.json?.ok === true && Array.isArray(hs0.json?.tags), hs0.json)
+
+// 造「有数据」态：账本追加一条 persona-inject + 两条带 likes 的评论（落近 14 天窗口）
+appendFileSync(join(home, 'ledger.jsonl'), [
+  JSON.stringify({ t: todayAt(2), round: 'rhist', type: 'persona-inject', personaTag: 'whale@2.2.0', mode: 'card', channel: 'after', layers: [], hits: [], degraded: [], notes: [] }),
+  JSON.stringify({ t: todayAt(2, 10), round: 'rhist', type: 'comment', bvid: 'BVhist1', text: '这句是我自己写的，够口语了吧', rpid: 501 }),
+  JSON.stringify({ t: todayAt(2, 20), round: 'rhist', type: 'comment', bvid: 'BVhist2', text: '第二个样本：短一点', rpid: 502, likes: 7 }),
+  '',
+].join('\n'))
+const ck1 = await call('GET', '/api/bili-fenshen/persona/checkup')
+check('GET /persona/checkup 有数据：n 增加、samples 带 bvid/text/t、metrics 齐全',
+  ck1.status === 200 && ck1.json?.n >= 3 && ck1.json?.samples?.length >= 3
+  && ck1.json.samples.every((x) => typeof x.bvid === 'string' && typeof x.text === 'string' && typeof x.t === 'string')
+  && ck1.json?.metrics && typeof ck1.json.metrics.medianChars === 'number', ck1.json)
+const hs1 = await call('GET', '/api/bili-fenshen/persona/history')
+check('GET /persona/history 有数据：按 personaTag 分组、每组 ≤3 条、likes 聚合',
+  hs1.status === 200 && hs1.json?.tags?.[0]?.personaTag === 'whale@2.2.0'
+  && hs1.json.tags[0].rounds >= 1 && hs1.json.tags[0].likes === 7
+  && hs1.json.tags[0].samples.length >= 1 && hs1.json.tags[0].samples.length <= 3
+  && typeof hs1.json.tags[0].samples[0].bvid === 'string', hs1.json?.tags)
+
+/* ───────── W3-3 素材删除留痕 / 软删除可恢复 / purge / 孤儿扫描 ───────── */
+
+const FORM = 'question'
+const addC = await call('POST', '/api/bili-fenshen/persona/expression', { action: 'add', form: FORM, text: '测试语料：这句够短吧' })
+check('W3-3 前置：语料 add 200', addC.status === 200 && addC.json?.ok === true, addC.json)
+const addedId = (addC.json?.buckets?.[FORM] || []).find((e) => String(e.text || '').includes('测试语料'))?.id
+const remC = await call('POST', '/api/bili-fenshen/persona/expression', { action: 'remove', form: FORM, id: addedId })
+const removedEntry = (remC.json?.buckets?.[FORM] || []).find((e) => e.id === addedId)
+check('W3-3 语料 remove = 软删除（soft:true / disabled≥1 / 条目留在库里但标记 disabled）',
+  remC.status === 200 && remC.json?.soft === true && remC.json?.disabled >= 1
+  && removedEntry?.disabled === true, { soft: remC.json?.soft, disabled: remC.json?.disabled, entry: removedEntry })
+const bankBaks = readdirSync(join(home, 'persona')).filter((f) => f.startsWith('expression-bank.json.bak-'))
+check('W3-3 语料删除留痕：<file>.bak-<ts> 存在且 ≤3 份', bankBaks.length >= 1 && bankBaks.length <= 3, bankBaks)
+const resC = await call('POST', '/api/bili-fenshen/persona/expression', { action: 'restore', form: FORM, id: addedId })
+const bankAfter = await call('GET', '/api/bili-fenshen/persona/expression')
+check('W3-3 语料 restore 可恢复（total 回到 add 之后）',
+  resC.status === 200 && resC.json?.ok === true && bankAfter.json?.total === addC.json.total, { total: bankAfter.json?.total })
+const purC = await call('POST', '/api/bili-fenshen/persona/expression', { action: 'purge', form: FORM, id: addedId })
+check('W3-3 语料 purge 物理删除（soft≠true / total 减 1）',
+  purC.status === 200 && purC.json?.ok === true && purC.json?.soft !== true && purC.json?.total === addC.json.total - 1, purC.json)
+
+// 见闻：add → 写正文 → 软删除（回收站可见但编译跳过、正文保留、孤儿扫描不误报）→ restore → purge
+const loreAdd = await call('POST', '/api/bili-fenshen/persona/lore', { action: 'add', id: 'integration-lore', keys: ['测试'], oneLine: '一行测试见闻' })
+check('W3-3 前置：见闻 add 200', loreAdd.status === 200 && loreAdd.json?.ok === true, loreAdd.json)
+const loreBody = await call('PUT', '/api/bili-fenshen/persona/lore', { id: 'integration-lore', body: '测试见闻正文：那天我把锅烧糊了。' })
+check('W3-3 前置：见闻正文写盘 200', loreBody.status === 200 && loreBody.json?.ok === true, loreBody.json)
+const loreRem = await call('POST', '/api/bili-fenshen/persona/lore', { action: 'remove', id: 'integration-lore' })
+const loreAfterRem = await call('GET', '/api/bili-fenshen/persona/lore')
+const cardBaks = readdirSync(join(home, 'persona')).filter((f) => f.startsWith('card.json.bak-'))
+const loreBinEntry = (loreAfterRem.json?.entries || []).find((e) => e.id === 'integration-lore')
+check('W3-3 见闻 remove = 软删除（列表里标记 disabled、card.json 留痕、不当孤儿）',
+  loreRem.status === 200 && loreRem.json?.soft === true
+  // 列表接口要能看到回收站条目（否则控制台没法"恢复"），但要带 disabled 标记
+  && loreBinEntry?.disabled === true
+  && cardBaks.length >= 1 && cardBaks.length <= 3
+  && !(loreAfterRem.json?.orphans?.bodiesWithoutIndex || []).includes('integration-lore'),
+  { cardBaks, orphans: loreAfterRem.json?.orphans, binEntry: loreBinEntry })
+check('W3-3 见闻软删除后**编译**跳过（索引里不再出现）',
+  !resolveLoreIndex(loadCard().card, {}).some((e) => e.id === 'integration-lore'),
+  resolveLoreIndex(loadCard().card, {}).map((e) => e.id))
+const loreRes = await call('POST', '/api/bili-fenshen/persona/lore', { action: 'restore', id: 'integration-lore' })
+const loreAfterRes = await call('GET', '/api/bili-fenshen/persona/lore')
+check('W3-3 见闻 restore 可恢复（正文仍在、disabled 清掉）',
+  loreRes.status === 200 && loreRes.json?.ok === true
+  && (loreAfterRes.json?.entries || []).some((e) => e.id === 'integration-lore' && e.disabled !== true && String(e.body || '').length > 0), loreRes.json)
+// 孤儿扫描两种都能报：手放一个正文（无索引）、加一个只有索引没正文的
+writeFileSync(join(home, 'persona', 'lore', 'stray-orphan.md'), '没人认领的正文\n', 'utf8')
+await call('POST', '/api/bili-fenshen/persona/lore', { action: 'add', id: 'index-no-body', keys: ['缺'], oneLine: '只有索引没有正文' })
+const loreOrphans = await call('GET', '/api/bili-fenshen/persona/lore')
+check('W3-3 孤儿扫描：有正文无索引 / 有索引无正文 都能报出来',
+  (loreOrphans.json?.orphans?.bodiesWithoutIndex || []).includes('stray-orphan')
+  && (loreOrphans.json?.orphans?.indexWithoutBody || []).includes('index-no-body'),
+  loreOrphans.json?.orphans)
+const lorePur = await call('POST', '/api/bili-fenshen/persona/lore', { action: 'purge', id: 'integration-lore' })
+const loreBaks = readdirSync(join(home, 'persona', 'lore')).filter((f) => f.startsWith('integration-lore.md.bak-'))
+check('W3-3 见闻 purge：正文归档 .bak-<ts> 后移除原文件',
+  lorePur.status === 200 && lorePur.json?.ok === true && loreBaks.length >= 1
+  && !readdirSync(join(home, 'persona', 'lore')).includes('integration-lore.md'), { loreBaks })
 
 // stop（无子进程 → stopped:false，不应抛）
 const sp = await call('POST', '/api/bili-fenshen/stop')

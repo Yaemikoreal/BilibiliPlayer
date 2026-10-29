@@ -1,7 +1,10 @@
 // 今日状态：mood 稳定性、时段边界、形态判定、欠账、沉默计数
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveState, timeOfDayOf, formOf, debtLine, MOODS, usedToday, recordUsage } from '../lib/persona/state.js'
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { deriveState, timeOfDayOf, formOf, debtLine, MOODS, usedToday, recordUsage, saveState, loadState } from '../lib/persona/state.js'
 import { smokeCard } from './fixtures/persona/smoke-card.js'
 
 test('mood：同一天稳定，跨 30 天会变（不是常量）', () => {
@@ -68,4 +71,49 @@ test('冷却表：usedToday 按自然日判断，recordUsage 只增不改', () =
   assert.equal(usedToday(st.loreUsed, 'a', new Date(2026, 9, 27, 12, 0)), false)
   assert.equal(st.canonUsed.k, '2026-10-26')
   assert.ok(st.expressionUsed['q#1'])
+})
+
+/* ───────── W3-4：state.json 原子写（旧实现直写，半截 JSON 会让冷却表整张清零） ───────── */
+
+test('usedToday：统一按**本地日**判（UTC 切片在 UTC+8 的 00:00–08:00 会差一天）', () => {
+  // 本地 2026-10-28 05:30（UTC+8）⇒ 该时刻的 UTC 日期还是 10-27
+  const localEarly = new Date(2026, 9, 28, 5, 30, 0)
+  const utcDay = localEarly.toISOString().slice(0, 10)
+  assert.notEqual(utcDay, '2026-10-28', '前提：这个本地时刻的 UTC 日期不是同一天')
+
+  // ① lore 存完整时间戳：同一天稍后再判，必须仍是"今天用过"
+  const st = recordUsage({}, { loreIds: ['a'] }, localEarly)
+  assert.equal(usedToday(st.loreUsed, 'a', new Date(2026, 9, 28, 7, 0, 0)), true, '本地同一天要判 true')
+  assert.equal(usedToday(st.loreUsed, 'a', new Date(2026, 9, 29, 7, 0, 0)), false, '跨天要判 false')
+
+  // ② canon 存日期：必须是**本地日**，不是 UTC 切片
+  assert.equal(st.canonUsed === undefined || true, true)
+  const st2 = recordUsage({}, { canonKeys: ['k'] }, localEarly)
+  assert.equal(st2.canonUsed.k, '2026-10-28', 'canon 冷却按本地日记')
+  assert.equal(usedToday(st2.canonUsed, 'k', new Date(2026, 9, 28, 23, 0, 0)), true)
+  assert.equal(usedToday(st2.canonUsed, 'k', new Date(2026, 9, 29, 1, 0, 0)), false)
+})
+
+test('saveState：tmp+rename 原子写，内容可回读且不留临时文件', () => {
+  const d = mkdtempSync(join(tmpdir(), 'bf-state-atomic-'))
+  const f = join(d, 'state.json')
+  assert.equal(saveState({ loreUsed: { a: '2026-10-26T00:00:00.000Z' } }, f), true)
+  assert.equal(loadState(f).loreUsed.a, '2026-10-26T00:00:00.000Z')
+  assert.deepEqual(readdirSync(d).filter((x) => x.includes('.tmp-')), [], '不得留下临时文件')
+
+  // 覆盖写：rename 必须能原地替换（Windows 上这条以前会 EPERM）
+  assert.equal(saveState({ loreUsed: { b: 'x' } }, f), true)
+  assert.equal(loadState(f).loreUsed.b, 'x')
+  assert.deepEqual(readdirSync(d).filter((x) => x.includes('.tmp-')), [])
+})
+
+test('saveState：写不进去时返回 false，且不抛、不留垃圾', () => {
+  const d = mkdtempSync(join(tmpdir(), 'bf-state-miss-'))
+  // 让目录位置被一个普通文件占住：mkdirSync 必然失败
+  const blocker = join(d, 'blocker')
+  writeFileSync(blocker, 'x', 'utf8')
+  const f = join(blocker, 'state.json')
+  assert.equal(saveState({ a: 1 }, f), false)
+  assert.equal(existsSync(f), false)
+  assert.equal(readFileSync(blocker, 'utf8'), 'x', '别把占位的文件改坏')
 })
