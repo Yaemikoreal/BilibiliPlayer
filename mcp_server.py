@@ -17,8 +17,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unicodedata
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
@@ -36,7 +38,33 @@ from bilibili_api.login_v2 import QrCodeLogin, QrCodeLoginEvents
 # 凭证路径可经环境变量覆盖（DSH 插件用独立文件隔离小号凭证；未设 = 项目根目录默认值）
 CRED_FILE = Path(os.environ.get("BILI_CRED_FILE") or (Path(__file__).parent / "bili_credential.json"))
 
-mcp = FastMCP("bilibili-mcp")
+# ========== 共享 HTTP 会话（2026-10-29 核验 §4.2） ==========
+# 以前 _fetch_subtitle 每个视频新建/销毁一次 ClientSession ⇒ 每视频一次 TLS 握手；
+# 全局单例后同一进程只握手一次。进程退出由 FastMCP lifespan 统一关闭。
+
+_http: aiohttp.ClientSession | None = None
+
+
+async def get_http_session() -> aiohttp.ClientSession:
+    """共享出网会话：失效/未建时才重建（20s 总超时，与原单次会话一致）。"""
+    global _http
+    if _http is None or _http.closed:
+        _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+    return _http
+
+
+@asynccontextmanager
+async def _mcp_lifespan(_server):
+    yield
+    global _http
+    if _http is not None and not _http.closed:
+        try:
+            await _http.close()
+        except Exception:
+            pass  # 退出期关闭失败不阻断进程收尾
+
+
+mcp = FastMCP("bilibili-mcp", lifespan=_mcp_lifespan)
 
 # ========== 白名单门禁（BILI_MCP_TOOLS：逗号分隔的工具名单；未设 = 全量注册，兼容既有用法） ==========
 
@@ -151,7 +179,7 @@ async def _add_images_to_dynamic(dyn, images: list[str]) -> str | None:
             if img_path.startswith(("http://", "https://")):
                 pic = await Picture.load_url(img_path)
             else:
-                if not os.path.isfile(img_path):
+                if not await asyncio.to_thread(os.path.isfile, img_path):
                     return f"图片文件不存在: {img_path}"
                 pic = Picture.from_file(img_path)
             dyn.add_image(pic)
@@ -162,7 +190,9 @@ async def _add_images_to_dynamic(dyn, images: list[str]) -> str | None:
 
 # ========== 登录会话（进程级缓存） ==========
 
-QR_FILE = Path(__file__).parent / "qrcode_login.png"
+# 二维码落临时目录（2026-10-29 核验 §5-5）：写死在代码目录时，只读安装目录下 bili_login
+# 直接 PermissionError，且污染仓库根；带 pid 防多进程互删。
+QR_FILE = Path(tempfile.gettempdir()) / f"bili_qrcode_login_{os.getpid()}.png"
 
 _login_session: QrCodeLogin | None = None
 
@@ -171,6 +201,12 @@ def _cleanup_qr_file() -> None:
     """删除临时二维码图片"""
     if QR_FILE.exists():
         QR_FILE.unlink()
+
+
+def _write_qr_file(content: bytes) -> None:
+    """二维码落盘的同步实现（只在 asyncio.to_thread 里跑）。"""
+    with open(QR_FILE, "wb") as f:
+        f.write(content)
 
 
 def get_cred() -> Credential:
@@ -220,9 +256,8 @@ async def bili_login(force: bool = False) -> str:
     pic = _login_session.get_qrcode_picture()
     img_base64 = base64.b64encode(pic.content).decode("utf-8")
 
-    # 保存二维码图片到项目根目录
-    with open(QR_FILE, "wb") as f:
-        f.write(pic.content)
+    # 保存二维码图片（同步 I/O 收进线程，2026-10-29 核验 §4.2）
+    await asyncio.to_thread(_write_qr_file, pic.content)
 
     # 获取终端文本版二维码（纯文本客户端备用）
     terminal_qr = _login_session.get_qrcode_terminal()
@@ -528,12 +563,12 @@ async def _fetch_subtitle(bvid: str, cred: Credential) -> dict:
     if not sub_url:
         raise ValueError("字幕下载地址为空，无法获取字幕")
 
-    timeout = aiohttp.ClientTimeout(total=20)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(sub_url) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"字幕下载失败，HTTP状态码 {resp.status}")
-            sub_data = await resp.json(content_type=None)
+    # 2026-10-29 核验 §4.2：复用共享会话（以前每个视频新建/销毁一次 ClientSession ⇒ 每视频一次 TLS 握手）
+    http = await get_http_session()
+    async with http.get(sub_url) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"字幕下载失败，HTTP状态码 {resp.status}")
+        sub_data = await resp.json(content_type=None)
 
     texts = [item.get("content", "") for item in sub_data.get("body", [])]
     return {
@@ -1104,7 +1139,11 @@ async def _grab_frame(video_path: str, second: int, out_path: str) -> bool:
     except OSError as e:
         logger.warning("ffmpeg 执行失败（第%s秒）: %s", second, e)
         return False
-    return os.path.isfile(out_path) and os.path.getsize(out_path) > 0
+
+    def _has_frame() -> bool:
+        return os.path.isfile(out_path) and os.path.getsize(out_path) > 0
+
+    return await asyncio.to_thread(_has_frame)  # 2026-10-29 核验 §4.2：isfile/getsize 收进线程
 
 
 async def _extract_cover_from_video(video_path: str) -> Picture:
@@ -1119,8 +1158,9 @@ async def _extract_cover_from_video(video_path: str) -> Picture:
             if await _grab_frame(video_path, second, tmp_cover):
                 return Picture.from_file(tmp_cover)
     finally:
-        if os.path.isfile(tmp_cover):
-            os.remove(tmp_cover)
+        # 2026-10-29 核验 §4.2：isfile/remove 收进线程
+        if await asyncio.to_thread(os.path.isfile, tmp_cover):
+            await asyncio.to_thread(os.remove, tmp_cover)
     raise RuntimeError(f"无法从视频截取封面: {video_path}")
 
 
@@ -1224,7 +1264,7 @@ async def bili_upload_video(
         return json.dumps({"success": False, "error": "video_path 不能为空，请提供视频文件的本地路径"}, ensure_ascii=False)
 
     video_path = video_path.strip()
-    if not os.path.isfile(video_path):
+    if not await asyncio.to_thread(os.path.isfile, video_path):  # 2026-10-29 核验 §4.2
         return json.dumps({"success": False, "error": f"视频文件不存在: {video_path}"}, ensure_ascii=False)
 
     if not title or not title.strip():
@@ -1250,7 +1290,7 @@ async def bili_upload_video(
         is_original = not bool(source and source.strip())
 
         # 封面：用户提供 > 自动从视频截取
-        if cover_path and cover_path.strip() and os.path.isfile(cover_path.strip()):
+        if cover_path and cover_path.strip() and await asyncio.to_thread(os.path.isfile, cover_path.strip()):
             cover_pic = Picture.from_file(cover_path.strip())
         else:
             cover_pic = await _extract_cover_from_video(video_path)
@@ -1334,7 +1374,7 @@ async def bili_upload_video_multi(
         pages = []
         for i, vp in enumerate(video_paths):
             vp = (vp or "").strip()
-            if not vp or not os.path.isfile(vp):
+            if not vp or not await asyncio.to_thread(os.path.isfile, vp):  # 2026-10-29 核验 §4.2
                 return json.dumps({"success": False, "error": f"文件不存在: {vp}"}, ensure_ascii=False)
             pages.append(VideoUploaderPage(
                 path=vp,
@@ -1346,7 +1386,7 @@ async def bili_upload_video_multi(
         is_original = not bool(source and source.strip())
 
         # 封面：用户提供 > 从第一个视频自动截取
-        if cover_path and cover_path.strip() and os.path.isfile(cover_path.strip()):
+        if cover_path and cover_path.strip() and await asyncio.to_thread(os.path.isfile, cover_path.strip()):
             cover_pic = Picture.from_file(cover_path.strip())
         else:
             cover_pic = await _extract_cover_from_video(pages[0].path)
@@ -2072,14 +2112,60 @@ def _ledger_read_events(limit: int = 0) -> list:
     return out[-limit:] if limit and limit > 0 else out
 
 
+def _ledger_append_sync(path: Path, lines: list) -> None:
+    """账本追加的同步实现（只在 asyncio.to_thread 里跑；2026-10-29 核验 §4.2）。
+
+    保持原语义：文件非空且末尾没有换行时先补一个换行（2026-10-25 事故防线）。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blob = "\n".join(lines) + "\n"
+    if path.exists() and path.stat().st_size > 0:
+        with open(path, "rb") as f:
+            f.seek(-1, os.SEEK_END)
+            tail = f.read(1)
+        if tail not in (b"\n", b"\r"):
+            blob = "\n" + blob
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(blob)
+
+
 def _ledger_seen_bvids() -> set:
     """账本里"看过/动作过"的 BV（与 dsh-plugin/lib/seen.js 同口径：任何带合法 BV 的事件都算）。"""
     seen: set = set()
-    for ev in _ledger_read_events():
+    for ev in _ledger_cache.read():
         bv = ev.get("bvid")
         if isinstance(bv, str) and _BV_FULL_RE.match(bv):
             seen.add(bv)
     return seen
+
+
+class _LedgerCache:
+    """进程内账本缓存，与 dsh-plugin/lib/ledger-index.js 同口径：size+mtime 变了才重解析。
+
+    （2026-10-29 核验 §2.5 Step 2）同一轮里 4 个调用点（bili_feed / bili_reply 判重 /
+    bili_received_replies 判重 / bili_ledger_append 判重）从 4 次全表扫描降到 1 次；
+    追加写后 size/mtime 变化 ⇒ 自动重解析，无需手动失效。签名里带上路径，
+    避免测试/多账号场景下换家目录后读到旧缓存。
+    """
+
+    def __init__(self):
+        self._sig = None
+        self._events: list = []
+
+    def read(self, limit: int = 0) -> list:
+        path = _persona_home() / "ledger.jsonl"
+        try:
+            st = path.stat()
+        except OSError:
+            return []
+        sig = (str(path), st.st_size, int(st.st_mtime * 1000))
+        if sig != self._sig:
+            self._events = _ledger_read_events()  # 复用同一实现，保证语义唯一
+            self._sig = sig
+        return self._events[-limit:] if limit and limit > 0 else list(self._events)
+
+
+_ledger_cache = _LedgerCache()
 
 
 # ───────── 已回复目标判重（2026-10-29，配合 dsh-plugin/lib/replies.js repliedTargetsFromLedger）─────────
@@ -2096,7 +2182,7 @@ def _replied_targets(window_days: int = 0) -> set:
     cutoff = 0.0
     if window_days and window_days > 0:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
-    for ev in _ledger_read_events():
+    for ev in _ledger_cache.read():
         if ev.get("type") != "reply-out":
             continue
         if cutoff:
@@ -2304,7 +2390,7 @@ async def bili_ledger_append(events: list[dict]) -> str:
     round_id = _current_round_id()
     if not round_id:
         return _err("读不到本轮 round id（state.json 缺 lastRunStartedAt）；退回直接写文件")
-    existing = _ledger_read_events(limit=800)
+    existing = _ledger_cache.read(limit=800)  # 2026-10-29 核验 §2.5 Step 2：进程内缓存，size+mtime 变了才重解析
     seen_keys = {(e.get("round"), e.get("type"), e.get("bvid"), e.get("text")) for e in existing}
     path = _persona_home() / "ledger.jsonl"
     lines: list = []
@@ -2327,16 +2413,8 @@ async def bili_ledger_append(events: list[dict]) -> str:
         return _ok({"success": False, "written": 0, "rejected": rejected, "round": round_id,
                     "error": "没有一条通过校验，账本未改动"})
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        blob = "\n".join(lines) + "\n"
-        if path.exists() and path.stat().st_size > 0:
-            with open(path, "rb") as f:
-                f.seek(-1, os.SEEK_END)
-                tail = f.read(1)
-            if tail not in (b"\n", b"\r"):
-                blob = "\n" + blob
-        with open(path, "a", encoding="utf-8", newline="\n") as f:
-            f.write(blob)
+        # 2026-10-29 核验 §4.2：mkdir/stat/open/seek/read/write 全部收进线程，事件循环不再被 5MB 账本写卡住
+        await asyncio.to_thread(_ledger_append_sync, path, lines)
     except Exception as e:
         return _err(f"账本写入失败: {e}")
     return _ok({"success": True, "written": len(lines), "rejected": rejected, "round": round_id,
@@ -2345,6 +2423,18 @@ async def bili_ledger_append(events: list[dict]) -> str:
 
 _REPORT_HEADING_RE = re.compile(
     r"^##\s+.*?round\s*id\s*[:：]?\s*([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)", re.I | re.M)
+
+
+def _report_read_sync(path: Path) -> str:
+    """读当日报告全文的同步实现（只在 asyncio.to_thread 里跑；含建目录）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def _report_append_sync(path: Path, head: str, sep: str, text: str) -> None:
+    """报告追加的同步实现（只在 asyncio.to_thread 里跑）。"""
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(head + sep + text + "\n")
 
 
 @_gated_tool()
@@ -2379,15 +2469,14 @@ async def bili_report_append(markdown: str) -> str:
     day = datetime.now().astimezone().strftime("%Y-%m-%d")
     path = home / "out" / f"{day}.md"
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        old = path.read_text(encoding="utf-8") if path.exists() else ""
+        # 2026-10-29 核验 §4.2/§5-3：报告逐轮增长且无上限，读全文/追加都收进线程，事件循环不再被卡住
+        old = await asyncio.to_thread(_report_read_sync, path)
         if round_id in old:
             return _ok({"success": False, "code": "DUPLICATE_ROUND", "error": f"这一轮（{round_id}）已经写进报告了，别重复追加",
                         "file": str(path), "roundId": round_id})
         head = "" if old else f"# {day}\n\n"
         sep = "" if not old or old.endswith("\n\n") else ("\n" if old.endswith("\n") else "\n\n")
-        with open(path, "a", encoding="utf-8", newline="\n") as f:
-            f.write(head + sep + text + "\n")
+        await asyncio.to_thread(_report_append_sync, path, head, sep, text)
     except Exception as e:
         return _err(f"报告写入失败: {e}")
     return _ok({"success": True, "file": str(path), "roundId": round_id,
@@ -2603,10 +2692,30 @@ async def bili_persona_lore(keyword: str) -> str:
 # ========== Tool: 人设沉淀候选（自演化管道；薄工具——只做结构预检 + 追加 pending，质检/入库在宿主 JS） ==========
 
 def _persona_pending_file() -> Path:
-    """growth-pending.jsonl 的路径：<家目录>/persona/。家目录解析与插件宿主同源（BILI_FENSHEN_HOME 优先）。"""
-    home = os.environ.get("BILI_FENSHEN_HOME") or os.path.join(
-        os.environ.get("HOME") or os.environ.get("USERPROFILE") or ".", ".dsh", "bili-fenshen")
-    return Path(home) / "persona" / "growth-pending.jsonl"
+    """growth-pending.jsonl 的路径：<家目录>/persona/。家目录解析统一走 _persona_home()（2026-10-29 核验 §5-4 去重）。"""
+    return _persona_home() / "persona" / "growth-pending.jsonl"
+
+
+# growth-pending.jsonl 的并发追加锁（2026-10-29 核验 §5-8）：以前无锁，同进程并发时可能交错写。
+# 线程锁足够——所有写盘都收进 to_thread 的线程池，进程内互斥即可覆盖实际并发面。
+_pending_lock = threading.Lock()
+
+
+def _pending_read_sync(pending: Path) -> list:
+    """读 growth-pending 现有行（同步实现，只在 asyncio.to_thread 里跑）。"""
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    if not pending.exists():
+        return []
+    with open(pending, encoding="utf-8") as f:
+        return [ln for ln in f.read().split("\n") if ln.strip()]
+
+
+def _pending_append_sync(pending: Path, entry_json: str) -> None:
+    """追加一条候选（同步实现，只在 asyncio.to_thread 里跑；持锁防交错写）。"""
+    with _pending_lock:
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        with open(pending, "a", encoding="utf-8") as f:
+            f.write(entry_json + "\n")
 
 _CORPUS_FORMS = {"reaction", "question", "experience", "meme", "detail", "rant"}
 
@@ -2651,11 +2760,8 @@ async def bili_persona_note(
     """
     pending = _persona_pending_file()
     try:
-        pending.parent.mkdir(parents=True, exist_ok=True)
-        existing = []
-        if pending.exists():
-            with open(pending, encoding="utf-8") as f:
-                existing = [ln for ln in f.read().split("\n") if ln.strip()]
+        # 2026-10-29 核验 §4.2：mkdir/exists/open/read 收进线程
+        existing = await asyncio.to_thread(_pending_read_sync, pending)
     except Exception as e:
         return _err(f"候选文件读不了: {e}")
 
@@ -2712,8 +2818,8 @@ async def bili_persona_note(
         return _err(f"kind 只允许 corpus/lore，收到: {kind or '空'}")
 
     try:
-        with open(pending, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        # 2026-10-29 核验 §4.2 + §5-8：open/write 收进线程，且持锁防并发交错写
+        await asyncio.to_thread(_pending_append_sync, pending, json.dumps(entry, ensure_ascii=False))
     except Exception as e:
         return _err(f"候选写盘失败: {e}")
 
