@@ -2,17 +2,10 @@
 """按时间线导出 reply-in / reply-out / reply-scan / round 事件。"""
 import json
 
-LEDGER = r"C:\Users\Administrator\.dsh\bili-fenshen\ledger.jsonl"
-events = []
-with open(LEDGER, "r", encoding="utf-8", errors="replace") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            events.append(json.loads(line))
-        except Exception:
-            pass
+from _fenshen_paths import ledger_events, require_ledger
+
+LEDGER = require_ledger()
+events = ledger_events(LEDGER)
 
 # 只看 2026-10-29
 evs = [e for e in events if str(e.get("t", "")).startswith("2026-10-29")]

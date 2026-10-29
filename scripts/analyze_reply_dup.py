@@ -4,17 +4,10 @@ import json, sys, io
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
-LEDGER = r"C:\Users\Administrator\.dsh\bili-fenshen\ledger.jsonl"
-events = []
-with open(LEDGER, "r", encoding="utf-8", errors="replace") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            events.append(json.loads(line))
-        except Exception as e:
-            print("PARSE_FAIL:", e)
+from _fenshen_paths import ledger_events, require_ledger
+
+LEDGER = require_ledger()
+events = ledger_events(LEDGER)
 
 print(f"总事件数: {len(events)}")
 
