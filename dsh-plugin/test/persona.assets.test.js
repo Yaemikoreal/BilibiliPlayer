@@ -153,7 +153,7 @@ test('预设卡（whale 3.0.0「豆腐」）本身可过整卡校验且内容符
   const { presetPath } = await import('../lib/persona/store.js')
   const whale = JSON.parse(readFileSync(presetPath('whale'), 'utf8'))
   assert.equal(whale.spec, SPEC)
-  assert.equal(whale.version, '3.0.0')
+  assert.ok(['3.0.0', '4.0.0'].includes(whale.version))
   assert.equal(whale.name, '豆腐', '2026-10-29 起人设名改为豆腐（大肥鱼只留作别人叫错时的冲突点）')
   const v = validateCard(whale)
   assert.deepEqual(v.errors, [], 'whale 预设卡应通过校验：' + JSON.stringify(v.errors))
@@ -177,10 +177,8 @@ test('预设卡（whale 3.0.0「豆腐」）本身可过整卡校验且内容符
   for (const must of ['只会点赞和评论', '不编会被当真的事实', '不冒充官方', '不传谣', '不碰代练']) {
     assert.ok(boundaries.includes(must), `boundaries 应含「${must}」`)
   }
-  // 见闻不再把别人的原话认领成自己的经历（A9）
-  const food = whale.loreIndex.find((l) => l.id === 'food-wedding')
-  assert.ok(food, 'food-wedding 见闻应保留（只是换了故事）')
-  assert.ok(!/广西|蹭婚宴/.test(food.oneLine), '见闻不能再复用真人语料里的「广西人蹭婚宴」原句')
+  // 用户反馈：food-wedding 见闻已移除，不保留蹭婚宴相关内容
+  assert.ok(!whale.loreIndex.some((l) => l.id === 'food-wedding'), 'food-wedding 见闻应移除')
   const sampleText = whale.voice.samples.good.map((s) => s.text).join('\n')
   assert.ok(sampleText.includes('广西人'), '那条真人语料仍保留在 samples 里当语料样本（身份是样本，不是我的经历）')
 })

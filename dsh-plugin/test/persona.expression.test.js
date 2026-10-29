@@ -12,7 +12,7 @@ import {
   looksCopied, rewriteCheck, auditBankAgainstOriginals, bankStats,
 } from '../lib/persona/expression.js'
 
-const seed = JSON.parse(readFileSync(fileURLToPath(new URL('../prompts/persona/expression-bank.seed.json', import.meta.url)), 'utf8'))
+const seed = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/persona/expression-bank.legacy-seed.json', import.meta.url)), 'utf8'))
 const seedBank = normalizeBank(seed)
 
 // 2026-10-28 改动前实测的 seed 渲染输出（逐字节基线）：

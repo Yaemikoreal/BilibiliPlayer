@@ -211,7 +211,14 @@ function makeDeps(over = {}) {
       health: { cred: false, routeOk: true },
       model: { mode: 'default', provider: '', model: '', reasoningEffort: '' },
     }),
-    setDuty: (v) => ({ ok: true, autoDuty: v }),
+    /* POST /duty 已升级为「排班 patch 对象」模式（lib/api.js:357 传 normalizeScheduleFields(body)），
+     * 桩必须与生产同形：生产（index.js:2236）返回 { autoDuty: !!next.autoDuty, ...clean }，
+     * 即 autoDuty 是**布尔**、排班字段回显。旧桩 `{ autoDuty: v }` 把整个对象塞进 autoDuty 字段，
+     * 让「旧端点仍可用」的断言假红（2026-10-29 测试报告 §3.2）。 */
+    setDuty: (v) => {
+      const patch = v && typeof v === 'object' && !Array.isArray(v) ? v : { autoDuty: !!v }
+      return { autoDuty: !!patch.autoDuty, ...patch }
+    },
     runDuty: () => ({ started: true, why: 'web', roundId: 'r-1' }),
     stopDuty: () => ({ ok: true, stopped: false }),
     fetchAccount: async () => ({ loggedIn: false }),

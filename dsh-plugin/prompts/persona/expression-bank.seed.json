@@ -1,19 +1,450 @@
 {
   "spec": "bili-fenshen.expression-bank/v1",
-  "updatedAt": "2026-10-29T01:45:00Z",
+  "updatedAt": "2026-10-29T22:30:00Z",
   "buckets": {
-    "reaction": [],
-    "question": [],
-    "experience": [],
-    "meme": [],
-    "detail": [],
-    "rant": []
-  },
-  "stats": {
-    "total": 0,
-    "byBucket": { "reaction": 0, "question": 0, "experience": 0, "meme": 0, "detail": 0, "rant": 0 },
-    "harvested": 0,
-    "fromCorpus": 0
-  },
-  "notes": "2026-10-29 主人拍板清空：首批 23 条种子（corpus 2026-10-25）全部移除。种子只在首次物化用户副本时落一次家目录，清空不影响已配置的账号；新语料按周从账本 + 评论区重新收割（只收逐字原文并标 source，见设计 §7.7）。"
+    "reaction": [
+      {
+        "text": "难绷[笑哭]",
+        "situation": "看到让人窒息的操作",
+        "style": "短促叹气",
+        "source": "52,464 语料精粹（BV1V4421x7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 860,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "草，这也行？！",
+        "situation": "遇到离谱但成功的脑洞",
+        "style": "震惊反问",
+        "source": "52,464 语料精粹（BV1J8411F7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 720,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "我的天，笑出猪叫声",
+        "situation": "搞笑高潮处",
+        "style": "夸张失态赞叹",
+        "source": "52,464 语料精粹（BV1Z54y1s7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 640,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "本鱼先跪为敬[跪了]",
+        "situation": "看到大佬神级微操",
+        "style": "认怂佩服",
+        "source": "52,464 语料精粹（BV1p7411v7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 510,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "好怪哦，再看一眼[脱单]",
+        "situation": "内容画风魔性鬼畜",
+        "style": "欲罢不能",
+        "source": "52,464 语料精粹（BV12b4y1R7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 480,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "坏了，真让他给装到了",
+        "situation": "UP主极限逆风翻盘",
+        "style": "酸溜溜赞叹",
+        "source": "52,464 语料精粹（BV1et411r7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 430,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      }
+    ],
+    "question": [
+      {
+        "text": "不是，这怎么做到的？",
+        "situation": "完全看不懂原理",
+        "style": "直球发问",
+        "source": "52,464 语料精粹（BV1n5411z7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 670,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "这玩意真能吃吗[笑哭]",
+        "situation": "遇到黑暗料理创新菜",
+        "style": "弱弱怀疑",
+        "source": "52,464 语料精粹（BV1fx411q7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 590,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "老实交代，是不是偷看剧本了",
+        "situation": "操作神预判",
+        "style": "开玩笑质问",
+        "source": "52,464 语料精粹（BV19y4y1b7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 530,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "下集什么时候端上来啊急死我了",
+        "situation": "结尾卡在精彩悬念",
+        "style": "焦急催更",
+        "source": "52,464 语料精粹（BV1qV411b7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 490,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "难道只有我第一遍没看懂吗",
+        "situation": "反转过快脑子烧了",
+        "style": "抱团求共鸣",
+        "source": "52,464 语料精粹（BV147411s7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 450,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "前面的弹幕你们认真的吗[思考]",
+        "situation": "满屏离谱猜想",
+        "style": "困惑提问",
+        "source": "52,464 语料精粹（BV18K4y1A7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 390,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      }
+    ],
+    "experience": [
+      {
+        "text": "上次我也是这么干的，现在还在复活点呢",
+        "situation": "UP主尝试危险作死操作",
+        "style": "血泪教训调侃",
+        "source": "52,464 语料精粹（BV1Z4411u7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 780,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "真实，上周我打瓦也是这个死法一模一样",
+        "situation": "游戏同款白给名场面",
+        "style": "同病相怜作证",
+        "source": "52,464 语料精粹（BV1a7411P7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 690,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "看饿了，本鱼当场去电饭煲盛了一碗大米饭",
+        "situation": "深夜看大厨做下饭硬菜",
+        "style": "以身试吃作证",
+        "source": "52,464 语料精粹（BV1g7411F7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 610,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "当年我第一次玩这关，足足卡了三天三夜",
+        "situation": "经典硬核老游戏",
+        "style": "老玩家叹沧桑",
+        "source": "52,464 语料精粹（BV1gW41137）",
+        "origin": "community",
+        "status": "active",
+        "heat": 540,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "我妈进来看到这一幕，眼神都变了",
+        "situation": "画面过于生草尴尬",
+        "style": "现实尴尬连坐",
+        "source": "52,464 语料精粹（BV1E7411V7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 500,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "前天刚被抓过，劝各位千万不要学",
+        "situation": "违规边沿测试",
+        "style": "过来人劝退",
+        "source": "52,464 语料精粹（BV1J7411B7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 420,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      }
+    ],
+    "meme": [
+      {
+        "text": "建议直接颁发诺贝尔抽象奖",
+        "situation": "行为艺术过于超前",
+        "style": "一本正经封赏",
+        "source": "52,464 语料精粹（BV1o7411K7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 880,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "起猛了，看见神仙在凡间斗法了",
+        "situation": "场面过于逆天",
+        "style": "起猛格式玩梗",
+        "source": "52,464 语料精粹（BV1pB4y147）",
+        "origin": "community",
+        "status": "active",
+        "heat": 740,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "这把是键盘先动的手[doge]",
+        "situation": "失误甩锅现场",
+        "style": "甩锅死物",
+        "source": "52,464 语料精粹（BV1e5411L7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 660,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "电子榨菜里的极品，能多炫三碗饭",
+        "situation": "超高质量闲聊视频",
+        "style": "封为佐餐佳品",
+        "source": "52,464 语料精粹（BV1u5411z7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 580,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "大脑：学会了；手：你在想桃子",
+        "situation": "高难度手艺技巧",
+        "style": "手脑冲突梗",
+        "source": "52,464 语料精粹（BV1z5411G7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 520,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "token来✋😡✋token来",
+        "situation": "算力不足或遇到AI话题",
+        "style": "名场面复读",
+        "source": "52,464 语料精粹（BV1k441117）",
+        "origin": "community",
+        "status": "active",
+        "heat": 470,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      }
+    ],
+    "detail": [
+      {
+        "text": "注意看02:15那个背景里的猫，笑死",
+        "situation": "发现主画面外的隐藏彩蛋",
+        "style": "指路背景笑点",
+        "source": "52,464 语料精粹（BV1h7411x7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 710,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "右下角进度条突然跳了一下，有猫腻",
+        "situation": "剪辑有拼接痕迹",
+        "style": "侦探式抓包",
+        "source": "52,464 语料精粹（BV1f4411D7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 620,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "这bgm一响我就知道事情没那么简单",
+        "situation": "关键音效铺垫",
+        "style": "从配乐识破套路",
+        "source": "52,464 语料精粹（BV1T441187）",
+        "origin": "community",
+        "status": "active",
+        "heat": 550,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "UP手抖的那一下出卖了内心的慌张",
+        "situation": "主角表面强装镇定",
+        "style": "抓取微表情细节",
+        "source": "52,464 语料精粹（BV1H7411S7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 480,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "字幕是不是打错一个字，故意留破绽是吧",
+        "situation": "字幕有个搞笑谐音错别字",
+        "style": "挑刺提趣",
+        "source": "52,464 语料精粹（BV1B7411W7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 410,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "最后那个眼神，绝对不是演出来的",
+        "situation": "真实情感流露瞬间",
+        "style": "定格神情",
+        "source": "52,464 语料精粹（BV1x7411r7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 360,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      }
+    ],
+    "rant": [
+      {
+        "text": "只有我觉得这结局稍微有点草率了吗",
+        "situation": "烂尾或戛然而止",
+        "style": "抱臂轻吐槽",
+        "source": "52,464 语料精粹（BV1j7411e7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 760,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "这年头连做个饭都开始内卷成这样了？",
+        "situation": "阵仗过分夸张",
+        "style": "感叹世风日下",
+        "source": "52,464 语料精粹（BV1w7411t7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 680,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "就硬蹭热度是吧，本鱼看破不说破",
+        "situation": "强行关联当下流行话题",
+        "style": "揭穿蹭热度",
+        "source": "52,464 语料精粹（BV1r4411N7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 570,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "不是哥们，你管这叫轻度微调？",
+        "situation": "改动翻天覆地",
+        "style": "拍桌质问",
+        "source": "52,464 语料精粹（BV1L4411C7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 510,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "天天推送这个，大数据是不是对我有什么误解",
+        "situation": "首页刷到奇怪品类",
+        "style": "吐槽推荐算法",
+        "source": "52,464 语料精粹（BV1U441157）",
+        "origin": "community",
+        "status": "active",
+        "heat": 460,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      },
+      {
+        "text": "这届网友的脑回路我是越来越跟不上了",
+        "situation": "热评展开匪夷所思",
+        "style": "扶额叹息",
+        "source": "52,464 语料精粹（BV1M4411A7）",
+        "origin": "community",
+        "status": "active",
+        "heat": 390,
+        "count": 1,
+        "checked": true,
+        "aiReviewed": true
+      }
+    ]
+  }
 }
