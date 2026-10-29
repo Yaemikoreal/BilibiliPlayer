@@ -23,6 +23,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from pydantic import BaseModel, ConfigDict, Field
 from mcp.server.fastmcp import FastMCP
 
 from bilibili_api import video, search, comment, Credential, dynamic
@@ -2355,6 +2356,30 @@ _LEDGER_REQUIRED = {
 _LEDGER_MAX_EVENTS = 40
 
 
+class LedgerEventInput(BaseModel):
+    """账本事件的**展示契约**（2026-10-29 核验 §4.4）：模型调用前就能看到 JSON Schema，减少试错。
+
+    故意**宽松**（字段全可选、type 只约束为字符串、extra='allow'）：
+    运行时校验仍走 `_validate_ledger_event` **逐条拒**——一条坏事件只进 rejected，
+    绝不把整批调用打成参数错误（那是既有语义，快照测试一起锁住）。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(default="", description="事件类型：view/like/comment/dynamic/skip/reply-out/reply-scan/note")
+    bvid: str | None = Field(default=None, description="BV 号（view/like/comment/skip/reply-out/reply-scan 必填）")
+    text: str | None = Field(default=None, description="正文/备注（comment/reply-out/note 必填）")
+    parent: int | None = Field(default=None, description="对方评论的 rpid（reply-out 必填；判重键）")
+    title: str | None = Field(default=None, description="视频标题（view 选填，报告回填用）")
+    author: str | None = Field(default=None, description="UP 主名（view 选填）")
+    reason: str | None = Field(default=None, description="理由（skip 必填；reply-scan 选填）")
+    decision: str | None = Field(default=None, description="reply-scan 专用：posted / skipped")
+    targetRpid: int | None = Field(default=None, description="reply-scan(decision=posted) 必填")
+    rpid: int | None = Field(default=None, description="我自己这条的楼层 id（comment/reply-out 选填）")
+    venue: str | None = Field(default=None, description="剧场档位（普通区/生态区/AI话题区；缺省由工具的 venue 参数补）")
+    kind: str | None = Field(default=None, description="reply-out 专用：proactive=接话")
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -2402,12 +2427,13 @@ def _validate_ledger_event(ev, idx: int, round_id: str):
 
 
 @_gated_tool()
-async def bili_ledger_append(events: list[dict], venue: str = "") -> str:
+async def bili_ledger_append(events: list[LedgerEventInput], venue: str = "") -> str:
     """
     把本轮动作一次性追加进账本（宿主补 t/round、校验字段、去重、UTF-8 落盘）
 
     **首选这个，不要用 pwsh 手写 ledger.jsonl**。每条事件的 `t` 和 `round` 缺省由宿主补，
-    你只需要写业务字段。被拒的条目看 rejected 里的 reason 改完再发（不要重试同一条）。
+    你只需要写业务字段（字段契约见 LedgerEventInput schema；坏条目逐条进 rejected，不影响其余）。
+    被拒的条目看 rejected 里的 reason 改完再发（不要重试同一条）。
 
     Args:
         events: 事件数组，每个对象带 type 与必填字段。例：
@@ -2424,6 +2450,9 @@ async def bili_ledger_append(events: list[dict], venue: str = "") -> str:
         return _err("events 必须是非空数组（一次可传多条，别再一行塞两个对象）")
     if len(events) > _LEDGER_MAX_EVENTS:
         return _err(f"一次最多 {_LEDGER_MAX_EVENTS} 条（收到 {len(events)}）")
+    # §4.4：pydantic 模型 → dict（exclude_none 保持"缺字段就不写键"的原落盘形状）；
+    # 直连 Python 调用（测试）传的是裸 dict，原样放行——校验统一交给 _validate_ledger_event 逐条做
+    events = [e.model_dump(exclude_none=True) if isinstance(e, BaseModel) else dict(e) for e in events]
     round_id = _current_round_id()
     if not round_id:
         return _err("读不到本轮 round id（state.json 缺 lastRunStartedAt）；退回直接写文件")

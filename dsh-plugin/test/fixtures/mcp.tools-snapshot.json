@@ -1,0 +1,1019 @@
+{
+  "bili_check_credential": {
+    "description": "\n    检查当前B站登录凭证是否有效\n\n    Returns:\n        登录状态信息\n    ",
+    "inputSchema": {
+      "properties": {},
+      "title": "bili_check_credentialArguments",
+      "type": "object"
+    },
+    "name": "bili_check_credential"
+  },
+  "bili_comments": {
+    "description": "\n    获取B站视频的热门评论\n\n    Args:\n        bvid: 视频BV号，如\"BV1uNk1YxEJQ\"\n        num: 获取评论数量，默认30\n    \n    Returns:\n        JSON格式的评论列表，包含用户名、评论内容、点赞数、回复数\n    ",
+    "inputSchema": {
+      "properties": {
+        "bvid": {
+          "title": "Bvid",
+          "type": "string"
+        },
+        "num": {
+          "default": 30,
+          "title": "Num",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bvid"
+      ],
+      "title": "bili_commentsArguments",
+      "type": "object"
+    },
+    "name": "bili_comments"
+  },
+  "bili_crawl": {
+    "description": "\n    批量采集：搜索B站视频并抓取每个视频的评论和字幕\n\n    Args:\n        keyword: 搜索关键词\n        max_videos: 最多采集视频数，默认5\n        comments_per_video: 每个视频采集评论数，默认20\n        get_subtitles: 是否获取字幕，默认True\n    \n    Returns:\n        包含视频信息、评论和字幕的完整采集数据\n    ",
+    "inputSchema": {
+      "properties": {
+        "comments_per_video": {
+          "default": 20,
+          "title": "Comments Per Video",
+          "type": "integer"
+        },
+        "get_subtitles": {
+          "default": true,
+          "title": "Get Subtitles",
+          "type": "boolean"
+        },
+        "keyword": {
+          "title": "Keyword",
+          "type": "string"
+        },
+        "max_videos": {
+          "default": 5,
+          "title": "Max Videos",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "keyword"
+      ],
+      "title": "bili_crawlArguments",
+      "type": "object"
+    },
+    "name": "bili_crawl"
+  },
+  "bili_danmaku": {
+    "description": "\n    获取B站视频的弹幕\n\n    Args:\n        bvid: 视频BV号\n        num: 获取弹幕数量，默认100\n    \n    Returns:\n        弹幕列表，包含弹幕文本和出现时间\n    ",
+    "inputSchema": {
+      "properties": {
+        "bvid": {
+          "title": "Bvid",
+          "type": "string"
+        },
+        "num": {
+          "default": 100,
+          "title": "Num",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bvid"
+      ],
+      "title": "bili_danmakuArguments",
+      "type": "object"
+    },
+    "name": "bili_danmaku"
+  },
+  "bili_favorite_content": {
+    "description": "\n    获取收藏夹内的视频列表\n\n    Args:\n        media_id: 收藏夹ID（从 bili_favorite_lists 获取）\n        page: 页码，默认1\n        keyword: 搜索关键词（在收藏夹内搜索）\n\n    Returns:\n        收藏夹内的视频列表\n    ",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "default": "",
+          "title": "Keyword",
+          "type": "string"
+        },
+        "media_id": {
+          "title": "Media Id",
+          "type": "integer"
+        },
+        "page": {
+          "default": 1,
+          "title": "Page",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "media_id"
+      ],
+      "title": "bili_favorite_contentArguments",
+      "type": "object"
+    },
+    "name": "bili_favorite_content"
+  },
+  "bili_favorite_lists": {
+    "description": "\n    获取用户的收藏夹列表\n\n    Args:\n        uid: 用户UID（0表示获取自己的收藏夹）\n\n    Returns:\n        收藏夹列表，包含ID、名称、视频数量\n    ",
+    "inputSchema": {
+      "properties": {
+        "uid": {
+          "default": 0,
+          "title": "Uid",
+          "type": "integer"
+        }
+      },
+      "title": "bili_favorite_listsArguments",
+      "type": "object"
+    },
+    "name": "bili_favorite_lists"
+  },
+  "bili_feed": {
+    "description": "\n    一次拿到「最常访问」前 N 个关注 UP 主的最新投稿，并已按账本标好\"看过/没看过\"\n\n    这是\"拉内容源\"的第一档首选：一次调用顶掉「bili_followings + N 次 bili_user_videos」。\n    返回里 seen=True 的视频**直接丢**（账本里已经看过/赞过/评过/跳过过），别再花调用。\n\n    Args:\n        limit_up: 取前几个常看 UP 主，默认 8（上限 20）\n        per_up: 每个 UP 主拉最新几条，默认 3（上限 5）\n        only_new: True=只返回账本里没看过的（默认）；False=全返回并带 seen 标记\n\n    Returns:\n        videos（按发布时间倒序的候选，带 up/mid/seen）、ups（每个 UP 的新旧计数）、\n        skippedSeen、failures（单个 UP 失败不影响其他人）\n    ",
+    "inputSchema": {
+      "properties": {
+        "limit_up": {
+          "default": 8,
+          "title": "Limit Up",
+          "type": "integer"
+        },
+        "only_new": {
+          "default": true,
+          "title": "Only New",
+          "type": "boolean"
+        },
+        "per_up": {
+          "default": 3,
+          "title": "Per Up",
+          "type": "integer"
+        }
+      },
+      "title": "bili_feedArguments",
+      "type": "object"
+    },
+    "name": "bili_feed"
+  },
+  "bili_followings": {
+    "description": "\n    获取当前账号关注的 UP 主列表（订阅列表，分页；支持「最常访问」排序）\n\n    Args:\n        pn: 页码，默认1\n        ps: 每页数量，默认50（最大50）\n        sort: 排序：attention=最常访问（常看的在前，默认）；follow=最近关注在前；follow_asc=最早关注在前\n        keyword: 按昵称过滤（本地过滤当前页，不区分大小写）\n\n    Returns:\n        关注的 UP 主列表：mid、昵称、签名、头像；total = 当前账号总关注数；sort = 实际使用的排序\n    ",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "default": "",
+          "title": "Keyword",
+          "type": "string"
+        },
+        "pn": {
+          "default": 1,
+          "title": "Pn",
+          "type": "integer"
+        },
+        "ps": {
+          "default": 50,
+          "title": "Ps",
+          "type": "integer"
+        },
+        "sort": {
+          "default": "attention",
+          "title": "Sort",
+          "type": "string"
+        }
+      },
+      "title": "bili_followingsArguments",
+      "type": "object"
+    },
+    "name": "bili_followings"
+  },
+  "bili_hot_buzzwords": {
+    "description": "\n    获取B站热搜词/热门关键词\n\n    Args:\n        page_num: 页码，默认1\n        page_size: 每页数量，默认20\n\n    Returns:\n        热搜词列表\n    ",
+    "inputSchema": {
+      "properties": {
+        "page_num": {
+          "default": 1,
+          "title": "Page Num",
+          "type": "integer"
+        },
+        "page_size": {
+          "default": 20,
+          "title": "Page Size",
+          "type": "integer"
+        }
+      },
+      "title": "bili_hot_buzzwordsArguments",
+      "type": "object"
+    },
+    "name": "bili_hot_buzzwords"
+  },
+  "bili_hot_videos": {
+    "description": "\n    获取B站当前热门视频列表\n\n    Args:\n        pn: 页码，默认1\n        ps: 每页数量，默认20，最大50\n\n    Returns:\n        热门视频列表，包含标题、播放量、UP主等\n    ",
+    "inputSchema": {
+      "properties": {
+        "pn": {
+          "default": 1,
+          "title": "Pn",
+          "type": "integer"
+        },
+        "ps": {
+          "default": 20,
+          "title": "Ps",
+          "type": "integer"
+        }
+      },
+      "title": "bili_hot_videosArguments",
+      "type": "object"
+    },
+    "name": "bili_hot_videos"
+  },
+  "bili_ledger_append": {
+    "description": "\n    把本轮动作一次性追加进账本（宿主补 t/round、校验字段、去重、UTF-8 落盘）\n\n    **首选这个，不要用 pwsh 手写 ledger.jsonl**。每条事件的 `t` 和 `round` 缺省由宿主补，\n    你只需要写业务字段（字段契约见 LedgerEventInput schema；坏条目逐条进 rejected，不影响其余）。\n    被拒的条目看 rejected 里的 reason 改完再发（不要重试同一条）。\n\n    Args:\n        events: 事件数组，每个对象带 type 与必填字段。例：\n            [{\"type\":\"view\",\"bvid\":\"BV1xx\",\"title\":\"…\",\"author\":\"…\",\"views\":123,\"duration\":892,\"source\":\"follow\",\"grade\":\"worth\"},\n             {\"type\":\"comment\",\"bvid\":\"BV1xx\",\"text\":\"正文\",\"rpid\":318480352401},\n             {\"type\":\"reply-scan\",\"bvid\":\"BV1xx\",\"candidates\":[],\"decision\":\"skipped\",\"reason\":\"热评全在站队\"}]\n        venue: 本轮评论所在剧场档位（普通区/生态区/AI话题区，§2.4 决策 A）。给了就补进没带 venue\n            字段的事件（评论/接话按现场选档；view/skip 等不区分档位，跟着带也不影响配额）。\n\n    Returns:\n        written（写入条数）、rejected（[{index,reason}]）、round（本轮 round id）\n    ",
+    "inputSchema": {
+      "$defs": {
+        "LedgerEventInput": {
+          "additionalProperties": true,
+          "description": "账本事件的**展示契约**（2026-10-29 核验 §4.4）：模型调用前就能看到 JSON Schema，减少试错。\n\n故意**宽松**（字段全可选、type 只约束为字符串、extra='allow'）：\n运行时校验仍走 `_validate_ledger_event` **逐条拒**——一条坏事件只进 rejected，\n绝不把整批调用打成参数错误（那是既有语义，快照测试一起锁住）。",
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "UP 主名（view 选填）",
+              "title": "Author"
+            },
+            "bvid": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "BV 号（view/like/comment/skip/reply-out/reply-scan 必填）",
+              "title": "Bvid"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "reply-scan 专用：posted / skipped",
+              "title": "Decision"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "reply-out 专用：proactive=接话",
+              "title": "Kind"
+            },
+            "parent": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "对方评论的 rpid（reply-out 必填；判重键）",
+              "title": "Parent"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "理由（skip 必填；reply-scan 选填）",
+              "title": "Reason"
+            },
+            "rpid": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "我自己这条的楼层 id（comment/reply-out 选填）",
+              "title": "Rpid"
+            },
+            "targetRpid": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "reply-scan(decision=posted) 必填",
+              "title": "Targetrpid"
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "正文/备注（comment/reply-out/note 必填）",
+              "title": "Text"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "视频标题（view 选填，报告回填用）",
+              "title": "Title"
+            },
+            "type": {
+              "default": "",
+              "description": "事件类型：view/like/comment/dynamic/skip/reply-out/reply-scan/note",
+              "title": "Type",
+              "type": "string"
+            },
+            "venue": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "剧场档位（普通区/生态区/AI话题区；缺省由工具的 venue 参数补）",
+              "title": "Venue"
+            }
+          },
+          "title": "LedgerEventInput",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/LedgerEventInput"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "venue": {
+          "default": "",
+          "title": "Venue",
+          "type": "string"
+        }
+      },
+      "required": [
+        "events"
+      ],
+      "title": "bili_ledger_appendArguments",
+      "type": "object"
+    },
+    "name": "bili_ledger_append"
+  },
+  "bili_like": {
+    "description": "\n    给B站视频点赞（或取消点赞）\n\n    Args:\n        bvid: 视频BV号，如\"BV1uNk1YxEJQ\"\n        like: True=点赞，False=取消点赞\n\n    Returns:\n        点赞结果\n    ",
+    "inputSchema": {
+      "properties": {
+        "bvid": {
+          "title": "Bvid",
+          "type": "string"
+        },
+        "like": {
+          "default": true,
+          "title": "Like",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "bvid"
+      ],
+      "title": "bili_likeArguments",
+      "type": "object"
+    },
+    "name": "bili_like"
+  },
+  "bili_login": {
+    "description": "\n    生成B站登录二维码，返回二维码图片（base64）供用户扫码。\n    用户扫码后，调用 bili_login_check 检查登录状态。\n\n    Args:\n        force: 为 True 时忽略本地已有凭证，强制重新扫码登录（凭证过期或换号时使用）\n\n    Returns:\n        包含二维码base64图片数据的JSON，前端可直接渲染为图片展示给用户\n    ",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "default": false,
+          "title": "Force",
+          "type": "boolean"
+        }
+      },
+      "title": "bili_loginArguments",
+      "type": "object"
+    },
+    "name": "bili_login"
+  },
+  "bili_login_check": {
+    "description": "\n    检查B站扫码登录状态。在用户扫码后调用此工具。\n    如果返回 \"scanning\" 或 \"confirming\"，请等待几秒后再次调用。\n    如果返回 \"done\"，登录成功，可以使用其他工具了。\n    如果返回 \"timeout\"，需要重新调用 bili_login 生成新二维码。\n\n    Returns:\n        当前登录状态\n    ",
+    "inputSchema": {
+      "properties": {},
+      "title": "bili_login_checkArguments",
+      "type": "object"
+    },
+    "name": "bili_login_check"
+  },
+  "bili_persona_lore": {
+    "description": "\n    按现场关键词取最多 2 条「见闻正文」（生成期世界书：看见视频/热评之后再决定用哪条）。\n\n    只在**准备写评论/回复/动态**、且标题或热评让你想起「我好像有类似经历」时调用一次；\n    纯本地只读、不联网。\n\n    Args:\n        keyword: 现场关键词（把视频标题 + 字幕要点 + 热评关键词拼起来最准，如\"无畏契约 上分 残局\"）\n\n    Returns:\n        JSON：{ok, matched:[{id, oneLine, usedToday, body, chars, truncated}], total, note}\n        - 命中：matched 最多 2 条、总正文 ≤600 字；usedToday=true 表示今天已经用过（可返回但该换一条）；\n        - 没命中：matched 为空（这很正常，别硬凑，也别凭印象编细节）；\n        - 见闻库不可用：ok=false、matched 为空 → 本轮照常进行，别重试。\n    ",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "title": "Keyword",
+          "type": "string"
+        }
+      },
+      "required": [
+        "keyword"
+      ],
+      "title": "bili_persona_loreArguments",
+      "type": "object"
+    },
+    "name": "bili_persona_lore"
+  },
+  "bili_persona_note": {
+    "description": "\n    把值得沉淀的素材提交为「人设自演化候选」。提交后宿主会在下一轮值班启动前质检入库。\n\n    两种用法：\n    - kind=\"corpus\"：沉淀一句语料（自己说过且想再用的话用 origin=\"self\"；\n      社区都在用的公共梗用 origin=\"community\" 并写明 source，**且必须带 originalText（原帖热评原文）**；\n      **别人评论的原句绝对不许提交**）\n    - kind=\"lore\"：沉淀一条见闻（这个号的生活碎片，如\"照着做菜视频煮翻车了\"；\n      只能编角色的生活细节，不许出现可被当真的现实事实）\n\n    Args:\n        kind: 'corpus'（语料）或 'lore'（见闻）\n        form: corpus 必填：reaction/question/experience/meme/detail/rant 六桶之一\n        text: corpus 必填：语料原文（≤100 字）\n        origin: corpus 用：'self'（自己发过的，宿主会跟账本对账）或 'community'（公共梗，≤30 字）\n        source: 来源说明（community 必填；self 可写互动情况，如\"被赞 5 次\"）\n        originalText: **corpus/community 必填**：原帖热评原文（宿主用它做\"与原帖\"改写检查；缺了会被拒）\n        id: lore 可选：见闻 id（字母数字-连字符；缺了宿主生成）\n        keys: lore 必填：触发词列表（命中这些词时才读正文）\n        oneLine: lore 必填：一行摘要（≤40 字，会常驻 prompt）\n        body: lore 可选：正文（≤600 字，不注入，命中后才读）\n\n    Returns:\n        提交回执 JSON\n    ",
+    "inputSchema": {
+      "properties": {
+        "body": {
+          "default": "",
+          "title": "Body",
+          "type": "string"
+        },
+        "form": {
+          "default": "",
+          "title": "Form",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Keys"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "oneLine": {
+          "default": "",
+          "title": "Oneline",
+          "type": "string"
+        },
+        "origin": {
+          "default": "self",
+          "title": "Origin",
+          "type": "string"
+        },
+        "originalText": {
+          "default": "",
+          "title": "Originaltext",
+          "type": "string"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "bili_persona_noteArguments",
+      "type": "object"
+    },
+    "name": "bili_persona_note"
+  },
+  "bili_rank": {
+    "description": "\n    获取B站各分区排行榜\n\n    Args:\n        category: 分区名，可选值：\n            all=全站 original=原创 rookie=新人\n            douga=动画 music=音乐 dance=舞蹈 game=游戏\n            knowledge=知识 technology=科技 sports=运动 car=汽车\n            life=生活 food=美食 animal=动物 fashion=时尚\n            ent=娱乐 cinephile=影视\n            bangumi=番剧 guochuang=国创 guochuang_anime=国产动画\n            documentary=纪录片 kichiku=鬼畜 movie=电影 tv=电视剧 variety=综艺\n        day: 时间维度，3=三日 7=七日\n\n    Returns:\n        排行榜视频列表\n    ",
+    "inputSchema": {
+      "properties": {
+        "category": {
+          "default": "all",
+          "title": "Category",
+          "type": "string"
+        },
+        "day": {
+          "default": 3,
+          "title": "Day",
+          "type": "integer"
+        }
+      },
+      "title": "bili_rankArguments",
+      "type": "object"
+    },
+    "name": "bili_rank"
+  },
+  "bili_received_at_and_likes": {
+    "description": "\n    获取最近收到的@提及和点赞通知\n\n    Returns:\n        包含 at 和 likes 两部分的通知数据\n    ",
+    "inputSchema": {
+      "properties": {},
+      "title": "bili_received_at_and_likesArguments",
+      "type": "object"
+    },
+    "name": "bili_received_at_and_likes"
+  },
+  "bili_received_replies": {
+    "description": "\n    获取最近收到的评论回复通知\n\n    每条通知带 already_replied 标注：true = 对方那条评论我已经回过（账本+本进程内存判定）。\n    ⚠️ 同一条通知每轮都会出现（B站不会因为你回过就移除它）——already_replied=true 的\n    **不是新互动，直接跳过**；只有 already_replied=false 的才需要跟进。\n\n    Returns:\n        回复列表（含 already_replied / bvid / target_rpid 标注）\n    ",
+    "inputSchema": {
+      "properties": {},
+      "title": "bili_received_repliesArguments",
+      "type": "object"
+    },
+    "name": "bili_received_replies"
+  },
+  "bili_reply": {
+    "description": "\n    在B站视频下发表评论或回复某条评论\n\n    Args:\n        bvid: 视频BV号\n        text: 评论/回复的文本内容\n        rpid: 要回复的目标评论ID（0表示发表新评论）\n        root: 楼层根评论ID（回复一级评论时不用填，回复楼中楼时填根评论ID）\n        venue: 剧场档位（普通区/生态区/AI话题区，默认普通区）。按现场选：\n               涉及大肥鱼/DSH/养鱼话题或 UP 是 AI 号 ⇒ 生态区；模型/教程/AI新闻/工具实测 ⇒ AI话题区；其余不传。\n\n    主动接话（回复别人的一级评论、进他的楼中楼）：**只传 rpid=对方一级评论的 rpid，root 留空**\n    （内部会把 root 置成 rpid）；返回里的 rpid 是你自己这条回复的楼层 id。\n    例：bili_reply(bvid=\"BV1xx\", text=\"……\", rpid=321560862800)\n\n    Returns:\n        发表结果\n    ",
+    "inputSchema": {
+      "properties": {
+        "bvid": {
+          "title": "Bvid",
+          "type": "string"
+        },
+        "root": {
+          "default": 0,
+          "title": "Root",
+          "type": "integer"
+        },
+        "rpid": {
+          "default": 0,
+          "title": "Rpid",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "venue": {
+          "default": "",
+          "title": "Venue",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bvid",
+        "text"
+      ],
+      "title": "bili_replyArguments",
+      "type": "object"
+    },
+    "name": "bili_reply"
+  },
+  "bili_report_append": {
+    "description": "\n    把本轮报告整段追加到 out/<今天>.md（宿主校验标题里的 round id，重复提交会被拒）\n\n    **首选这个，不要用 pwsh 手拼 Markdown**。标题必须是 `## <时段>轮（round id <ISO>）`，\n    否则宿主回填/控制台对不上账。同一个 round id 已经写过一次 ⇒ 拒绝（防止重复追加）。\n\n    Args:\n        markdown: 本轮报告全文（从 `## …轮（round id …）` 开始，到本轮总结行为止）\n\n    Returns:\n        file、bytes、roundId\n    ",
+    "inputSchema": {
+      "properties": {
+        "markdown": {
+          "title": "Markdown",
+          "type": "string"
+        }
+      },
+      "required": [
+        "markdown"
+      ],
+      "title": "bili_report_appendArguments",
+      "type": "object"
+    },
+    "name": "bili_report_append"
+  },
+  "bili_search": {
+    "description": "\n    搜索B站视频\n\n    Args:\n        keyword: 搜索关键词，如\"AI Agent\"、\"大模型教程\"\n        num: 返回视频数量，默认10，最大50\n        order: 排序方式 totalrank=综合 click=播放量 pubdate=最新 dm=弹幕\n    \n    Returns:\n        JSON格式的视频列表，包含标题、BV号、播放量、评论数、UP主等\n    ",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "title": "Keyword",
+          "type": "string"
+        },
+        "num": {
+          "default": 10,
+          "title": "Num",
+          "type": "integer"
+        },
+        "order": {
+          "default": "totalrank",
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "keyword"
+      ],
+      "title": "bili_searchArguments",
+      "type": "object"
+    },
+    "name": "bili_search"
+  },
+  "bili_send_dynamic": {
+    "description": "\n    发布B站图文动态\n\n    Args:\n        text: 动态文本内容，支持@和表情（如 [doge]）\n        images: 图片列表，每项可以是本地文件路径或图片URL，最多9张。为空则发布纯文字动态\n        topic_id: 话题ID（可选，0表示不关联话题）\n        schedule_time: 定时发布的Unix时间戳（可选，0表示立即发布）\n\n    Returns:\n        发布结果，包含动态ID\n    ",
+    "inputSchema": {
+      "properties": {
+        "images": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Images"
+        },
+        "schedule_time": {
+          "default": 0,
+          "title": "Schedule Time",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "topic_id": {
+          "default": 0,
+          "title": "Topic Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "bili_send_dynamicArguments",
+      "type": "object"
+    },
+    "name": "bili_send_dynamic"
+  },
+  "bili_send_message": {
+    "description": "\n    给B站用户发送私信\n\n    Args:\n        receiver_uid: 接收者的UID\n        text: 私信文本内容\n\n    Returns:\n        发送结果\n    ",
+    "inputSchema": {
+      "properties": {
+        "receiver_uid": {
+          "title": "Receiver Uid",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "receiver_uid",
+        "text"
+      ],
+      "title": "bili_send_messageArguments",
+      "type": "object"
+    },
+    "name": "bili_send_message"
+  },
+  "bili_send_opus": {
+    "description": "\n    发布B站图文（以动态形式发布长图文内容）\n\n    注意：当前通过动态接口发布，标题以【】包裹置于正文开头，\n    并非独立的专栏文章；如需真正的专栏请使用B站创作中心。\n\n    Args:\n        title: 图文标题（置于正文首行）\n        content: 正文内容（纯文本，段落用换行分隔）\n        images: 插入的图片路径或URL列表（可选，最多9张，图片失败不阻断发布）\n\n    Returns:\n        发布结果\n    ",
+    "inputSchema": {
+      "properties": {
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "images": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Images"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "content"
+      ],
+      "title": "bili_send_opusArguments",
+      "type": "object"
+    },
+    "name": "bili_send_opus"
+  },
+  "bili_subtitle": {
+    "description": "\n    获取B站视频的AI字幕（语音转文字）\n\n    Args:\n        bvid: 视频BV号，如\"BV1uNk1YxEJQ\"\n\n    Returns:\n        视频的完整字幕文本\n    ",
+    "inputSchema": {
+      "properties": {
+        "bvid": {
+          "title": "Bvid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bvid"
+      ],
+      "title": "bili_subtitleArguments",
+      "type": "object"
+    },
+    "name": "bili_subtitle"
+  },
+  "bili_unread_messages": {
+    "description": "\n    获取B站未读消息数（私信、@、回复、点赞等）\n\n    Returns:\n        各类未读消息数量\n    ",
+    "inputSchema": {
+      "properties": {},
+      "title": "bili_unread_messagesArguments",
+      "type": "object"
+    },
+    "name": "bili_unread_messages"
+  },
+  "bili_upload_video": {
+    "description": "\n    上传视频到B站\n\n    Args:\n        video_path: 视频文件的本地路径\n        title: 视频标题（最多80字）\n        desc: 视频简介描述\n        tid: 分区ID，默认124（趣味科普人文-社科·法律·心理）。\n             常用分区：17=单机游戏 21=日常 95=数码 122=野生技术协会\n             124=社科 160=生活记录 171=电子竞技 183=影视杂谈\n             188=科技资讯 201=科学 207=财经商业 208=科技 209=手工\n             230=其他(生活) 231=美食 234=健身 32=完结动画\n        tags: 标签，逗号分隔，如\"AI,教程,编程\"（至少1个标签）\n        cover_path: 封面图片路径（可选，不填则B站自动截取）\n        source: 转载来源URL（非原创时必填）\n        dynamic_text: 粉丝动态文本（可选，投稿时同步发布的动态内容）\n        no_reprint: 是否启用未经作者授权禁止转载，默认True\n\n    Returns:\n        上传结果，包含BV号\n    ",
+    "inputSchema": {
+      "properties": {
+        "cover_path": {
+          "default": "",
+          "title": "Cover Path",
+          "type": "string"
+        },
+        "desc": {
+          "default": "",
+          "title": "Desc",
+          "type": "string"
+        },
+        "dynamic_text": {
+          "default": "",
+          "title": "Dynamic Text",
+          "type": "string"
+        },
+        "no_reprint": {
+          "default": true,
+          "title": "No Reprint",
+          "type": "boolean"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        },
+        "tags": {
+          "default": "AI",
+          "title": "Tags",
+          "type": "string"
+        },
+        "tid": {
+          "default": 124,
+          "title": "Tid",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "video_path": {
+          "title": "Video Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "video_path",
+        "title"
+      ],
+      "title": "bili_upload_videoArguments",
+      "type": "object"
+    },
+    "name": "bili_upload_video"
+  },
+  "bili_upload_video_multi": {
+    "description": "\n    上传多P视频到B站（多个分P合并为一个投稿）\n\n    Args:\n        video_paths: 视频文件路径列表，如[\"/path/p1.mp4\", \"/path/p2.mp4\"]\n        page_titles: 各分P标题列表，与video_paths一一对应\n        title: 视频总标题\n        desc: 视频简介\n        tid: 分区ID，默认124\n        tags: 标签，逗号分隔\n        cover_path: 封面图片路径（可选）\n        source: 转载来源URL（非原创时必填）\n\n    Returns:\n        上传结果\n    ",
+    "inputSchema": {
+      "properties": {
+        "cover_path": {
+          "default": "",
+          "title": "Cover Path",
+          "type": "string"
+        },
+        "desc": {
+          "default": "",
+          "title": "Desc",
+          "type": "string"
+        },
+        "page_titles": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Page Titles",
+          "type": "array"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        },
+        "tags": {
+          "default": "AI",
+          "title": "Tags",
+          "type": "string"
+        },
+        "tid": {
+          "default": 124,
+          "title": "Tid",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "video_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Video Paths",
+          "type": "array"
+        }
+      },
+      "required": [
+        "video_paths",
+        "page_titles",
+        "title"
+      ],
+      "title": "bili_upload_video_multiArguments",
+      "type": "object"
+    },
+    "name": "bili_upload_video_multi"
+  },
+  "bili_user_info": {
+    "description": "\n    获取B站用户的详细信息\n\n    Args:\n        uid: 用户UID\n\n    Returns:\n        用户昵称、粉丝数、关注数、签名、等级、视频数等\n    ",
+    "inputSchema": {
+      "properties": {
+        "uid": {
+          "title": "Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "uid"
+      ],
+      "title": "bili_user_infoArguments",
+      "type": "object"
+    },
+    "name": "bili_user_info"
+  },
+  "bili_user_videos": {
+    "description": "\n    获取B站用户的投稿视频列表\n\n    Args:\n        uid: 用户UID\n        pn: 页码，默认1\n        ps: 每页数量，默认30\n        order: 排序方式 pubdate=最新 click=播放量 stow=收藏\n        keyword: 搜索关键词（在该用户视频中搜索）\n\n    Returns:\n        视频列表\n    ",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "default": "",
+          "title": "Keyword",
+          "type": "string"
+        },
+        "order": {
+          "default": "pubdate",
+          "title": "Order",
+          "type": "string"
+        },
+        "pn": {
+          "default": 1,
+          "title": "Pn",
+          "type": "integer"
+        },
+        "ps": {
+          "default": 30,
+          "title": "Ps",
+          "type": "integer"
+        },
+        "uid": {
+          "title": "Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "uid"
+      ],
+      "title": "bili_user_videosArguments",
+      "type": "object"
+    },
+    "name": "bili_user_videos"
+  },
+  "bili_verify_recent_comments": {
+    "description": "\n    发后复核：核对最近发出的评论/接话是否真的公开可见（评论区压审/审核延迟对策）。\n\n    数据层自记账（方案 B）：`bili_reply` 成功时自动进 verify-pending 队列，本工具**轮末调用一次**，\n    逐条用登录态接口核对（匿名通道已实测不可用，勿信）。返回四档结论：\n      - visible        = 在评论区翻到了（正常）\n      - pending_grace  = 还没翻到但发布未满 grace_min 分钟（审核宽限窗，不是压审，别下结论）\n      - suspect_hidden = 发布超过 grace_min 分钟仍翻不到（疑似不可见——如实汇报，别自动重发）\n      - stale          = 超过 window_min 才核对（错过了窗口，本轮没核对；队列里已剔除）\n    通道失效（风控/接口异常）⇒ 记入 unverified 并**不判定**，绝不默认\"正常\"。\n\n    Args:\n        window_min: 只核对发布后 window_min 分钟内的记录（默认 30；更老的记 stale 并清出队列）\n        grace_min:  审核宽限窗（默认 10 分钟）：窗口内翻不到只算 pending，不算压审\n\n    Returns:\n        {checked, visible[], pending_grace[], suspect_hidden[], stale[], unverified[], note}\n    ",
+    "inputSchema": {
+      "properties": {
+        "grace_min": {
+          "default": 10,
+          "title": "Grace Min",
+          "type": "integer"
+        },
+        "window_min": {
+          "default": 30,
+          "title": "Window Min",
+          "type": "integer"
+        }
+      },
+      "title": "bili_verify_recent_commentsArguments",
+      "type": "object"
+    },
+    "name": "bili_verify_recent_comments"
+  },
+  "bili_video_info": {
+    "description": "\n    获取B站视频的详细信息\n\n    Args:\n        bvid: 视频BV号\n    \n    Returns:\n        视频标题、描述、UP主、播放量、评论数、收藏数等详细数据\n    ",
+    "inputSchema": {
+      "properties": {
+        "bvid": {
+          "title": "Bvid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bvid"
+      ],
+      "title": "bili_video_infoArguments",
+      "type": "object"
+    },
+    "name": "bili_video_info"
+  },
+  "bili_video_zones": {
+    "description": "\n    获取B站视频常用分区ID列表，供上传视频时选择tid参数\n\n    Returns:\n        常用分区ID及名称\n    ",
+    "inputSchema": {
+      "properties": {},
+      "title": "bili_video_zonesArguments",
+      "type": "object"
+    },
+    "name": "bili_video_zones"
+  },
+  "bili_weekly_hot": {
+    "description": "\n    获取B站每周必看视频推荐\n\n    Args:\n        week: 期数（0表示获取期数列表，>0表示获取该期的视频）\n\n    Returns:\n        每周必看期数列表或指定期的视频列表\n    ",
+    "inputSchema": {
+      "properties": {
+        "week": {
+          "default": 0,
+          "title": "Week",
+          "type": "integer"
+        }
+      },
+      "title": "bili_weekly_hotArguments",
+      "type": "object"
+    },
+    "name": "bili_weekly_hot"
+  }
+}
