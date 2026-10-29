@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
@@ -1108,7 +1109,11 @@ async def _grab_frame(video_path: str, second: int, out_path: str) -> bool:
 
 async def _extract_cover_from_video(video_path: str) -> Picture:
     """截取视频第3秒的一帧作为封面，失败则回退到第0秒"""
-    tmp_cover = os.path.join(tempfile.gettempdir(), f"bili_cover_{os.getpid()}.png")
+    # 并发投稿/多进程同跑时同 pid 会撞名（2026-10-29 核验 §4.3）：补一段 uuid 隔离
+    tmp_cover = os.path.join(
+        tempfile.gettempdir(),
+        f"bili_cover_{os.getpid()}_{uuid.uuid4().hex[:8]}.png",
+    )
     try:
         for second in (3, 0):
             if await _grab_frame(video_path, second, tmp_cover):
@@ -1900,19 +1905,25 @@ async def bili_received_at_and_likes() -> str:
         包含 at 和 likes 两部分的通知数据
     """
     cred = get_cred()
-    result = {}
-    errors = []
-    try:
-        result["at"] = await session.get_at(credential=cred)
-    except Exception as e:
-        errors.append(f"@通知获取失败: {e}")
-    try:
-        result["likes"] = await session.get_likes(credential=cred)
-    except Exception as e:
-        errors.append(f"点赞通知获取失败: {e}")
+    result: dict = {}
+    errors: list = []
+    # 两个请求互不依赖 ⇒ 并发，延迟从"两者之和"降到"两者较大者"（2026-10-29 核验 §2.4）
+    at_res, likes_res = await asyncio.gather(
+        session.get_at(credential=cred),
+        session.get_likes(credential=cred),
+        return_exceptions=True,
+    )
+    for key, res in (("at", at_res), ("likes", likes_res)):
+        if isinstance(res, BaseException):
+            errors.append(f"{key} 获取失败: {res}")
+        else:
+            result[key] = res
+    # 单侧失败不再 success:false 整体丢弃：数据其实带回来了，用 partial 标记缺口
+    payload = {"success": True, "partial": bool(errors), **result}
     if errors:
-        return _err("; ".join(errors), **result)
-    return _ok(result)
+        payload["errors"] = errors
+        payload["note"] = "部分通知获取失败；已有数据照常可用，缺的一半下轮再取，不要重试本调用"
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ========== Tool 28: 点赞视频（混迹轻互动） ==========
@@ -2023,6 +2034,8 @@ def _ledger_read_events(limit: int = 0) -> list:
 
     一行可能塞了多个对象（2026-10-25 的真实事故：`{...}{...}` 导致整行解析失败、
     当天配额全消失）——所以这里用 raw_decode 逐个扫，容忍老账本里的坏行。
+    坏行/坏文件不再静默（2026-10-29 核验）：解析失败的行数留 warning，整文件读失败
+    留 error 并返回已读到的部分——账本读失败 ⇒ 判重全失效，绝不能无痕。
     """
     out: list = []
     path = _persona_home() / "ledger.jsonl"
@@ -2030,6 +2043,7 @@ def _ledger_read_events(limit: int = 0) -> list:
         if not path.exists():
             return out
         dec = json.JSONDecoder()
+        bad = 0
         with open(path, encoding="utf-8") as f:
             for line in f:
                 s = line.strip()
@@ -2044,11 +2058,16 @@ def _ledger_read_events(limit: int = 0) -> list:
                     try:
                         obj, j = dec.raw_decode(s, i)
                     except Exception:
-                        break
+                        bad += 1
+                        break  # 该行剩余对象丢弃，但要留痕
                     if isinstance(obj, dict):
                         out.append(obj)
                     i = j
-    except Exception:
+        if bad:
+            logger.warning("账本有 %d 行解析失败（已跳过，不影响其余行）", bad)
+    except Exception as e:
+        # ⭐ 原来是静默 return out：账本读失败 ⇒ seen 全空 ⇒ 重复看/重复回且无人知晓
+        logger.error("账本读取失败，返回已读部分（本轮判重可能失效）：%s", e)
         return out
     return out[-limit:] if limit and limit > 0 else out
 
