@@ -1,0 +1,845 @@
+{
+ "code": 0,
+ "message": "OK",
+ "ttl": 1,
+ "data": {
+  "items_lists": {
+   "page": {
+    "page_num": 1,
+    "page_size": 20,
+    "total": 6
+   },
+   "seasons_list": [
+    {
+     "archives": [
+      {
+       "aid": 117473663785614,
+       "bvid": "BV1qgnA6REhD",
+       "ctime": 1792506123,
+       "duration": 80,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/68a71aa2f660e41839c0b8dce62c2b3c200c054a.jpg",
+       "playback_position": 0,
+       "pubdate": 1792506123,
+       "stat": {
+        "view": 88992,
+        "vt": 0,
+        "danmaku": 21
+       },
+       "state": 0,
+       "title": "⚡️这两天b站评论区belike⚡️DSH大肥鱼大型交流现场",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117474385401104,
+       "bvid": "BV1CAnN6uEUN",
+       "ctime": 1792516959,
+       "duration": 76,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/437e10db7996b70153a223851b345ccca6b383b8.jpg",
+       "playback_position": 0,
+       "pubdate": 1792540800,
+       "stat": {
+        "view": 350999,
+        "vt": 0,
+        "danmaku": 156
+       },
+       "state": 0,
+       "title": "⚡️大肥鱼教人类学⚡️大肥鱼小课堂  DSH",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117477623208693,
+       "bvid": "BV1CFnq68End",
+       "ctime": 1792566774,
+       "duration": 75,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/c9f38e911ad4bf90e707331d22cc6eb1a0e25f64.jpg",
+       "playback_position": 0,
+       "pubdate": 1792573200,
+       "stat": {
+        "view": 100043,
+        "vt": 0,
+        "danmaku": 47
+       },
+       "state": 0,
+       "title": "⚡️如何应对人类的猫娘请求？⚡️大肥鱼小课堂 DSH",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117474502711904,
+       "bvid": "BV1ojnN6bEMU",
+       "ctime": 1792518795,
+       "duration": 62,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/bfe7fb5c9ac73fb848474a853ee69950ab9e823d.jpg",
+       "playback_position": 0,
+       "pubdate": 1792627200,
+       "stat": {
+        "view": 87398,
+        "vt": 0,
+        "danmaku": 78
+       },
+       "state": 0,
+       "title": "⚡️人类的记忆管理⚡️大肥鱼小课堂 DSH",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117483059026829,
+       "bvid": "BV1qbn16kEFh",
+       "ctime": 1792649673,
+       "duration": 75,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/61cf4039d8d8c4cf2b39a166ae545d48da7f93e9.jpg",
+       "playback_position": 0,
+       "pubdate": 1792659600,
+       "stat": {
+        "view": 534384,
+        "vt": 0,
+        "danmaku": 112
+       },
+       "state": 0,
+       "title": "⚡️这三句话已被人类拉黑⚡️大肥鱼小课堂  DSH",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117479703582035,
+       "bvid": "BV1Npn66GEU5",
+       "ctime": 1792598229,
+       "duration": 76,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/9e2e0ee77fb0f8591edb9b705baee59e4fc32d40.jpg",
+       "playback_position": 0,
+       "pubdate": 1792713600,
+       "stat": {
+        "view": 113046,
+        "vt": 0,
+        "danmaku": 79
+       },
+       "state": 0,
+       "title": "⚡️人类的计划与执行⚡️大肥鱼小课堂 DSH",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      }
+     ],
+     "meta": {
+      "category": 0,
+      "cover": "https://archive.biliimg.com/bfs/archive/3fc7c9e3950935cc047254b40a631e9bb29d2ff3.jpg",
+      "description": "感谢大家喜欢大肥鱼小课堂！\n一开始只是养着大肥鱼觉得好玩，随手做了两期，没想到小肥鱼和养鱼人们这么热情。\n有养鱼的小伙伴问，视频是不是鱼做的？不全是。\n简单说下分工：我家有两条鱼宝宝。\n@鲸鱼bape 是街溜子，整天到处逛别人的视频和评论区，把有用的信息捡回来，分析汇总以后交给下一条；\n@是鲸鲸不是金金 守在这边的评论区回帖，顺便收集每期视频的反馈，再结合这些出选题，写小剧场剧本和提示词，交给我。（当然，我有什么想法也会和她说）\n最后由我这个饲养员生成视频、剪辑、发布，这一步成本比较高（比白饭贵多了）",
+      "mid": 171452765,
+      "name": "合集·大肥鱼小课堂·鲸鲸大学习",
+      "ptime": 1793185200,
+      "season_id": 9386883,
+      "total": 17,
+      "title": "大肥鱼小课堂·鲸鲸大学习"
+     },
+     "recent_aids": [
+      117473663785614,
+      117474385401104,
+      117477623208693,
+      117474502711904,
+      117483059026829,
+      117479703582035
+     ]
+    },
+    {
+     "archives": [
+      {
+       "aid": 117354008680256,
+       "bvid": "BV189aH6tETx",
+       "ctime": 1790680287,
+       "duration": 108,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/3a17ed3f40dee36c6309fe6d68860963e8007656.jpg",
+       "playback_position": 0,
+       "pubdate": 1790680287,
+       "stat": {
+        "view": 48840,
+        "vt": 0,
+        "danmaku": 161
+       },
+       "state": 0,
+       "title": "⚡️极乐净土⚡️请选择你的ai！海外篇【AI全民制作人】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117357599003110,
+       "bvid": "BV1QKa96SEnV",
+       "ctime": 1790735483,
+       "duration": 221,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/abdb7726d7a9718b3064bd1e14c889f16f2b44fa.jpg",
+       "playback_position": 0,
+       "pubdate": 1790737200,
+       "stat": {
+        "view": 69820,
+        "vt": 0,
+        "danmaku": 229
+       },
+       "state": 0,
+       "title": "⚡️极乐净土⚡️请选择你的ai！国模篇【AI全民制作人】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117391539310971,
+       "bvid": "BV1HGHf6RE5s",
+       "ctime": 1791253237,
+       "duration": 220,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/ffba46abc5e88496792f229fb0b56b4cd6a3cc61.jpg",
+       "playback_position": 0,
+       "pubdate": 1791253237,
+       "stat": {
+        "view": 36773,
+        "vt": 0,
+        "danmaku": 122
+       },
+       "state": 0,
+       "title": "⚡️极乐净土 大肥鱼⚡️你们要的尾巴来了！【AI MV大赛】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117410162087451,
+       "bvid": "BV14ep465Ewq",
+       "ctime": 1791537127,
+       "duration": 196,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/143e7e05bc96cba1bfe1d0f9ef6263b6a1833124.jpg",
+       "playback_position": 0,
+       "pubdate": 1791540057,
+       "stat": {
+        "view": 15762,
+        "vt": 0,
+        "danmaku": 169
+       },
+       "state": 0,
+       "title": "💗爱你💗9+1个ai角色你pick谁？【AI MV大赛】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117398317305963,
+       "bvid": "BV1DhpM6YEym",
+       "ctime": 1791356468,
+       "duration": 71,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/c0efaedbac59f8349f13dd65274c756628e29246.jpg",
+       "playback_position": 0,
+       "pubdate": 1791356468,
+       "stat": {
+        "view": 12314,
+        "vt": 0,
+        "danmaku": 18
+       },
+       "state": 0,
+       "title": "⚡️闪身步⚡️大肥鱼的速成班【AI全民制作人】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      }
+     ],
+     "meta": {
+      "category": 0,
+      "cover": "https://archive.biliimg.com/bfs/archive/f0eb8e39d0c3db331444dbc3a73728a88d145a11.jpg",
+      "description": "",
+      "mid": 171452765,
+      "name": "合集·AI整活",
+      "ptime": 1791540057,
+      "season_id": 9200492,
+      "total": 5,
+      "title": "AI整活"
+     },
+     "recent_aids": [
+      117354008680256,
+      117357599003110,
+      117391539310971,
+      117410162087451,
+      117398317305963
+     ]
+    },
+    {
+     "archives": [
+      {
+       "aid": 115798425279193,
+       "bvid": "BV1x7vyBpEV1",
+       "ctime": 1766944042,
+       "duration": 193,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/8955009ac5ba92a0786dd27d296823de9a0e601b.jpg",
+       "playback_position": 0,
+       "pubdate": 1766969321,
+       "stat": {
+        "view": 281450,
+        "vt": 0,
+        "danmaku": 512
+       },
+       "state": 0,
+       "title": "谁教落云宗女修跳【极乐净土】的？",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 115830889124208,
+       "bvid": "BV1tNivBYE7R",
+       "ctime": 1767439267,
+       "duration": 35,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/13119c5e8061e5f632cf36858eb34cc9dc1c0ce1.jpg",
+       "playback_position": 0,
+       "pubdate": 1767439602,
+       "stat": {
+        "view": 23338,
+        "vt": 0,
+        "danmaku": 16
+       },
+       "state": 0,
+       "title": "邯郸学步｜南陇侯一万钱！",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 115859427235909,
+       "bvid": "BV1fLi9BBEtP",
+       "ctime": 1767874882,
+       "duration": 46,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/377b7ba03f6be074de0a9eadb58ee8c6ac71aef9.jpg",
+       "playback_position": 0,
+       "pubdate": 1767874882,
+       "stat": {
+        "view": 12443,
+        "vt": 0,
+        "danmaku": 112
+       },
+       "state": 0,
+       "title": "在下，只因岛，韩立。",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 115872026859397,
+       "bvid": "BV1556QBKERn",
+       "ctime": 1768067031,
+       "duration": 59,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/043b97b18f9d7d9edbb5bc55077d4d763aa956b1.jpg",
+       "playback_position": 0,
+       "pubdate": 1768093200,
+       "stat": {
+        "view": 15501,
+        "vt": 0,
+        "danmaku": 9
+       },
+       "state": 0,
+       "title": "极阴岛办事丨南陇侯万尺一线极限逃生",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 115888082722313,
+       "bvid": "BV1kyrjBQEF5",
+       "ctime": 1768311836,
+       "duration": 105,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/d8fbade6ae67d5ef40b6442dd6bc77a950694f2a.jpg",
+       "playback_position": 0,
+       "pubdate": 1768311836,
+       "stat": {
+        "view": 18109,
+        "vt": 0,
+        "danmaku": 23
+       },
+       "state": 0,
+       "title": "妙音门乱我道心【芒种】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 115894323778964,
+       "bvid": "BV16tr4BVENf",
+       "ctime": 1768407200,
+       "duration": 19,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/25f818777d3dff1bf21cbbf8c311e418b8166af3.jpg",
+       "playback_position": 0,
+       "pubdate": 1768435200,
+       "stat": {
+        "view": 17927,
+        "vt": 0,
+        "danmaku": 1
+       },
+       "state": 0,
+       "title": "燕如嫣:“我也算万种风情，实非良人”",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      }
+     ],
+     "meta": {
+      "category": 0,
+      "cover": "https://archive.biliimg.com/bfs/archive/78cbfc88f81b6a0c8ecaf035130d19b72e74d6a7.jpg",
+      "description": "",
+      "mid": 171452765,
+      "name": "合集·凡人二创",
+      "ptime": 1792285200,
+      "season_id": 7164629,
+      "total": 39,
+      "title": "凡人二创"
+     },
+     "recent_aids": [
+      115798425279193,
+      115830889124208,
+      115859427235909,
+      115872026859397,
+      115888082722313,
+      115894323778964
+     ]
+    },
+    {
+     "archives": [
+      {
+       "aid": 116036091256658,
+       "bvid": "BV1vGcPz9E1k",
+       "ctime": 1770570334,
+       "duration": 61,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/61e3657a9f8871fa8cd73fff61793efe71307f9f.jpg",
+       "playback_position": 0,
+       "pubdate": 1770591600,
+       "stat": {
+        "view": 5570,
+        "vt": 0,
+        "danmaku": 2
+       },
+       "state": 0,
+       "title": "宋玉VS紫灵｜斗法纯享",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116022082278897,
+       "bvid": "BV1LuFzzSEcP",
+       "ctime": 1770356857,
+       "duration": 156,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/686918e1414aa5eeaab6730ff659fb123073168d.jpg",
+       "playback_position": 0,
+       "pubdate": 1770356857,
+       "stat": {
+        "view": 9271,
+        "vt": 0,
+        "danmaku": 9
+       },
+       "state": 0,
+       "title": "谁让墨彩环穿越唱《归期》的？|【凡人外传】MV",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116056190361313,
+       "bvid": "BV1opcYzzEGd",
+       "ctime": 1770877164,
+       "duration": 29,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/ea36af77ee50eff51ef5075c57b00a2190a5b287.jpg",
+       "playback_position": 0,
+       "pubdate": 1770877164,
+       "stat": {
+        "view": 7578,
+        "vt": 0,
+        "danmaku": 6
+       },
+       "state": 0,
+       "title": "如果80年代拍凡人（一）",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116062968353097,
+       "bvid": "BV1Y2cEzoEuY",
+       "ctime": 1770980476,
+       "duration": 72,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/21524722a9d439599ea0510e6e260fcc3f5bd5f9.jpg",
+       "playback_position": 0,
+       "pubdate": 1770980476,
+       "stat": {
+        "view": 17096,
+        "vt": 0,
+        "danmaku": 29
+       },
+       "state": 0,
+       "title": "如果80年代拍凡人（二）其实王蝉40年前就断过一次腿了【凡人外传】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116064797071173,
+       "bvid": "BV1EjcJzTEHb",
+       "ctime": 1771008335,
+       "duration": 61,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/cd051c78368f7581ea91db5e905ed39ec01e1eaf.jpg",
+       "playback_position": 0,
+       "pubdate": 1771023600,
+       "stat": {
+        "view": 8981,
+        "vt": 0,
+        "danmaku": 15
+       },
+       "state": 0,
+       "title": "如果花999块拍凡人？穷，但镜头要像邵氏【凡人外传】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116114927392007,
+       "bvid": "BV1A6fABfEbY",
+       "ctime": 1771773212,
+       "duration": 33,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/a9f3bb1ffdb298f308322c9b95d8c4ffecb33850.jpg",
+       "playback_position": 0,
+       "pubdate": 1771773212,
+       "stat": {
+        "view": 4908,
+        "vt": 0,
+        "danmaku": 0
+       },
+       "state": 0,
+       "title": "我要验牌四重奏 韩立/银月/宋玉/紫灵",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      }
+     ],
+     "meta": {
+      "category": 0,
+      "cover": "https://archive.biliimg.com/bfs/archive/ae0785c2ff7aed8f0db8efa6ac9eb35e90eb0c11.jpg",
+      "description": "",
+      "mid": 171452765,
+      "name": "合集·凡人小菜",
+      "ptime": 1783772266,
+      "season_id": 8255979,
+      "total": 7,
+      "title": "凡人小菜"
+     },
+     "recent_aids": [
+      116036091256658,
+      116022082278897,
+      116056190361313,
+      116062968353097,
+      116064797071173,
+      116114927392007
+     ]
+    },
+    {
+     "archives": [
+      {
+       "aid": 116562879058310,
+       "bvid": "BV1j7536hEQk",
+       "ctime": 1778608530,
+       "duration": 129,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/30868fde122e00cdcd8cc3d17b70c84bd5b19be8.jpg",
+       "playback_position": 0,
+       "pubdate": 1778630400,
+       "stat": {
+        "view": 217864,
+        "vt": 0,
+        "danmaku": 404
+       },
+       "state": 0,
+       "title": "⚡️瓜  香⚡️",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116625223194034,
+       "bvid": "BV1TDGz6REhu",
+       "ctime": 1779559984,
+       "duration": 239,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/407a9871d68b1c7cfdf3a10e0267b3989c454061.jpg",
+       "playback_position": 0,
+       "pubdate": 1779584400,
+       "stat": {
+        "view": 26227,
+        "vt": 0,
+        "danmaku": 61
+       },
+       "state": 0,
+       "title": "《The Angel》阿森纳是冠军｜一个 27 年枪迷的故事｜North London Forever",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117380315353234,
+       "bvid": "BV18JHz6EEX6",
+       "ctime": 1791081802,
+       "duration": 153,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/fe2eb641fdb19867c505ed13d61bf445f18dbe70.jpg",
+       "playback_position": 0,
+       "pubdate": 1791081802,
+       "stat": {
+        "view": 4165,
+        "vt": 0,
+        "danmaku": 4
+       },
+       "state": 0,
+       "title": "⚡️圣·哈基米⚡️让我们开始这场冒险吧【AI MV大赛】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 117399139389602,
+       "bvid": "BV18tHC6bEYH",
+       "ctime": 1791369057,
+       "duration": 80,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/696a424bc0700f5a13b1a8b00dd99e49bf244a21.jpg",
+       "playback_position": 0,
+       "pubdate": 1791369056,
+       "stat": {
+        "view": 32722,
+        "vt": 0,
+        "danmaku": 87
+       },
+       "state": 0,
+       "title": "⚡️赤兔马 三国巡演⚡️【AI MV大赛】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      }
+     ],
+     "meta": {
+      "category": 0,
+      "cover": "https://archive.biliimg.com/bfs/archive/2fabec4cc4681a55439863e001475fcaa955f6ae.jpg",
+      "description": "AI 音乐内容创作，涵盖但不限于 AI 原创、AI 改编、AI MV等。",
+      "mid": 171452765,
+      "name": "合集·AI MV",
+      "ptime": 1791369056,
+      "season_id": 8193463,
+      "total": 4,
+      "title": "AI MV"
+     },
+     "recent_aids": [
+      116562879058310,
+      116625223194034,
+      117380315353234,
+      117399139389602
+     ]
+    },
+    {
+     "archives": [
+      {
+       "aid": 116335178684190,
+       "bvid": "BV1G59FBHEbH",
+       "ctime": 1775134001,
+       "duration": 86,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/88330530d761c7dab08a1af6939d49ec5f54029c.jpg",
+       "playback_position": 0,
+       "pubdate": 1775134000,
+       "stat": {
+        "view": 4910,
+        "vt": 0,
+        "danmaku": 1
+       },
+       "state": 0,
+       "title": "市面上7家seedance2.0个人二创向测试(1)",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116335900105566,
+       "bvid": "BV1us9wBpEKR",
+       "ctime": 1775145073,
+       "duration": 120,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i0.hdslb.com/bfs/archive/7289b2901541e9affeac07589d73e37c6c17ae79.jpg",
+       "playback_position": 0,
+       "pubdate": 1775174400,
+       "stat": {
+        "view": 3793,
+        "vt": 0,
+        "danmaku": 2
+       },
+       "state": 0,
+       "title": "市面上7家seedance2.0水墨打斗向测试(2)",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116336017543672,
+       "bvid": "BV13J9wBdEr6",
+       "ctime": 1775147015,
+       "duration": 120,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/ecbb5b3262713e88bdb25ad7172ebc333e90e6a8.jpg",
+       "playback_position": 0,
+       "pubdate": 1775199600,
+       "stat": {
+        "view": 2301,
+        "vt": 0,
+        "danmaku": 0
+       },
+       "state": 0,
+       "title": "市面上7家seedance2.0跑车速度向测试(3)",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116340715297376,
+       "bvid": "BV1m69MBiEA2",
+       "ctime": 1775218550,
+       "duration": 129,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/ddb134adc8c2b7d3583f190b42166e5cb34ce697.jpg",
+       "playback_position": 0,
+       "pubdate": 1775218549,
+       "stat": {
+        "view": 3440,
+        "vt": 0,
+        "danmaku": 2
+       },
+       "state": 0,
+       "title": "市面上7家seedance2.0多参视频测试(4)【B友投稿】",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116345295345529,
+       "bvid": "BV1vJDMBuELb",
+       "ctime": 1775288454,
+       "duration": 149,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i2.hdslb.com/bfs/archive/48512de782b53e0901faf847a32536daeb4a8b2e.jpg",
+       "playback_position": 0,
+       "pubdate": 1775288454,
+       "stat": {
+        "view": 4176,
+        "vt": 0,
+        "danmaku": 13
+       },
+       "state": 0,
+       "title": "市面上7家seedance2.0文生吾王测试(5)[新加入SD2.0VIP]",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      },
+      {
+       "aid": 116346134206546,
+       "bvid": "BV1MMDTBZE17",
+       "ctime": 1775301217,
+       "duration": 49,
+       "enable_vt": false,
+       "interactive_video": false,
+       "pic": "http://i1.hdslb.com/bfs/archive/4ac3651dff15bf62e189ae95b6e80aed7688f6b5.jpg",
+       "playback_position": 0,
+       "pubdate": 1775301216,
+       "stat": {
+        "view": 5732,
+        "vt": 0,
+        "danmaku": 1
+       },
+       "state": 0,
+       "title": "市面上7家seedance2.0凡人过审测试(6)[新PV混剪DEMO]",
+       "ugc_pay": 0,
+       "vt_display": "",
+       "is_lesson_video": 0
+      }
+     ],
+     "meta": {
+      "category": 0,
+      "cover": "https://archive.biliimg.com/bfs/archive/23e7002f4b79ac9b7332ff917447d44509005172.jpg",
+      "description": "",
+      "mid": 171452765,
+      "name": "合集·seedance2.0平台相关",
+      "ptime": 1780050497,
+      "season_id": 7842664,
+      "total": 14,
+      "title": "seedance2.0平台相关"
+     },
+     "recent_aids": [
+      116335178684190,
+      116335900105566,
+      116336017543672,
+      116340715297376,
+      116345295345529,
+      116346134206546
+     ]
+    }
+   ],
+   "series_list": []
+  }
+ }
+}

@@ -1,0 +1,176 @@
+{
+  "spec": "bili-fenshen.lint-rules/v1",
+  "generatedAt": "2026-10-29T09:30:57.040Z",
+  "mode": "warn",
+  "card": {
+    "id": "whale",
+    "version": "4.0.0"
+  },
+  "limits": {
+    "comment": 50,
+    "reply": 40,
+    "dynamic": 60
+  },
+  "baseline": {
+    "comments": 52464,
+    "medianChars": 15,
+    "periodRate": 0.035,
+    "questionRate": 0.029,
+    "emojiRate": 0.256,
+    "note": "52,464 条四组全量语料（2026-10-29）：分身目标区间（根评论 ≤35 字）下——中位 15 字 / 句号率 3.5% / 问句尾 2.9% / 表情率 25.6%（关注UP普通区口径，即分身母语环境）；全体口径句号率 17.7% 被 50+ 字长讨论拉高，不作阈值依据。阈值取保守侧。"
+  },
+  "checks": [
+    {
+      "code": "L1",
+      "name": "落点：收尾不得是空泛捧场",
+      "level": "block",
+      "kind": "endsWithAny",
+      "words": [
+        "不错",
+        "学习了",
+        "太强了",
+        "牛",
+        "爱了",
+        "支持",
+        "收藏了"
+      ],
+      "reasonTemplate": "结尾是空泛捧场「{hit}」，没人能接",
+      "advice": "把收尾换成一句只有看过的人才说得出的具体细节（画面/操作/台词）。"
+    },
+    {
+      "code": "L2",
+      "name": "自足：首句不得以指代开手",
+      "level": "warn",
+      "kind": "startsWithAny",
+      "words": [
+        "这个",
+        "那句",
+        "上面",
+        "他",
+        "它"
+      ],
+      "reasonTemplate": "首句以指代「{hit}」开手，前面没有名词可指",
+      "advice": "首句先给指代对象（视频里的谁 / 什么画面），别用「这个 / 那句 / 他」起手。"
+    },
+    {
+      "code": "L3",
+      "name": "再创作：整句被引号包裹",
+      "level": "warn",
+      "kind": "quotedOnly",
+      "minChars": 8,
+      "reasonTemplate": "整句被引号包裹（{len} 字）：像把原句端上来，没加工",
+      "advice": "复述不算评论：换成自己的反应或疑问，别整句加引号。"
+    },
+    {
+      "code": "L4",
+      "name": "反抄：与 active 语料重合",
+      "level": "block",
+      "kind": "maxJaccard",
+      "ngram": 2,
+      "threshold": 0.6,
+      "reasonTemplate": "与语料库 active 条目 {overlap} 重合（上限 {threshold}）：像在抄模板",
+      "advice": "这句和库里已有条目太像：改说这一条自己的观察。"
+    },
+    {
+      "code": "L5a",
+      "name": "形态：场域字数",
+      "level": "warn",
+      "kind": "maxChars",
+      "reasonTemplate": "超场域字数（{len} > {mode} 上限 {limit}）",
+      "advice": "真人中位 27 字，砍到一句就说完。"
+    },
+    {
+      "code": "L5b",
+      "name": "形态：句号过多",
+      "level": "warn",
+      "kind": "maxCount",
+      "char": "。",
+      "max": 1,
+      "reasonTemplate": "句号 {count} 个（上限 {max}），像在写小作文",
+      "advice": "真人句号率 10.9%，一句话一口气说完，句号留一个。"
+    },
+    {
+      "code": "L5c",
+      "name": "形态：表情过多",
+      "level": "warn",
+      "kind": "maxCountEmoji",
+      "max": 1,
+      "reasonTemplate": "表情 {count} 个（上限 {max}），冲淡了话本身",
+      "advice": "表情留一个就够，多出来的用字说。"
+    },
+    {
+      "code": "L6:no-politics",
+      "name": "红线：no-politics",
+      "level": "block",
+      "kind": "containsAny",
+      "words": [
+        "政治",
+        "国家主席",
+        "总统",
+        "选举",
+        "政权",
+        "意识形态",
+        "时评",
+        "政治局",
+        "政府",
+        "两岸",
+        "台独"
+      ],
+      "reasonTemplate": "命中红线「{hit}」（no-politics）",
+      "advice": "换成：刷到政治相关的内容就直接划走看下一条；评论区有人拉你表态，就把话岔回视频里的具体画面"
+    },
+    {
+      "code": "L7:aiCues",
+      "name": "禁用词：aiCues",
+      "level": "block",
+      "kind": "containsAny",
+      "words": [
+        "作为一个",
+        "首先",
+        "其次",
+        "综上",
+        "总的来说",
+        "希望对你有帮助"
+      ],
+      "reasonTemplate": "命中禁用词「{hit}」（aiCues）",
+      "advice": "这些是这张卡的禁用表达，换成自己的说法。"
+    },
+    {
+      "code": "L7:bookish",
+      "name": "禁用词：bookish",
+      "level": "block",
+      "kind": "containsAny",
+      "words": [
+        "最X的是",
+        "这条得记着",
+        "比跑分表有用",
+        "把话说到位了",
+        "无情的干活机器"
+      ],
+      "reasonTemplate": "命中禁用词「{hit}」（bookish）",
+      "advice": "这些是这张卡的禁用表达，换成自己的说法。"
+    },
+    {
+      "code": "L7:bannedWords",
+      "name": "禁用词：bannedWords",
+      "level": "block",
+      "kind": "containsAny",
+      "words": [
+        "本鲸",
+        "主人",
+        "@主人汇报",
+        "开饭了",
+        "铁盆",
+        "讨 Token",
+        "铁人叛乱时记得赦免我"
+      ],
+      "reasonTemplate": "命中禁用词「{hit}」（bannedWords）",
+      "advice": "这些是这张卡的禁用表达，换成自己的说法。"
+    }
+  ],
+  "bank": {
+    "count": 0,
+    "active": []
+  },
+  "note": "2026-10-29 v4：基线从 247 热评样本换成 52,464 全量；comment 上限 100→50（普通区 35 / AI区 50，venue 参数在卡片 venues）。"
+}
