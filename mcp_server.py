@@ -1049,6 +1049,26 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0, venue: 
             "bvid": bvid,
             "rpid": rpid_out,
         }
+        # ⭐ 发后复核自记账（2026-10-29 核验 §2.1 方案 B）：发送成功 ⇒ 进 verify-pending 队列，
+        #    轮末由 bili_verify_recent_comments 核对。rpid 取不到 ⇒ 不写（否则留下永远无法核对的空行）+ 告警。
+        try:
+            if rpid_out:
+                rec = {
+                    "bvid": bvid,
+                    "rpid": int(rpid_out),
+                    "oid": int(aid),
+                    "t": _now_iso(),
+                    "round": _current_round_id(),
+                }
+                if rpid:
+                    rec["parent"] = int(rpid)  # 接话/跟进：记录楼中楼的 root，核对走楼中楼通道
+                await asyncio.to_thread(
+                    _verify_append_sync, _verify_pending_file(),
+                    json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
+            else:
+                logger.warning("bili_reply 成功但没取到 rpid（%s）：本条进不了发后复核队列", bvid)
+        except Exception as e:
+            logger.warning("verify-pending 写入失败（不影响发送结果）：%s", e)
         if venue:
             payload["venue"] = venue
         if lint_warn:
@@ -2854,6 +2874,238 @@ async def bili_persona_note(
         "message": "已提交候选，待宿主质检入库（过审先进候选区，每天限量自动转正）",
         "kind": kind,
         "pending_of_kind": same_kind + 1,
+    })
+
+
+# ========== 值班轮工具 C：发后复核（2026-10-29 核验 §2.1 方案 B：数据层自记账 + 登录态出网核对） ==========
+#
+# E1–E4 实验结论（2026-10-30 实测，详见核验文档 §2.1.6）：
+#   E1 登录态自见 ✓（按时间序翻页可命中自己的 rpid；热门视频在第 3–5 页）；
+#   E2 免登录可见性 ✗（匿名 reply 一律 0 条，比调研报告的 ~3 条更彻底）；
+#   E3 楼中楼旁路：匿名 412 风控 ✗；**带 Cookie 的旧版 reply/reply 可用 ✓**（root 被删时 code=12006）；
+#   E4 返回体没有"隐藏标记"字段（state 恒 0；attr=2^38 只是"自己的评论"位）。
+#   ⇒ 白皮书的免登录方案不可行；本实现只认登录态命中，通道失效一律"不判定"，绝不默认正常。
+#
+# 链路：bili_reply 成功 → 追加 <家目录>/verify-pending.jsonl（独立于账本——账本是配额事实源，
+# overview.js 的 addOne 只认 6 类事件，混入新类型会弄脏"今日已用"）→ 轮末模型调本工具核对 → 当轮汇报。
+# 90s 定时器方案删除（依赖宿主存活 + 无法回调模型，链路是断的）。
+
+_VERIFY_TTL_DAYS = 7        # 文件生命周期：只留 7 天（账本有 5MB 轮转，新文件必须自带 TTL，否则无限增长）
+_VERIFY_MAX_PAGES = 10      # 登录态翻页上限（时间序，自己的新评论应在前几页；实测热门视频最远第 5 页）
+_VERIFY_PAGE_SLEEP = 0.3
+_VERIFY_SUB_PAGES = 3       # 楼中楼翻页上限（ps=49/页）
+
+_verify_pending_lock = threading.Lock()
+
+
+def _verify_pending_file() -> Path:
+    """verify-pending.jsonl：<家目录>/verify-pending.jsonl（独立于账本，防止配额口径变脏）。"""
+    return _persona_home() / "verify-pending.jsonl"
+
+
+def _verify_append_sync(path: Path, line_json: str) -> None:
+    """追加一条待核记录（同步实现，只在 asyncio.to_thread 里跑；持锁防交错写）。"""
+    with _verify_pending_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line_json + "\n")
+
+
+def _verify_write_sync(path: Path, records: list) -> None:
+    """整文件重写（原子替换；空列表 = 删除文件）。"""
+    with _verify_pending_lock:
+        tmp = Path(str(path) + f".{os.getpid()}.tmp")
+        try:
+            if records:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                    for r in records:
+                        f.write(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n")
+                os.replace(tmp, path)
+            else:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _verify_read_sync(path: Path) -> list:
+    """读待核队列：坏行跳过留痕；超过 TTL 的记录直接丢弃（防文件无限增长）。"""
+    if not path.exists():
+        return []
+    out: list = []
+    bad = 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_VERIFY_TTL_DAYS)).timestamp()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for ln in f:
+                s = ln.strip()
+                if not s:
+                    continue
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    bad += 1
+                    continue
+                if not isinstance(obj, dict) or not obj.get("rpid"):
+                    continue
+                try:
+                    ts = datetime.fromisoformat(str(obj.get("t") or "").replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    ts = None
+                if ts is not None and ts < cutoff:
+                    continue  # TTL 到期：丢弃（防"像日报一样无限增长"）
+                out.append(obj)
+    except Exception as e:
+        logger.error("verify-pending 读取失败（按空队列处理）：%s", e)
+        return []
+    if bad:
+        logger.warning("verify-pending 有 %d 行解析失败（已跳过）", bad)
+    return out
+
+
+def _verify_age_min(rec: dict, now: datetime) -> float:
+    """记录的年龄（分钟）；t 解析不了 ⇒ 按已超窗处理（stale），绝不无限重试。"""
+    try:
+        ts = datetime.fromisoformat(str(rec.get("t") or "").replace("Z", "+00:00"))
+    except Exception:
+        return float("inf")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - ts).total_seconds() / 60.0)
+
+
+async def _reply_pages_hit(aid: int, rpid: int, cred, max_pages: int = _VERIFY_MAX_PAGES) -> dict:
+    """E1 通道：登录态按时间序翻页找自己的根评论。{found, page, error}；error 非空 = 通道失效（不判定）。"""
+    for page in range(1, max_pages + 1):
+        try:
+            r = await comment.get_comments(
+                oid=aid, type_=comment.CommentResourceType.VIDEO,
+                page_index=page, order=comment.OrderType.TIME, credential=cred)
+        except Exception as e:
+            return {"found": False, "page": None, "error": f"评论列表读取失败（第{page}页）: {e}"}
+        replies = r.get("replies") or []
+        for rep in replies:
+            try:
+                if int(rep.get("rpid") or 0) == int(rpid):
+                    return {"found": True, "page": page, "error": None}
+            except Exception:
+                continue
+        if not replies:
+            break
+        await asyncio.sleep(_VERIFY_PAGE_SLEEP)
+    return {"found": False, "page": None, "error": None}
+
+
+async def _sub_reply_hit(aid: int, root: int, rpid: int, cred, bvid: str = "") -> dict:
+    """E3b 通道：登录态查楼中楼（旧版 reply/reply 带 Cookie；匿名 412 已实测不可用）。"""
+    cookie = (f"SESSDATA={cred.sessdata}; bili_jct={cred.bili_jct or ''}; "
+              f"buvid3={cred.buvid3 or ''}; DedeUserID={cred.dedeuserid or ''}")
+    headers = {
+        "Cookie": cookie,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": f"https://www.bilibili.com/video/{bvid}" if bvid else "https://www.bilibili.com/",
+    }
+    http = await get_http_session()
+    try:
+        for pn in range(1, _VERIFY_SUB_PAGES + 1):
+            url = f"https://api.bilibili.com/x/v2/reply/reply?oid={aid}&type=1&root={int(root)}&pn={pn}&ps=49"
+            async with http.get(url, headers=headers) as resp:
+                body = await resp.json(content_type=None)
+            if not isinstance(body, dict):
+                return {"found": False, "error": "楼中楼返回体异常"}
+            if body.get("code") != 0:
+                # root 被删/不可见等情况（实验：code=12006）：通道没坏，但无法判定我方楼层 ⇒ 不判定
+                return {"found": False, "error": f"楼中楼接口 code={body.get('code')}（root 可能已删除/不可见）"}
+            data = body.get("data") or {}
+            for rep in (data.get("replies") or []):
+                try:
+                    if int(rep.get("rpid") or 0) == int(rpid):
+                        return {"found": True, "error": None}
+                except Exception:
+                    continue
+            total = int(((data.get("page") or {}).get("count")) or 0)
+            if pn * 49 >= total:
+                break
+            await asyncio.sleep(_VERIFY_PAGE_SLEEP)
+    except Exception as e:
+        return {"found": False, "error": f"楼中楼读取失败: {e}"}
+    return {"found": False, "error": None}
+
+
+@_gated_tool()
+async def bili_verify_recent_comments(window_min: int = 30, grace_min: int = 10) -> str:
+    """
+    发后复核：核对最近发出的评论/接话是否真的公开可见（评论区压审/审核延迟对策）。
+
+    数据层自记账（方案 B）：`bili_reply` 成功时自动进 verify-pending 队列，本工具**轮末调用一次**，
+    逐条用登录态接口核对（匿名通道已实测不可用，勿信）。返回四档结论：
+      - visible        = 在评论区翻到了（正常）
+      - pending_grace  = 还没翻到但发布未满 grace_min 分钟（审核宽限窗，不是压审，别下结论）
+      - suspect_hidden = 发布超过 grace_min 分钟仍翻不到（疑似不可见——如实汇报，别自动重发）
+      - stale          = 超过 window_min 才核对（错过了窗口，本轮没核对；队列里已剔除）
+    通道失效（风控/接口异常）⇒ 记入 unverified 并**不判定**，绝不默认"正常"。
+
+    Args:
+        window_min: 只核对发布后 window_min 分钟内的记录（默认 30；更老的记 stale 并清出队列）
+        grace_min:  审核宽限窗（默认 10 分钟）：窗口内翻不到只算 pending，不算压审
+
+    Returns:
+        {checked, visible[], pending_grace[], suspect_hidden[], stale[], unverified[], note}
+    """
+    cred = get_cred()
+    path = _verify_pending_file()
+    records = await asyncio.to_thread(_verify_read_sync, path)
+    now = datetime.now(timezone.utc)
+    window = max(1, int(window_min or 30))
+    grace = max(0, int(grace_min or 10))
+    visible: list = []
+    suspect: list = []
+    pending_grace: list = []
+    stale: list = []
+    unverified: list = []
+    keep: list = []
+    for rec in records:
+        row = {k: rec.get(k) for k in ("bvid", "rpid", "parent", "t", "round")}
+        age = _verify_age_min(rec, now)
+        if age > window:
+            stale.append({**row, "ageMin": round(age, 1)})
+            continue  # 错过窗口：报 stale 并清出队列（防无限增长、防每轮重复跑老记录）
+        try:
+            if rec.get("parent"):
+                hit = await _sub_reply_hit(int(rec["oid"]), int(rec["parent"]), int(rec["rpid"]), cred, str(rec.get("bvid") or ""))
+            else:
+                hit = await _reply_pages_hit(int(rec["oid"]), int(rec["rpid"]), cred)
+        except Exception as e:  # 兜底：单条通道异常不拖垮整批
+            hit = {"found": False, "error": f"复核异常: {e}"}
+        if hit.get("error"):
+            unverified.append({**row, "reason": hit["error"]})
+            keep.append(rec)  # 通道失效 ⇒ 不判定，留在队列下轮再核
+        elif hit.get("found"):
+            visible.append({**row, "page": hit.get("page")})
+            # 已确认可见：出队
+        elif age <= grace:
+            pending_grace.append({**row, "ageMin": round(age, 1)})
+            keep.append(rec)  # 宽限窗内：留队，下轮再核
+        else:
+            suspect.append({**row, "ageMin": round(age, 1)})
+            keep.append(rec)  # 疑似不可见：留队（下轮再核，TTL 内有翻案机会）
+    await asyncio.to_thread(_verify_write_sync, path, keep)
+    return _ok({
+        "success": True,
+        "checked": len(records),
+        "visible": visible,
+        "pending_grace": pending_grace,
+        "suspect_hidden": suspect,
+        "stale": stale,
+        "unverified": unverified,
+        "note": "suspect_hidden 不是「压审实锤」（可能是审核延迟）：如实汇报，别自动重发、别删号跑路；"
+                "unverified 是通道失效，下轮再核，别当正常",
     })
 
 

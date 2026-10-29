@@ -760,4 +760,41 @@ tmp_cover = os.path.join(
 
 ---
 
-> **本文的边界**：所有"成立/不成立"判定均以本次核验的 76b8995 + 工作区状态为准；语料数字为 52,464 条全量重算，口径见 §1.1；账本耗时为合成夹具基准，非长期运行观测。凡标"待验证"的（§2.1 可行性、venues 去留、client.js 构建）**都还没结论**，不应被引用为已定方案。
+## 7. 落地记录（2026-10-30，按 §5 批次执行）
+
+> 本节是执行回执：逐条记录实际改动、实验证据与决策拍板。批次提交：第 0 批 → 第 4 批分别独立提交。
+
+### 7.1 四项决策的拍板与依据
+
+| # | 决策 | 拍板 | 依据 |
+|---|---|---|---|
+| 1 | 句号政策 | **① 全站禁句号**（periodMaxPerComment=0）+ advice 去掉统计引用 + 卡 creatorNotes 标注「风格规定，非语料事实」 | 白皮书推荐 ①；§2.4.1 指出改 0 的风险（任何句号 warn / advice 写假分布）已按 §2.4.3 的写法消除；新增单测锁 creatorNotes.periodMax == punctuation.periodMaxPerComment |
+| 2 | venues 去留 | **A 落地**：`bili_reply` / `bili_ledger_append` 增 venue 参数（取卡里键名，默认普通区）；lint-rules.json 新增 `venueLimits`/`venueDefault`，JS lintComment 与 Python 哑执行同口径按档取 maxChars；compile.js 在 P3 注入「剧场分层」音量段；duty.md 增「发评论先选剧场档」 | 白皮书推荐 A；§2.4.1 的"必须同时把 venue 的 max 接到 lint 的 limits"已做（验收单测：同一句 39 字在普通区(35)/生态区(40) 取得不同结论） |
+| 3 | 发后复核 | **方案 B 落地**（先实验后实现，见 §7.2）；90s 定时器 + verifyRecentSafe 死代码删除，不留占位 | 实验证实免登录方案不可行；方案 B 的链路闭环（数据层自记账 + 轮末工具核对 + 当轮汇报）全部实现 |
+| 4 | client.js 构建 | **B 暂缓**（不引入构建链） | 白皮书推荐 B；4090 行当前无实际痛点；§4.5 的"原生 ESM 拆分不可行"结论维持 |
+
+### 7.2 §2.1 E1–E4 实验结论（2026-10-30 实测，只读接口 + 本机真实凭证 + 账本 5 条近期评论）
+
+| 实验 | 结果 | 证据（JSON 片段摘要） |
+|---|---|---|
+| E1 登录态自见 | **✓ 可行** | `BV1eDnd6MEQH` rpid=318479819281 在时间序**第 3 页**命中（state=0, attr=274877906944）；`BV1atx76ME8j` rpid=318480753473 在**第 5 页**命中。ⓘ 对照样本：`BV1TisX6dEFS` rpid=318480352401（发布 >24h）在全部 11 条根评论里**翻不到**——正是本功能要抓的场景（发布成功≠公开可见） |
+| E2 未登录可见性 | **✗ 不可行** | 同一批视频匿名（无 Cookie）请求 `replies` 全部返回 **0 条**（比调研报告的 ~3 条降级更彻底）——匿名翻不到任何评论，无法区分"正常"与"隐藏" |
+| E3 楼中楼旁路 | 匿名 **✗**（旧版 `reply/reply` 无 Cookie 返回 **HTTP 412** 风控页，证实调研）；**登录态 ✓**（带 Cookie 返回 200/code=0，7 条子回复里命中我方 rpid；root 被删时 code=12006） |
+| E4 状态字段 | **无可用"隐藏标记"** | 我方与他人评论 `state` 均为 0；`attr=2^38` 只是"自己的评论"位（对照样本 attr=0），不能当压审判据 ⇒ 可见性判定只能靠**登录态翻页命中** |
+
+**结论**：白皮书 §2.1 的免登录方案不可行（E2/E3 双双拿不到）→ 按 §2.1.3 **方案 B** 落地：
+`bili_reply` 成功自动追加 `<家目录>/verify-pending.jsonl`（rpid 取不到则不写 + 告警；7 天 TTL 防无限增长）；
+新增工具 `bili_verify_recent_comments(window_min=30, grace_min=10)` 只走**登录态**通道（根评论按时间序翻页 ≤10 页；接话走带 Cookie 的 `reply/reply`）；
+返回 `visible / pending_grace / suspect_hidden / stale / unverified` 五档，**通道失效一律不判定**（绝不默认正常）；
+90s 定时器与 verifyRecentSafe 已删；`dutyToolList` 自动补白名单；duty.md 增「发后复核」节要求轮末调用一次。
+测试：`test/mcp.verify.test.js`（自记账/空 rpid 告警/三档夹具/通道失效不判定/TTL/死代码删除）。
+
+### 7.3 其余批次落地清单
+
+- **第 0 批**（commit d299d18）：§2.4 通知容错（asyncio.gather + partial 语义；消费方检查：duty.md/宿主**不依赖** success===false，无需同步）；§4.3 封面临时文件 UUID；§2.5 Step 1 账本坏行 warning / 坏文件 error（判重行为逐项不变，见 `test/mcp.ledger.test.js`）。
+- **第 1 批**（commit 69d1377）：§4.2 共享 `aiohttp.ClientSession` 单例（FastMCP lifespan 收尾）+ 30 处同步 I/O 收进 `asyncio.to_thread`（9 函数，逐点核对核验表）；§2.5 Step 2 `_LedgerCache`（size+mtime+路径签名；4 个调用点接入；5MB 夹具第二次读 <5ms）；顺带：二维码落临时目录（§5-5）、`_persona_pending_file` 家目录去重（§5-4）、growth-pending 并发追加锁（§5-8）。测试：`test/mcp.perf.test.js`。注：`bili_subtitle` 连查 3 视频的**线上连接复用验证未做**（测试环境不联网），以 `get_http_session()` 单例性单测 + lifespan 关闭断言替代。
+- **第 2 批**（commit ba566a5）：§2.2-A 词表收窄 + canon 豁免（三例判定单测齐）；§2.2-B 基线单源（HUMAN_BASELINE 52,464 实测值进 lint.js，checkup.js 字段映射 + charLen 口径，client.js 4 处硬编码 + console 夹具同步，恒真断言改锁字面量）；§2.2-B Step 3 maxChars 100→60（与基线同批）；§2.2-C/决策 ①②（句号 0 + venues 落地）；whale 快照重导；`selfcorrect.js` 两处基线兜底字面量同步（核验未点名，但属同病）。
+- **第 3 批**：见 §7.2。
+- **第 4 批**：§4.4 `bili_ledger_append` 引入 LedgerEventInput 判别联合（8 类 type 的 JSON Schema 前置可见）；§4.1 工具集快照测试（`test/mcp.tools-snapshot.test.js`，list_tools 35 个 name+schema 逐字节锁定）——**拆包本体不执行**（P3 工程债，快照网已建，后续拆包逐模块提交时用）；§4.5 按 §7.1 决策 4 暂缓。
+
+> 边界更新：§0.3 表中"待验证"三项均已定案——§2.1 可行性（实验定案，方案 B 落地）、venues 去留（决策 A 落地）、client.js 构建（决策 B 暂缓）。

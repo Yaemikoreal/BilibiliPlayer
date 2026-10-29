@@ -792,6 +792,8 @@ export const dutyToolList = (cfg) => {
   add('bili_persona_lore')
   // 2026-10-29（§16.5-1/2）：内容源一次拉齐 + 宿主侧记账/报告（省调用、免手写 JSONL/Markdown）
   add('bili_feed', 'bili_ledger_append', 'bili_report_append')
+  // 2026-10-29 核验 §2.1 方案 B：发后复核走"轮末调一次工具"，不补进白名单 = 链路永远闭合不了
+  add('bili_verify_recent_comments')
   return list
 }
 
@@ -1333,9 +1335,6 @@ const runDuty = async (why = 'manual') => {
           : (rawCode === 0 ? '' : `本轮退出码 ${rawCode}`),
       })
       try { overviewHub.publish('round-end') } catch { /* 兜住 */ }
-      // ⭐ 90 秒后复核（评论区压审对策）；不拖住宿主退出
-      const t = setTimeout(() => { verifyRecentSafe('round').catch(() => {}) }, 90_000)
-      t.unref?.()
     })
     // ⭐ 只记「本轮开始时间」；lastRunAt/lastCode/lastDurationMs 是**上一轮的结果**，轮末才写。
     //    旧版两处都写 lastRunAt，于是运行中概览显示「本轮开始时间 + 上一轮退出码」。
@@ -1419,18 +1418,6 @@ const heartbeat = () => {
     } else {
       heartbeat.missingSince = 0
     }
-  } catch { /* 兜住 */ }
-}
-
-/* ───────────────────────── 发后复核（占位：V1.5 用只读接口核对可见性） ───────────────────────── */
-
-const verifyRecentSafe = async (why) => {
-  // v1 先落日志桩：真正用 /x/v2/reply/main 复核在 V1.5 接入（需要 JS 直连 B站 + 凭证）
-  try {
-    const st = readJson(STATE_FILE, {})
-    const lastComments = st.commentsToVerify || []
-    if (!lastComments.length) return
-    log(`复核桩（${why}）：待核 ${lastComments.length} 条（V1.5 接入真实复核）`)
   } catch { /* 兜住 */ }
 }
 

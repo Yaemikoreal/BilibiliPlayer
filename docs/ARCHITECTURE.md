@@ -94,7 +94,7 @@
 | 轮次生命周期 | `index.js:1161` `runDuty` + `index.js:1290-1362` 收尾 | 20 分钟硬超时、SIGTERM→强杀进程树、占位报告、报告兜底回填 |
 | 回复通知轮询 | `index.js:1363` 起（每 5 分钟） | 拉 msgfeed → `reply-in` 事件，失败退避（`lib/replies.js:9` 1→5→15 分钟） |
 | 心跳自愈 | `index.js:1408` | `running=true` 但子进程已消失 ⇒ 纠正状态 |
-| 发后复核（对抗压审） | `index.js:1427` `verifyRecentSafe` | **当前是日志桩**，真实只读复核计划 V1.5（见 §8.2） |
+| 发后复核（对抗压审） | `mcp_server.py` `bili_verify_recent_comments` | 2026-10-29 核验 §2.1 方案 B：`bili_reply` 成功自动进 `verify-pending.jsonl`，**轮末模型调一次工具**核对登录态可见性（E1–E4 实验后废弃 90s 定时器与 `verifyRecentSafe` 死代码）；详见 duty.md「发后复核」 |
 
 ### 2.6 可观测与控制台
 
@@ -214,7 +214,7 @@ sequenceDiagram
     R->>F: round-end 事件 + 占位报告（缺报告时）
     R->>F: backfillFromReport（解析日报兜底回填 view/skip/接话）
     R->>F: 人设用量 pending → 轮末转正
-    R->>R: 90s 后 verifyRecentSafe（当前为日志桩）
+    R->>M: 轮末调 bili_verify_recent_comments（发后复核，结果进当轮报告）
     F-->>T: 下一跳重新计算「下一轮」
 ```
 
@@ -651,12 +651,13 @@ append-only，一行一事件。`bili_ledger_append` 的必填字段表来自 `m
 |---|---|---|
 | `ledger.jsonl`(+`.old`) | 账本（5MB 轮转） | MCP 记账工具 / 宿主回填 |
 | `duty.log`(+`.old`) | 宿主值班日志（512KB 轮转） | 宿主 |
-| `state.json` | 运行态：`lastRunAt/lastCode/scheduleRuns/windows/lastRunStartedAt/commentsToVerify…` | 宿主 |
+| `state.json` | 运行态：`lastRunAt/lastCode/scheduleRuns/windows/lastRunStartedAt…` | 宿主 |
 | `config.json` | 运行时配置覆盖层（控制台保存写这里） | 控制台 |
 | `out/<日期>.md` | 日报（人读 + 兜底回填源） | `bili_report_append` |
 | `digest/<年-月>.md` | 月度归档 | 宿主 |
 | `headless-overlay.yml` | 上/本周期的 headless profile 补丁（诊断页可看） | 宿主 |
 | `seen.md` | 判重表（人工可读档案） | Agent |
+| `verify-pending.jsonl` | 发后复核待核队列（`bili_reply` 成功自动写入；7 天 TTL；`bili_verify_recent_comments` 核对后出队） | MCP 工具 |
 | `persona/` | `active.json` `card.json` `state.json` `lint-rules.json` `expression-bank.json` `lore/` `growth-pending.jsonl` `versions/` | 宿主 / 控制台 |
 
 ### 6.3 配置项（分组速查，Schema 见 `index.js:165-258`）
@@ -696,11 +697,11 @@ append-only，一行一事件。`bili_ledger_append` 的必填字段表来自 `m
 
 | 说法 | 代码事实 |
 |---|---|
-| 根 README：「29 个工具」 | 实测 **34** 个（含 5 个值班/人设专用） |
-| `dsh-plugin/README.md`：「32 个」 | 同上，34 |
+| 根 README：「29 个工具」 | 实测 **35** 个（含值班/人设/发后复核专用；2026-10-30 新增 `bili_verify_recent_comments`） |
+| `dsh-plugin/README.md`：「32 个」 | 同上，35 |
 | 根 README：「控制台 7 页」 | 当前 **5 页**（实时并入概览、判重表并入活动、人设工作室拆为人设页 3 子页） |
-| `dsh-plugin/README.md`：「结束 90 秒后宿主复核（对抗压审）」 | 90s 定时器在（`index.js:1337`），但 `verifyRecentSafe`（`:1427`）**目前是日志桩**，真实只读复核待 V1.5 |
-| 人设 v4.0.0 | 只在 `persona-snapshots/` 存档；活跃卡 `prompts/persona/whale.card.json` 仍是 **v3.0.0** |
+| `dsh-plugin/README.md`：「结束 90 秒后宿主复核（对抗压审）」 | 已被 §2.1 方案 B 取代（2026-10-29 核验）：`bili_reply` 自动进 `verify-pending.jsonl`，轮末调 `bili_verify_recent_comments` 核对；90s 定时器与死代码桩已删除 |
+| 人设 v4.0.0 | 只在 `persona-snapshots/` 存档；活跃卡 `prompts/persona/whale.card.json` 已是 **v4.0.0**（2026-10-29 语料重构定稿） |
 
 ### 8.3 设计边界（不是 bug，是选择）
 

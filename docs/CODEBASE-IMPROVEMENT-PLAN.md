@@ -5,6 +5,8 @@
 > **基线版本**：`main` @ `76b8995` ｜ DSH 插件 `v0.7.0` / MCP Server `34 工具集`  
 > **面向对象**：核心维护者、架构师、自动化运维及二次开发者  
 > **权威顺序**：`代码 > ARCHITECTURE.md > 本白皮书 > README.md`
+>
+> ⚠️ **2026-10-30 核验与落地**：本白皮书已按 [docs/analysis/2026-10-29-improvement-plan-audit.md](<./analysis/2026-10-29-improvement-plan-audit.md>)（`AUDIT-2026-10-29-IMPROVEMENT`）逐条核验并**降级为议题清单**——它的统计与耗时数字有偏差、两条因果链有误（详见核验文档第 0 章与附录 A）。第二、四章各项已按核验文档的批次方案落地或定案：§2.1 发后复核经 E1–E4 实验**免登录方案不可行**，已按方案 B 实现（`bili_verify_recent_comments`，登录态核对）；§2.2 基线/venues/句号政策已按决策 ①② 落地。落地回执见核验文档 §7。
 
 ---
 
