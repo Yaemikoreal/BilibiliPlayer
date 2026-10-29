@@ -1,0 +1,2720 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B站分身控制台 · DSH 官方高保真全功能交互原型 (Design v4+)</title>
+  <style>
+    /* ══════════════════════════════════════════════════════════════════
+       §1 DSH (DeepSeek Harness) 官方设计系统 Token 映射与样式表
+       标准规范：960px 视窗居中 · 宿主 --dsw-* Token · 双档材质
+       ══════════════════════════════════════════════════════════════════ */
+    :root {
+      /* 浅色主题 (Light) */
+      --dsw-alias-bg-base: #ffffff;
+      --dsw-alias-bg-layer-1: #ffffff;
+      --dsw-alias-bg-layer-2: #f6f7f9;
+      --dsw-alias-bg-layer-3: #ffffff;
+      --dsw-alias-bg-module-platform: #f0f2f5;
+      --dsw-alias-bg-overlay: #e4e7ed;
+      --dsw-alias-border-l1: rgba(0, 0, 0, 0.05);
+      --dsw-alias-border-l2: rgba(0, 0, 0, 0.09);
+      --dsw-alias-border-l3: rgba(0, 0, 0, 0.15);
+      --dsw-alias-border-l4: rgba(0, 0, 0, 0.22);
+      --dsw-alias-label-primary: #0f1115;
+      --dsw-alias-label-secondary: #4b515d;
+      --dsw-alias-label-tertiary: #767d8d;
+      --dsw-alias-label-caption: #9ea5b4;
+      --dsw-alias-label-dimmed: #c5cbd6;
+      --dsw-alias-label-primary-foreground: #ffffff;
+      --dsw-alias-brand-primary: #0f1115;
+      --dsw-alias-button-primary-hover: #262a33;
+      --dsw-alias-interactive-bg-hover: rgba(38, 49, 72, 0.05);
+      --dsw-alias-interactive-bg-active: rgba(38, 49, 72, 0.10);
+      --dsw-alias-settings-card-fill: #f8f9fa;
+      --dsw-alias-settings-card-stroke: rgba(0, 0, 0, 0.09);
+      --dsw-alias-state-business-primary: #2563eb;
+      --dsw-alias-state-business-tertiary: #eff6ff;
+      --dsw-alias-state-success-primary: #16a34a;
+      --dsw-alias-state-success-tertiary: #f0fdf4;
+      --dsw-alias-state-warn-primary: #d97706;
+      --dsw-alias-state-warn-tertiary: #fffbeb;
+      --dsw-alias-state-error-primary: #dc2626;
+      --dsw-alias-state-error-tertiary: #fef2f2;
+      --dsw-alias-state-idle-primary: #94a3b8;
+      --dsw-alias-switch-thumb: #ffffff;
+      --dsw-focus-ring-color: #2563eb;
+      --dsw-elevation-soft: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+      --dsw-elevation-card: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -2px rgba(0,0,0,0.03);
+      --bili-pink: #fb7299;
+      --bili-blue: #23ade5;
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-code: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace;
+      --transition-fast: 0.16s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    html[data-theme="dark"] {
+      /* 深色主题 (Dark) */
+      --dsw-alias-bg-base: #141416;
+      --dsw-alias-bg-layer-1: #1e1f22;
+      --dsw-alias-bg-layer-2: #27282b;
+      --dsw-alias-bg-layer-3: #313236;
+      --dsw-alias-bg-module-platform: #2a2b2f;
+      --dsw-alias-bg-overlay: #38393e;
+      --dsw-alias-border-l1: rgba(255, 255, 255, 0.06);
+      --dsw-alias-border-l2: rgba(255, 255, 255, 0.11);
+      --dsw-alias-border-l3: rgba(255, 255, 255, 0.17);
+      --dsw-alias-border-l4: rgba(255, 255, 255, 0.25);
+      --dsw-alias-label-primary: #f8fafc;
+      --dsw-alias-label-secondary: #cbd5e1;
+      --dsw-alias-label-tertiary: #94a3b8;
+      --dsw-alias-label-caption: #64748b;
+      --dsw-alias-label-dimmed: #475569;
+      --dsw-alias-label-primary-foreground: #0f1115;
+      --dsw-alias-brand-primary: #f8fafc;
+      --dsw-alias-button-primary-hover: #e2e8f0;
+      --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.07);
+      --dsw-alias-interactive-bg-active: rgba(255, 255, 255, 0.13);
+      --dsw-alias-settings-card-fill: #212226;
+      --dsw-alias-settings-card-stroke: rgba(255, 255, 255, 0.10);
+      --dsw-alias-state-business-primary: #60a5fa;
+      --dsw-alias-state-business-tertiary: #172554;
+      --dsw-alias-state-success-primary: #4ade80;
+      --dsw-alias-state-success-tertiary: #052e16;
+      --dsw-alias-state-warn-primary: #fbbf24;
+      --dsw-alias-state-warn-tertiary: #451a03;
+      --dsw-alias-state-error-primary: #f87171;
+      --dsw-alias-state-error-tertiary: #450a0a;
+      --dsw-alias-state-idle-primary: #64748b;
+      --dsw-alias-switch-thumb: #e2e8f0;
+      --dsw-focus-ring-color: #60a5fa;
+      --dsw-elevation-soft: 0 1px 3px rgba(0,0,0,0.4);
+      --dsw-elevation-card: 0 4px 6px -1px rgba(0,0,0,0.35);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--dsw-alias-bg-base);
+      color: var(--dsw-alias-label-primary);
+      font-family: var(--font-family);
+      font-size: 13px;
+      line-height: 20px;
+      -webkit-font-smoothing: antialiased;
+      overflow-y: scroll;
+    }
+
+    /* 顶部 Demo 控制台辅助工具条 */
+    .demo-bar {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      background: var(--dsw-alias-bg-layer-2);
+      border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+      padding: 7px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      box-shadow: var(--dsw-elevation-soft);
+    }
+    .demo-bar-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       DSH 标准视窗容器规范 (960px 居中 · clamp 边距)
+       ══════════════════════════════════════════════════════════════════ */
+    .app-viewport {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px clamp(16px, 3.5vw, 36px) 64px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* 页头区域 (PageHeader) */
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .page-title-group h1 {
+      font-size: 20px;
+      font-weight: 600;
+      line-height: 28px;
+      color: var(--dsw-alias-label-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .page-title-group p {
+      font-size: 13px;
+      line-height: 20px;
+      color: var(--dsw-alias-label-tertiary);
+      margin-top: 2px;
+    }
+    .page-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    /* 一级导航页签 (Tabs - 宿主下划线风格) */
+    .nav-tabs {
+      display: flex;
+      align-items: flex-end;
+      gap: 22px;
+      border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+      margin-top: -2px;
+    }
+    .nav-tab-item {
+      position: relative;
+      background: none;
+      border: 0;
+      padding: 7px 2px 9px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--dsw-alias-label-tertiary);
+      cursor: pointer;
+      transition: color var(--transition-fast);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .nav-tab-item:hover { color: var(--dsw-alias-label-primary); }
+    .nav-tab-item.active {
+      color: var(--dsw-alias-label-primary);
+      font-weight: 600;
+    }
+    .nav-tab-item.active::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -1px;
+      height: 2px;
+      background: var(--dsw-alias-brand-primary);
+      border-radius: 2px 2px 0 0;
+    }
+
+    /* 二级分段控件 (Segmented Controls) */
+    .sub-segmented {
+      display: inline-flex;
+      background: var(--dsw-alias-interactive-bg-hover);
+      padding: 3px;
+      border-radius: 10px;
+      gap: 2px;
+    }
+    .sub-seg-btn {
+      border: 0;
+      background: transparent;
+      padding: 4px 12px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--dsw-alias-label-secondary);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      white-space: nowrap;
+    }
+    .sub-seg-btn:hover { color: var(--dsw-alias-label-primary); }
+    .sub-seg-btn.active {
+      background: var(--dsw-alias-bg-layer-1);
+      color: var(--dsw-alias-label-primary);
+      box-shadow: var(--dsw-elevation-soft);
+      font-weight: 600;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       通用组件族：按钮、胶囊、开关、步进器、状态条
+       ══════════════════════════════════════════════════════════════════ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      height: 32px;
+      padding: 0 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 0.5px solid var(--dsw-alias-border-l3);
+      background: transparent;
+      color: var(--dsw-alias-label-primary);
+      transition: all var(--transition-fast);
+      white-space: nowrap;
+      user-select: none;
+    }
+    .btn:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .btn:active { background: var(--dsw-alias-interactive-bg-active); }
+    .btn.sm { height: 26px; padding: 0 9px; font-size: 12px; border-radius: 7px; }
+    .btn.primary {
+      background: var(--dsw-alias-brand-primary);
+      color: var(--dsw-alias-label-primary-foreground);
+      border-color: transparent;
+    }
+    .btn.primary:hover { background: var(--dsw-alias-button-primary-hover); }
+    .btn.ghost { border-color: transparent; color: var(--dsw-alias-label-secondary); }
+    .btn.ghost:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .btn.danger {
+      color: var(--dsw-alias-state-error-primary);
+      border-color: rgba(220, 38, 38, 0.3);
+      background: rgba(220, 38, 38, 0.05);
+    }
+    .btn.danger:hover { background: rgba(220, 38, 38, 0.12); }
+
+    /* 胶囊 Pill & 标签 Tag */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--dsw-alias-label-secondary);
+      background: var(--dsw-alias-bg-module-platform);
+      white-space: nowrap;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .dot.running, .dot.ok { background: var(--dsw-alias-state-success-primary); box-shadow: 0 0 6px var(--dsw-alias-state-success-primary); }
+    .dot.idle, .dot.off { background: var(--dsw-alias-state-idle-primary); }
+    .dot.warn { background: var(--dsw-alias-state-warn-primary); }
+    .dot.err { background: var(--dsw-alias-state-error-primary); }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 16px;
+      font-weight: 500;
+      white-space: nowrap;
+      background: var(--dsw-alias-bg-module-platform);
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .tag.cmt { background: rgba(37, 99, 235, 0.12); color: var(--dsw-alias-state-business-primary); }
+    .tag.rep { background: rgba(22, 163, 74, 0.12); color: var(--dsw-alias-state-success-primary); }
+    .tag.warn { background: rgba(217, 119, 6, 0.12); color: var(--dsw-alias-state-warn-primary); }
+    .tag.err { background: rgba(220, 38, 38, 0.12); color: var(--dsw-alias-state-error-primary); }
+    .tag.like { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+
+    .grade-tag {
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .grade-tag.worth { background: rgba(37, 99, 235, 0.15); color: var(--dsw-alias-state-business-primary); }
+    .grade-tag.ok { background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary); }
+    .grade-tag.meh { background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-tertiary); }
+
+    /* DSH 官方状态信封条 (bf-statusline) */
+    .status-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+    .fresh-badge {
+      font-size: 11px;
+      font-family: var(--font-code);
+      color: var(--dsw-alias-label-caption);
+      margin-left: auto;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       卡片材质：只两档 (bf-card: 16px / bf-scard 设置卡: 20px)
+       ══════════════════════════════════════════════════════════════════ */
+    .card {
+      background: var(--dsw-alias-bg-layer-1);
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      border-radius: 16px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .card.p0 {
+      background: var(--dsw-alias-settings-card-fill);
+      border-color: var(--dsw-alias-settings-card-stroke);
+    }
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+      color: var(--dsw-alias-label-primary);
+    }
+    .card-note {
+      font-size: 12px;
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .card-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 10px;
+      margin-top: 2px;
+      border-top: 0.5px solid var(--dsw-alias-border-l2);
+      font-size: 12px;
+      color: var(--dsw-alias-label-tertiary);
+      flex-wrap: wrap;
+    }
+
+    /* 黄金比例中枢布局 */
+    .cockpit-grid {
+      display: grid;
+      grid-template-columns: 1.35fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    @media (max-width: 840px) {
+      .cockpit-grid { grid-template-columns: 1fr; }
+    }
+
+    /* 账号头部 */
+    .account-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--bili-blue), var(--bili-pink));
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 18px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+    .account-meta { flex: 1; min-width: 0; }
+    .account-meta h3 {
+      font-size: 15px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .account-meta p {
+      font-size: 12px;
+      color: var(--dsw-alias-label-tertiary);
+      margin-top: 2px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .level-tag {
+      font-size: 10px;
+      font-weight: 700;
+      background: #fb7299;
+      color: #fff;
+      padding: 0 5px;
+      border-radius: 4px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+    }
+    .vip-tag {
+      font-size: 10px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #ff5c7c, #ff85a0);
+      color: #fff;
+      padding: 0 5px;
+      border-radius: 4px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    /* 阶段推进轨 (Stage Track) */
+    .stage-track {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      margin-top: 6px;
+      position: relative;
+    }
+    .stage-step {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .stage-bar {
+      height: 4px;
+      background: var(--dsw-alias-border-l2);
+      border-radius: 2px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stage-step.done .stage-bar { background: var(--dsw-alias-state-business-primary); }
+    .stage-step.active .stage-bar {
+      background: var(--dsw-alias-state-business-primary);
+      animation: pulseBar 1.5s infinite;
+    }
+    @keyframes pulseBar {
+      0%, 100% { opacity: 0.55; }
+      50% { opacity: 1; }
+    }
+    .stage-label {
+      font-size: 11px;
+      color: var(--dsw-alias-label-tertiary);
+      display: flex;
+      justify-content: space-between;
+    }
+    .stage-step.done .stage-label, .stage-step.active .stage-label {
+      color: var(--dsw-alias-label-primary);
+      font-weight: 500;
+    }
+
+    /* 实时轻量事件流 Trace 视窗 */
+    .trace-container {
+      border: 0.5px solid var(--dsw-alias-border-l1);
+      border-radius: 10px;
+      background: var(--dsw-alias-bg-module-platform);
+      padding: 10px 12px;
+      font-family: var(--font-code);
+      font-size: 11.5px;
+      line-height: 18px;
+      max-height: 220px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .trace-line {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      word-break: break-all;
+    }
+    .trace-time { color: var(--dsw-alias-label-caption); flex-shrink: 0; }
+    .trace-badge {
+      font-size: 10px;
+      padding: 0 5px;
+      border-radius: 4px;
+      line-height: 14px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .trace-badge.tool { background: rgba(37, 99, 235, 0.15); color: var(--dsw-alias-state-business-primary); }
+    .trace-badge.host { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+    .trace-badge.reasoning { background: rgba(148, 163, 184, 0.15); color: var(--dsw-alias-label-tertiary); }
+    .trace-badge.ok { background: rgba(22, 163, 74, 0.15); color: var(--dsw-alias-state-success-primary); }
+    .trace-badge.err { background: rgba(220, 38, 38, 0.15); color: var(--dsw-alias-state-error-primary); }
+    .trace-content { color: var(--dsw-alias-label-secondary); flex: 1; }
+
+    /* 指标瓦片网格 (3x2 矩阵无孤儿) */
+    .metric-grid-6 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    @media (max-width: 600px) {
+      .metric-grid-6 { grid-template-columns: repeat(2, 1fr); }
+    }
+    .metric-tile {
+      background: var(--dsw-alias-bg-layer-1);
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .metric-title {
+      font-size: 11px;
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .metric-val {
+      font-size: 18px;
+      font-weight: 600;
+      line-height: 24px;
+      color: var(--dsw-alias-label-primary);
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+    }
+    .metric-val small {
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--dsw-alias-label-caption);
+    }
+    .progress-track {
+      height: 3px;
+      background: var(--dsw-alias-border-l2);
+      border-radius: 999px;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--dsw-alias-state-business-primary);
+      border-radius: 999px;
+    }
+    .progress-fill.warn { background: var(--dsw-alias-state-warn-primary); }
+    .progress-fill.over { background: var(--dsw-alias-state-error-primary); }
+
+    /* 今日真实发出的评论列表 */
+    .said-item {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 8px 0;
+      border-top: 0.5px solid var(--dsw-alias-border-l2);
+    }
+    .said-item:first-child { border-top: none; padding-top: 2px; }
+    .said-text {
+      font-size: 12.5px;
+      line-height: 18px;
+      color: var(--dsw-alias-label-primary);
+    }
+    .said-meta {
+      font-size: 11px;
+      color: var(--dsw-alias-label-caption);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Sparkline 7天存在感柱状图 */
+    .spark-wrap {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      height: 48px;
+      margin-top: 6px;
+      padding-top: 4px;
+    }
+    .spark-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      height: 100%;
+      justify-content: flex-end;
+    }
+    .spark-bar {
+      width: 100%;
+      max-width: 20px;
+      background: var(--dsw-alias-state-business-primary);
+      border-radius: 3px 3px 0 0;
+      min-height: 4px;
+      transition: height 0.3s ease;
+    }
+    .spark-label {
+      font-size: 10px;
+      color: var(--dsw-alias-label-caption);
+      font-family: var(--font-code);
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       TAB 2: 活动链路 (Activity)
+       ══════════════════════════════════════════════════════════════════ */
+    .act-card {
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      border-radius: 14px;
+      background: var(--dsw-alias-bg-layer-1);
+      overflow: hidden;
+      transition: border-color var(--transition-fast);
+    }
+    .act-card:hover { border-color: var(--dsw-alias-border-l3); }
+    .act-summary {
+      padding: 12px 14px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      user-select: none;
+    }
+    .act-top-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .act-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--dsw-alias-label-primary);
+    }
+    .act-meta {
+      font-size: 11.5px;
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .act-detail-body {
+      padding: 12px 14px;
+      border-top: 0.5px solid var(--dsw-alias-border-l2);
+      background: var(--dsw-alias-bg-layer-2);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* 生命周期 7 站指示条 (Stage Rail) */
+    .stage-rail {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      margin: 4px 0 6px;
+      position: relative;
+    }
+    .rail-step {
+      position: relative;
+      padding-top: 14px;
+      text-align: left;
+    }
+    .rail-step::before {
+      content: "";
+      position: absolute;
+      top: 4px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--dsw-alias-border-l2);
+    }
+    .rail-step:first-child::before { left: 5px; }
+    .rail-step:last-child::before { right: calc(100% - 5px); }
+    .rail-step b {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--dsw-alias-bg-base);
+      box-shadow: inset 0 0 0 1.5px var(--dsw-alias-state-idle-primary);
+    }
+    .rail-step.done b { background: var(--dsw-alias-state-business-primary); box-shadow: none; }
+    .rail-step span { display: block; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+    .rail-step.done span { color: var(--dsw-alias-label-primary); font-weight: 500; }
+    .rail-step em { display: block; font-size: 10px; color: var(--dsw-alias-label-caption); font-style: normal; font-family: var(--font-code); }
+
+    /* 对话气泡 (ReplyThread) */
+    .thread-box {
+      border-left: 2px solid var(--dsw-alias-border-l3);
+      padding-left: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .thread-msg {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+      line-height: 18px;
+      align-items: baseline;
+    }
+    .msg-sender { font-weight: 600; color: var(--dsw-alias-label-secondary); flex-shrink: 0; }
+    .msg-sender.mine { color: var(--dsw-alias-state-business-primary); }
+    .msg-sender.target { color: var(--dsw-alias-state-success-primary); }
+    .msg-bubble {
+      color: var(--dsw-alias-label-primary);
+      flex: 1;
+    }
+    .msg-bubble.mine {
+      background: rgba(37, 99, 235, 0.08);
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+
+    /* 判重表 (Seen Table) */
+    .seen-tbl-wrap {
+      max-height: 520px;
+      overflow-y: auto;
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      border-radius: 12px;
+    }
+    .seen-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .seen-table th {
+      position: sticky;
+      top: 0;
+      background: var(--dsw-alias-bg-layer-2);
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--dsw-alias-label-tertiary);
+      border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+      font-weight: 500;
+    }
+    .seen-table td {
+      padding: 8px 12px;
+      border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+      color: var(--dsw-alias-label-secondary);
+      vertical-align: top;
+    }
+    .seen-table tr:hover td { background: var(--dsw-alias-interactive-bg-hover); }
+    .seen-table td.mono { font-family: var(--font-code); font-size: 11px; }
+
+    /* ══════════════════════════════════════════════════════════════════
+       TAB 3: 日报 (Reports)
+       ══════════════════════════════════════════════════════════════════ */
+    .reports-split {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    @media (max-width: 760px) {
+      .reports-split { grid-template-columns: 1fr; }
+    }
+    .report-menu-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12.5px;
+      color: var(--dsw-alias-label-secondary);
+      transition: all var(--transition-fast);
+      user-select: none;
+    }
+    .report-menu-item:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .report-menu-item.active {
+      background: var(--dsw-alias-interactive-bg-active);
+      color: var(--dsw-alias-label-primary);
+      font-weight: 600;
+    }
+    .markdown-view {
+      font-size: 13px;
+      line-height: 22px;
+      color: var(--dsw-alias-label-primary);
+    }
+    .markdown-view h2 { font-size: 17px; margin: 14px 0 6px; font-weight: 600; }
+    .markdown-view h3 { font-size: 14px; margin: 10px 0 4px; font-weight: 600; color: var(--dsw-alias-state-business-primary); }
+    .markdown-view ul { padding-left: 20px; margin: 6px 0; }
+    .markdown-view li { margin-bottom: 4px; }
+    .markdown-view code {
+      font-family: var(--font-code);
+      background: var(--dsw-alias-bg-module-platform);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       TAB 4: 人设工作室 (Persona)
+       ══════════════════════════════════════════════════════════════════ */
+    .prompt-box {
+      font-family: var(--font-code);
+      font-size: 11px;
+      line-height: 18px;
+      background: var(--dsw-alias-bg-module-platform);
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      border-radius: 10px;
+      padding: 12px;
+      color: var(--dsw-alias-label-secondary);
+      max-height: 280px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .budget-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11.5px;
+      margin-bottom: 4px;
+    }
+    .budget-name { width: 90px; color: var(--dsw-alias-label-tertiary); }
+    .budget-track { flex: 1; height: 6px; background: var(--dsw-alias-border-l2); border-radius: 3px; overflow: hidden; }
+    .budget-fill { height: 100%; background: var(--dsw-alias-state-business-primary); border-radius: 3px; }
+    .budget-num { width: 80px; text-align: right; font-family: var(--font-code); color: var(--dsw-alias-label-caption); }
+
+    /* 见闻卡与弹药库 */
+    .lore-card {
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: var(--dsw-alias-bg-layer-2);
+    }
+    .lore-top {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .lore-keys {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      margin-top: 2px;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       TAB 5: 设置 (Settings)
+       ══════════════════════════════════════════════════════════════════ */
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+      gap: 16px;
+    }
+    .setting-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .setting-label { font-weight: 600; font-size: 13px; color: var(--dsw-alias-label-primary); }
+    .setting-help { font-size: 11.5px; color: var(--dsw-alias-label-tertiary); margin-top: 2px; }
+
+    /* DSH 步进器 Num & 开关 Switch */
+    .dsh-switch {
+      position: relative;
+      display: inline-flex;
+      width: 36px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--dsw-alias-border-l3);
+      cursor: pointer;
+      transition: background var(--transition-fast);
+      flex-shrink: 0;
+      border: none;
+      outline: none;
+      padding: 2px;
+    }
+    .dsh-switch.on { background: var(--dsw-alias-brand-primary); }
+    .dsh-switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: var(--dsw-alias-switch-thumb);
+      transition: transform var(--transition-fast);
+    }
+    .dsh-switch.on::after {
+      transform: translateX(16px);
+      background: var(--dsw-alias-label-primary-foreground);
+    }
+
+    .dsh-stepper {
+      display: inline-flex;
+      align-items: center;
+      border: 0.5px solid var(--dsw-alias-border-l3);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--dsw-alias-bg-module-platform);
+      height: 28px;
+    }
+    .dsh-stepper button {
+      width: 26px;
+      height: 100%;
+      border: none;
+      background: transparent;
+      color: var(--dsw-alias-label-secondary);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .dsh-stepper button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .dsh-stepper span {
+      width: 38px;
+      text-align: center;
+      font-family: var(--font-code);
+      font-size: 12px;
+      color: var(--dsw-alias-label-primary);
+    }
+
+    .weekdays-group {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .weekday-btn {
+      width: 36px;
+      height: 28px;
+      border-radius: 6px;
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      background: transparent;
+      font-size: 11.5px;
+      color: var(--dsw-alias-label-secondary);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .weekday-btn.active {
+      background: var(--dsw-alias-brand-primary);
+      color: var(--dsw-alias-label-primary-foreground);
+      border-color: transparent;
+      font-weight: 600;
+    }
+
+    /* 诊断表格 */
+    .diag-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .diag-table th {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+      color: var(--dsw-alias-label-tertiary);
+      font-weight: 500;
+    }
+    .diag-table td {
+      padding: 8px 10px;
+      border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+      color: var(--dsw-alias-label-secondary);
+    }
+    .diag-table tr:hover td { background: var(--dsw-alias-interactive-bg-hover); }
+
+    /* 视图切换辅助 */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: flex; flex-direction: column; gap: 14px; }
+  </style>
+</head>
+<body>
+
+  <!-- Demo 顶层交互辅助控制栏 -->
+  <aside class="demo-bar">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-weight:600;color:var(--dsw-alias-label-primary);">B站分身控制台 · DSH 官方全功能高保真交互原型</span>
+      <span class="pill">960px 标准视窗 · 5 大核心功能域全量覆盖 · 真实业务数据深度还原</span>
+    </div>
+    <div class="demo-bar-actions">
+      <button class="btn sm" onclick="toggleTheme()">🌓 切换深浅主题</button>
+      <button class="btn sm" id="toggleStateBtn" onclick="toggleRunningState()">⚡ 切换 运行中/空闲</button>
+      <button class="btn sm" onclick="runSimulatedDiagnostics()">🩺 一键 10 项系统自检</button>
+    </div>
+  </aside>
+
+  <!-- DSH 插件宿主视窗 -->
+  <main class="app-viewport">
+    
+    <!-- 统一页头 (PageHeader) -->
+    <header class="page-header">
+      <div class="page-title-group">
+        <h1>
+          B站分身
+          <span class="pill" id="headerStatusPill"><span class="dot running"></span> 自动值班开</span>
+          <span class="pill" style="font-size:11px;font-family:var(--font-code);">seq 1287 · SSE 直连</span>
+          <span class="tag rep">0.08ms 账本索引</span>
+        </h1>
+        <p>让小号在B站保持拟人存在感 · 先发后报，可随时接管 · 纯本地 API · 三层硬判重</p>
+      </div>
+      <div class="page-toolbar">
+        <button class="btn sm" onclick="triggerCredentialCheck()">⟳ 检查凭证</button>
+        <button class="btn sm" onclick="alert('已重新同步 ledger.jsonl 与本地素材库')">刷新数据</button>
+        <button class="btn sm primary" id="headerActionBtn" onclick="toggleRunningState()">跑一轮</button>
+      </div>
+    </header>
+
+    <!-- 一级导航 Tabs (概览、活动、日报、人设、设置) -->
+    <nav class="nav-tabs">
+      <button class="nav-tab-item active" onclick="switchNavTab('overview', this)">
+        <span>概览中枢</span>
+      </button>
+      <button class="nav-tab-item" onclick="switchNavTab('activity', this)">
+        <span>活动链路</span>
+        <span class="pill" style="height:18px;padding:0 5px;">3 条视频</span>
+      </button>
+      <button class="nav-tab-item" onclick="switchNavTab('reports', this)">
+        <span>值班日报</span>
+        <span class="pill" style="height:18px;padding:0 5px;">4 篇归档</span>
+      </button>
+      <button class="nav-tab-item" onclick="switchNavTab('persona', this)">
+        <span>人设工作室</span>
+        <span class="pill" style="height:18px;padding:0 5px;color:var(--dsw-alias-state-success-primary);">whale@4.0.0</span>
+      </button>
+      <button class="nav-tab-item" onclick="switchNavTab('settings', this)">
+        <span>排班与自检</span>
+      </button>
+    </nav>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         TAB 1: 概览中枢 (Overview)
+         ══════════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel active" id="tab-overview">
+      
+      <!-- 状态信封横条 (bf-statusline) -->
+      <div class="status-strip">
+        <span class="pill" id="pillState"><span class="dot running"></span> 运行中</span>
+        <span class="pill"><span class="dot ok"></span> 自动值班开</span>
+        <span class="pill">下一轮 中午 12:00（2h54m 后）</span>
+        <span class="pill"><span class="dot ok"></span> 蓝鱼小号 (已登录)</span>
+        <span class="fresh-badge">数据产生于 24ms 前 · seq 1287 · SSE 直连</span>
+      </div>
+
+      <!-- 账号横幅卡片 (AccountCard) -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">当前账号</span>
+          <span class="card-note">凭证有效 · 检查于 12:28:00</span>
+          <div style="flex:1;"></div>
+          <button class="btn sm ghost" onclick="alert('触发重新扫码登录弹窗（B站官方二维码接口已就绪）')">重新登录</button>
+        </div>
+        <div class="account-row">
+          <div class="avatar">蓝</div>
+          <div class="account-meta">
+            <h3>
+              蓝鱼小号
+              <span class="level-tag">LV6</span>
+              <span class="vip-tag">大会员</span>
+            </h3>
+            <p>
+              <span>UID: 10000001</span>
+              <span>·</span>
+              <span>粉丝 1,420</span>
+              <span>·</span>
+              <span>关注 142</span>
+              <span>·</span>
+              <span>硬币 3,280</span>
+            </p>
+          </div>
+          <div style="text-align:right;">
+            <span class="tag rep">已登录状态有效</span>
+            <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">无风控告警</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 黄金分割驾驶舱 -->
+      <div class="cockpit-grid">
+        
+        <!-- 左侧中枢 (60%)：运行详情 (RunningDetail) -->
+        <div class="card p0" id="runningDetailCard">
+          <div class="card-head">
+            <span class="card-title">运行详情</span>
+            <span class="pill" id="liveStatePill"><span class="dot running"></span> 运行中</span>
+            <span class="tag warn" id="pollFallbackTag" style="display:none;">降级轮询</span>
+            <span style="font-family:var(--font-code);font-size:15px;font-weight:600;" id="liveClockDisplay">03:14</span>
+            <span class="card-note" id="phaseSubNote">· 看内容</span>
+            <div style="flex:1;"></div>
+            <span class="card-note">自动滚动</span>
+            <button class="dsh-switch on" id="autoScrollSwitch" onclick="toggleAutoScroll()"></button>
+            <button class="btn sm danger" onclick="toggleRunningState()">中止本轮</button>
+          </div>
+
+          <!-- 阶段轨 -->
+          <div class="stage-track">
+            <div class="stage-step done" id="stage1">
+              <div class="stage-bar"></div>
+              <div class="stage-label"><span>1. 思考</span><em>完成</em></div>
+            </div>
+            <div class="stage-step done" id="stage2">
+              <div class="stage-bar"></div>
+              <div class="stage-label"><span>2. 找内容</span><em>完成</em></div>
+            </div>
+            <div class="stage-step active" id="stage3">
+              <div class="stage-bar"></div>
+              <div class="stage-label"><span>3. 看内容</span><em>进行中</em></div>
+            </div>
+            <div class="stage-step" id="stage4">
+              <div class="stage-bar"></div>
+              <div class="stage-label"><span>4. 发言</span><em>等待</em></div>
+            </div>
+          </div>
+
+          <!-- 事件流控制栏与分类筛选 chips -->
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0;">
+            <span style="font-size:12px;color:var(--dsw-alias-label-tertiary);">事件流 · 工具 8 次 · 赞 2 · 评 1 · 接话 1</span>
+            <div style="flex:1;"></div>
+            <div class="sub-segmented">
+              <button class="sub-seg-btn active" onclick="filterLiveEvents('all', this)">全部 12</button>
+              <button class="sub-seg-btn" onclick="filterLiveEvents('tool', this)">工具 6</button>
+              <button class="sub-seg-btn" onclick="filterLiveEvents('reasoning', this)">推理 2</button>
+              <button class="sub-seg-btn" onclick="filterLiveEvents('host', this)">宿主 3</button>
+              <button class="sub-seg-btn" onclick="filterLiveEvents('error', this)">错误 0</button>
+            </div>
+          </div>
+
+          <!-- 实时轻量事件流 Trace 容器 -->
+          <div class="trace-container" id="liveTraceBox">
+            <div class="trace-line" data-kind="host">
+              <span class="trace-time">12:00:01</span>
+              <span class="trace-badge host">宿主</span>
+              <span class="trace-content">值班轮启动（why=web），加载 headless 会话配置</span>
+            </div>
+            <div class="trace-line" data-kind="tool">
+              <span class="trace-time">12:00:03</span>
+              <span class="trace-badge tool">bili_feed</span>
+              <span class="trace-content">拉取最常访问 8 位关注 UP 主，过滤账本已看视频 12 条</span>
+            </div>
+            <div class="trace-line" data-kind="reasoning">
+              <span class="trace-time">12:00:15</span>
+              <span class="trace-badge reasoning">推理</span>
+              <span class="trace-content">候选 3 条视频符合兴趣领域（影视数码/大模型实测），选中 BV1xrnz6gEVD</span>
+            </div>
+            <div class="trace-line" data-kind="tool">
+              <span class="trace-time">12:00:28</span>
+              <span class="trace-badge tool">bili_subtitle</span>
+              <span class="trace-content">BV1xrnz6gEVD 获取 AI 字幕成功（共 142 段）</span>
+            </div>
+            <div class="trace-line" data-kind="tool">
+              <span class="trace-time">12:01:05</span>
+              <span class="trace-badge tool">bili_comments</span>
+              <span class="trace-content">读取视频前 20 条热评，触发接话扫描（命中 2 条候选楼层）</span>
+            </div>
+            <div class="trace-line" data-kind="host">
+              <span class="trace-time">12:01:40</span>
+              <span class="trace-badge host">门控核验</span>
+              <span class="trace-content">发言门控判定：最近 5 个动作说 3 次，节流模式放行（建议本轮最多 1 条）</span>
+            </div>
+            <div class="trace-line" data-kind="tool">
+              <span class="trace-time">12:02:10</span>
+              <span class="trace-badge ok">bili_reply</span>
+              <span class="trace-content">在楼层 321560862800 接话成功（rpid: 318378624657）</span>
+            </div>
+            <div class="trace-line" data-kind="tool">
+              <span class="trace-time">12:02:45</span>
+              <span class="trace-badge tool">bili_like</span>
+              <span class="trace-content">给 BV1xrnz6gEVD 投赞完成</span>
+            </div>
+          </div>
+
+          <div class="card-foot">
+            <span>事件 12 · 筛选后 12 · SSE 优先，断线降级轮询</span>
+            <span class="tag rep">运行良好</span>
+          </div>
+        </div>
+
+        <!-- 右侧中枢 (40%)：今日产出与门控 -->
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          
+          <!-- 今日产出卡 (TodayCard) -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">今日产出</span>
+              <span class="card-note">2026-10-29</span>
+              <div style="flex:1;"></div>
+              <button class="btn sm ghost" onclick="switchNavTab('activity', document.querySelectorAll('.nav-tab-item')[1])">全部活动</button>
+            </div>
+            <div style="display:flex;align-items:baseline;gap:6px;font-size:13px;flex-wrap:wrap;">
+              <span><strong style="font-size:16px;">3</strong> 看</span> ·
+              <span><strong style="font-size:16px;">2</strong> 赞</span> ·
+              <span><strong style="font-size:16px;">1</strong> 评</span> ·
+              <span><strong style="font-size:16px;">1</strong> 接话</span> ·
+              <span><strong style="font-size:16px;">0</strong> 动态</span>
+              <span style="font-size:11px;color:var(--dsw-alias-label-caption);">（评论上限 5）</span>
+            </div>
+
+            <!-- 今日最近发出的评论 -->
+            <div style="margin-top:6px;">
+              <div class="said-item">
+                <div class="said-text">“这折叠次数是给手残党看的吧，看完真香了[doge]”</div>
+                <div class="said-meta">
+                  <span>12:02 · 折1万次，会坏吗？iPhone Duo深度评测</span>
+                  <span class="tag rep">通过 52k 语料 Lint</span>
+                </div>
+              </div>
+              <div class="said-item">
+                <div class="said-text">“原来不是打码，是他自己秒切的屏”</div>
+                <div class="said-meta">
+                  <span>08:27 · 设计师是怎么被产品经理气死的</span>
+                  <span class="tag rep">通过 Lint</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 发言门控卡 (SpeakGateCard) -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">发言门控</span>
+              <span class="card-note">本轮为什么说 / 不说</span>
+              <div style="flex:1;"></div>
+              <span class="tag warn">观察中 (不拦截)</span>
+              <span class="tag cmt">建议最多 1 条</span>
+            </div>
+            <div style="font-size:12.5px;color:var(--dsw-alias-label-primary);">
+              节奏偏密：最近 5 个动作里说了 3 次（占比 60% · 距离上条 12 分钟）
+            </div>
+            <div style="font-size:11.5px;color:var(--dsw-alias-label-tertiary);margin-top:2px;">
+              观察档 (observe)：门控仅提出限流建议并记录到账本，不会强行掐断模型的评论工具调用。
+            </div>
+          </div>
+
+          <!-- 接话扫描判定卡 (ProactiveCard) -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">主动接话扫描</span>
+              <span class="card-note">每轮必须扫描，接不接自由</span>
+              <div style="flex:1;"></div>
+              <span class="tag rep">扫描 2 命中 1</span>
+            </div>
+            <div style="font-size:12px;display:flex;flex-direction:column;gap:5px;">
+              <div style="display:flex;justify-content:space-between;">
+                <span>今日累计：扫描 4 次 · 接 2 次 · 不接 2 次</span>
+                <span style="color:var(--dsw-alias-label-caption);">纪律检查：PASS</span>
+              </div>
+              <div style="background:var(--dsw-alias-bg-module-platform);padding:6px 8px;border-radius:6px;">
+                <strong>最新接话决策：</strong>接楼层 <code>321560862800</code>（666设计师：一句能答的吐槽）· 跳过 <code>321560862900</code>（纯站队争吵）
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- 配额卡 (QuotaCard - 3x2 网格无孤儿) -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">配额与节奏进度</span>
+          <span class="card-note">今日累计 / 本轮已用 / 每日上限</span>
+          <div style="flex:1;"></div>
+          <span style="font-size:12px;color:var(--dsw-alias-label-tertiary);">接话扫描 4 次</span>
+        </div>
+        <div class="metric-grid-6">
+          <div class="metric-tile">
+            <span class="metric-title">挑中浏览</span>
+            <div class="metric-val">3 <small>/ 5 上限</small></div>
+            <div class="progress-track"><div class="progress-fill" style="width: 60%;"></div></div>
+            <span style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">本轮已用 1</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-title">评论发表</span>
+            <div class="metric-val">2 <small>/ 5 上限</small></div>
+            <div class="progress-track"><div class="progress-fill" style="width: 40%;"></div></div>
+            <span style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">本轮已用 1</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-title">轻量点赞</span>
+            <div class="metric-val">6 <small>/ 10 上限</small></div>
+            <div class="progress-track"><div class="progress-fill" style="width: 60%;"></div></div>
+            <span style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">本轮已用 2</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-title">动态分享</span>
+            <div class="metric-val">1 <small>/ 1 上限</small></div>
+            <div class="progress-track"><div class="progress-fill warn" style="width: 100%;"></div></div>
+            <span style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">本轮已用 0</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-title">跟进回复</span>
+            <div class="metric-val">1 <small>/ 2 每轮</small></div>
+            <div class="progress-track"><div class="progress-fill" style="width: 50%;"></div></div>
+            <span style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">本轮已用 1</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-title">主动接话</span>
+            <div class="metric-val">1 <small>/ 3 每轮</small></div>
+            <div class="progress-track"><div class="progress-fill" style="width: 33%;"></div></div>
+            <span style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">本轮已用 1</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 双栏并联：7天存在感 + 人设与健康 -->
+      <div class="cockpit-grid">
+        
+        <!-- 7 天社区存在感卡 (PresenceCard) -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">社区存在感（近 7 天）</span>
+            <span class="card-note">收到点赞 / 被回复 / 发出评论</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:8px;">
+            <div class="metric-tile">
+              <span class="metric-title">收到点赞</span>
+              <div class="metric-val" style="font-size:16px;">— <small>无数据源</small></div>
+              <span style="font-size:10px;color:var(--dsw-alias-label-caption);">B站无点赞通知接口</span>
+            </div>
+            <div class="metric-tile">
+              <span class="metric-title">被回复</span>
+              <div class="metric-val" style="font-size:16px;">4 <small>条</small></div>
+              <span style="font-size:10px;color:var(--dsw-alias-label-caption);">来自通知流解析</span>
+            </div>
+            <div class="metric-tile">
+              <span class="metric-title">发出评论</span>
+              <div class="metric-val" style="font-size:16px;">12 <small>条</small></div>
+              <span style="font-size:10px;color:var(--dsw-alias-label-caption);">近 7 天累计</span>
+            </div>
+          </div>
+          <!-- 每日分布柱状 Sparkline -->
+          <div style="margin-top:4px;">
+            <div style="font-size:11px;color:var(--dsw-alias-label-tertiary);">近 7 天每日活跃频次趋势：</div>
+            <div class="spark-wrap">
+              <div class="spark-col"><div class="spark-bar" style="height:25%;"></div><span class="spark-label">10-23</span></div>
+              <div class="spark-col"><div class="spark-bar" style="height:45%;"></div><span class="spark-label">10-24</span></div>
+              <div class="spark-col"><div class="spark-bar" style="height:60%;"></div><span class="spark-label">10-25</span></div>
+              <div class="spark-col"><div class="spark-bar" style="height:35%;"></div><span class="spark-label">10-26</span></div>
+              <div class="spark-col"><div class="spark-bar" style="height:75%;"></div><span class="spark-label">10-27</span></div>
+              <div class="spark-col"><div class="spark-bar" style="height:90%;"></div><span class="spark-label">10-28</span></div>
+              <div class="spark-col"><div class="spark-bar" style="height:55%;"></div><span class="spark-label">10-29</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 人设健康与自纠卡 (PersonaHealthCard) -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">人设健康与体检</span>
+            <span class="card-note">whale@4.0.0</span>
+            <div style="flex:1;"></div>
+            <span class="tag rep">L0 检查 6/6 全过</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+            <div style="display:flex;justify-content:space-between;border-bottom:0.5px solid var(--dsw-alias-border-l1);padding-bottom:5px;">
+              <span style="color:var(--dsw-alias-label-tertiary);">字数中位数</span>
+              <span><strong>24 字</strong>（基线 27 字 · 偏离 -3 字，合规）</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;border-bottom:0.5px solid var(--dsw-alias-border-l1);padding-bottom:5px;">
+              <span style="color:var(--dsw-alias-label-tertiary);">句号结句率</span>
+              <span><strong>0.00%</strong>（口语换气，禁句号规则生效）</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;border-bottom:0.5px solid var(--dsw-alias-border-l1);padding-bottom:5px;">
+              <span style="color:var(--dsw-alias-label-tertiary);">表情包占比</span>
+              <span style="color:var(--dsw-alias-state-warn-primary);"><strong>75%</strong>（基线 42% · 偏离 +33% ⚠️）</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span style="color:var(--dsw-alias-label-tertiary);">下轮自纠提示</span>
+              <span style="color:var(--dsw-alias-state-business-primary);">减少 [doge]/[笑哭] 堆叠，多用短反问句</span>
+            </div>
+          </div>
+          <div class="card-foot">
+            <span>素材库：23 条有效表达 · 6 条见闻世界书</span>
+            <button class="btn sm ghost" onclick="switchNavTab('persona', document.querySelectorAll('.nav-tab-item')[3])">人设工作室</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 底部来源追踪与健康横幅 -->
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--dsw-alias-label-caption);padding:0 4px;">
+        <span>数据来源：账本 <code>~/.dsh/bili-fenshen/ledger.jsonl</code> · 家目录可写 (0.08ms 增量索引)</span>
+        <span>10 项并行检查：全部正常 (PASS)</span>
+      </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         TAB 2: 活动链路 (Activity)
+         ══════════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tab-activity">
+      
+      <!-- 二级视图切换栏与过滤 -->
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div class="sub-segmented">
+          <button class="sub-seg-btn active" id="actBtnLife" onclick="switchActSubView('life')">按视频生命周期</button>
+          <button class="sub-seg-btn" id="actBtnTimeline" onclick="switchActSubView('timeline')">时间线流</button>
+          <button class="sub-seg-btn" id="actBtnSeen" onclick="switchActSubView('seen')">判重表 (Seen 57 条)</button>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button class="btn sm" onclick="filterActivityItems('all', this)">全部动作 (3)</button>
+          <button class="btn sm" onclick="filterActivityItems('replies', this)">仅有我回复 (2)</button>
+          <button class="btn sm" onclick="filterActivityItems('scanned', this)">有接话扫描 (1)</button>
+        </div>
+      </div>
+
+      <!-- 子视图 1：生命周期视图 (Lifecycle View) -->
+      <div id="actViewLife" style="display:flex;flex-direction:column;gap:12px;">
+        
+        <div style="font-size:12px;color:var(--dsw-alias-label-tertiary);display:flex;align-items:center;gap:8px;">
+          <span>今日 2026-10-29 · 午间值班轮（round id: 2026-10-29T12:00:00Z）· 来源：热门推荐</span>
+          <div style="flex:1;height:0.5px;background:var(--dsw-alias-border-l2);"></div>
+          <span>看 2 · 赞 2 · 评 1 · 接话 1</span>
+        </div>
+
+        <!-- 视频卡片 1：包含一级评论与多轮观众跟进 -->
+        <article class="act-card" data-has-reply="true">
+          <div class="act-summary" onclick="toggleCardOpen(this)">
+            <div class="act-top-row">
+              <span style="font-family:var(--font-code);font-size:11px;color:var(--dsw-alias-label-caption);">BV1xrnz6gEVD</span>
+              <span class="grade-tag worth">值得看</span>
+              <span class="tag like">已点赞</span>
+              <span class="tag cmt">已评一级</span>
+              <span class="tag rep">2 条互动回复</span>
+              <div style="flex:1;"></div>
+              <span style="font-size:12px;color:var(--dsw-alias-label-caption);">▾ 点击展开完整链路</span>
+            </div>
+            <div class="act-title">折1万次，会坏吗？iPhone Duo 双屏折叠深度暴力评测</div>
+            <div class="act-meta">UP主：影视飓风 · 播放 313.6万 · 时长 14:52 · 来源：热门综合</div>
+          </div>
+
+          <div class="act-detail-body">
+            <!-- 7 站生命周期进度轨 -->
+            <div class="stage-rail">
+              <div class="rail-step done"><b></b><span>1. 刷到</span><em>12:00</em></div>
+              <div class="rail-step done"><b></b><span>2. 读完字幕</span><em>12:00</em></div>
+              <div class="rail-step done"><b></b><span>3. 点赞</span><em>12:01</em></div>
+              <div class="rail-step done"><b></b><span>4. 发评论</span><em>12:01</em></div>
+              <div class="rail-step done"><b></b><span>5. 扫描</span><em>12:01</em></div>
+              <div class="rail-step done"><b></b><span>6. 被回复</span><em>12:05</em></div>
+              <div class="rail-step done"><b></b><span>7. 我跟进</span><em>12:08</em></div>
+            </div>
+
+            <!-- 对话消息气泡 -->
+            <div class="thread-box">
+              <div class="thread-msg">
+                <span class="msg-sender mine">我发评论 (12:01)：</span>
+                <span class="msg-bubble mine">“这折叠次数是给手残党看的吧，看完手里的直板机更香了[doge]”</span>
+              </div>
+              <div class="thread-msg">
+                <span class="msg-sender target">数码老油条 (12:05)：</span>
+                <span class="msg-bubble">“哈哈哈哈哈大肥鱼说得对，关键是修一次屏幕顶半个手机！”</span>
+              </div>
+              <div class="thread-msg">
+                <span class="msg-sender mine">我再跟进 (12:08)：</span>
+                <span class="msg-bubble mine">“那可不，屏幕坏了直接当两块带电砖头[笑哭]”</span>
+              </div>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--dsw-alias-label-caption);padding-top:4px;">
+              <span>评论 rpid: <code>318143807425</code> · 回复 rpid: <code>318378624657</code></span>
+              <a href="#" style="color:var(--dsw-alias-state-business-primary);text-decoration:none;">在 B站 打开原视频 ↗</a>
+            </div>
+          </div>
+        </article>
+
+        <!-- 视频卡片 2：接话扫描样例 -->
+        <article class="act-card" data-has-reply="true" data-has-scan="true">
+          <div class="act-summary" onclick="toggleCardOpen(this)">
+            <div class="act-top-row">
+              <span style="font-family:var(--font-code);font-size:11px;color:var(--dsw-alias-label-caption);">BV1CqnW6oE8B</span>
+              <span class="grade-tag ok">可以看</span>
+              <span class="tag like">已点赞</span>
+              <span class="tag cmt">接话 1 条</span>
+              <div style="flex:1;"></div>
+              <span style="font-size:12px;color:var(--dsw-alias-label-caption);">▾ 点击展开完整链路</span>
+            </div>
+            <div class="act-title">设计师是怎么被产品经理气死的：实录5个离谱需求</div>
+            <div class="act-meta">UP主：影视飓风 · 播放 120.3万 · 时长 10:20 · 来源：关注订阅</div>
+          </div>
+
+          <div class="act-detail-body">
+            <!-- 7 站生命周期进度轨 -->
+            <div class="stage-rail">
+              <div class="rail-step done"><b></b><span>1. 刷到</span><em>12:10</em></div>
+              <div class="rail-step done"><b></b><span>2. 读完字幕</span><em>12:11</em></div>
+              <div class="rail-step done"><b></b><span>3. 点赞</span><em>12:11</em></div>
+              <div class="rail-step"><b></b><span>4. 评一级</span><em>—</em></div>
+              <div class="rail-step done"><b></b><span>5. 接话扫描</span><em>12:12</em></div>
+              <div class="rail-step"><b></b><span>6. 等待互动</span><em>—</em></div>
+              <div class="rail-step done"><b></b><span>7. 主动接话</span><em>12:13</em></div>
+            </div>
+
+            <!-- 接话扫描判定依据 -->
+            <div style="background:var(--dsw-alias-bg-module-platform);padding:8px 10px;border-radius:8px;font-size:11.5px;">
+              <span style="font-weight:600;">接话扫描明细（候选 2 条）：</span>
+              <ul style="padding-left:18px;margin-top:3px;">
+                <li><code>rpid 321560862800</code> (666设计师 · 赞 396) ➔ <strong style="color:var(--dsw-alias-state-success-primary);">判定[接]</strong>：一句能答的吐槽</li>
+                <li><code>rpid 321560862900</code> (甲方乙方 · 赞 88) ➔ <strong style="color:var(--dsw-alias-state-warn-primary);">判定[不接]</strong>：纯立场站队争吵</li>
+              </ul>
+            </div>
+
+            <!-- 对话气泡 -->
+            <div class="thread-box">
+              <div class="thread-msg">
+                <span class="msg-sender target">666设计师 (热评楼层)：</span>
+                <span class="msg-bubble">“五彩斑斓的黑我已经做出来了，现在要我做亮暗交错的透明”</span>
+              </div>
+              <div class="thread-msg">
+                <span class="msg-sender mine">我主动接话：</span>
+                <span class="msg-bubble mine">“这句真的是设计师本命，建议下次直接交白底图说透明度拉满了[doge]”</span>
+              </div>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--dsw-alias-label-caption);padding-top:4px;">
+              <span>目标楼层 rpid: <code>321560862800</code> · 发出接话 rpid: <code>318378624657</code></span>
+              <a href="#" style="color:var(--dsw-alias-state-business-primary);text-decoration:none;">在 B站 打开原视频 ↗</a>
+            </div>
+          </div>
+        </article>
+
+        <!-- 折叠跳过视频组 -->
+        <details style="border:0.5px solid var(--dsw-alias-border-l2);border-radius:10px;padding:8px 12px;background:var(--dsw-alias-bg-layer-1);">
+          <summary style="cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary);font-weight:500;">
+            跳过的视频 (1 条) · <code>BV2skip</code> · 无 AI 字幕跳过
+          </summary>
+          <div style="font-size:11.5px;color:var(--dsw-alias-label-tertiary);margin-top:6px;padding-left:10px;">
+            视频：【4K生肉】超燃动作混剪 4K60FPS 无人声纯音乐 · 跳过理由：无字幕文件且音频无有效语料。
+          </div>
+        </details>
+
+      </div>
+
+      <!-- 子视图 2：时间线流视图 (Timeline View) -->
+      <div id="actViewTimeline" style="display:none;flex-direction:column;gap:8px;">
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">动作事件流</span>
+            <span class="card-note">全量事件按时序平铺</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:0;">
+            <div style="display:flex;gap:12px;padding:8px 0;border-bottom:0.5px solid var(--dsw-alias-border-l1);align-items:baseline;">
+              <span class="tag rep">跟进回复</span>
+              <div style="flex:1;">
+                <div>“那可不，屏幕坏了直接当两块带电砖头[笑哭]”</div>
+                <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">BV1xrnz6gEVD · 回复观众数码老油条</div>
+              </div>
+              <span style="font-family:var(--font-code);font-size:11px;color:var(--dsw-alias-label-caption);">12:08:15</span>
+            </div>
+            <div style="display:flex;gap:12px;padding:8px 0;border-bottom:0.5px solid var(--dsw-alias-border-l1);align-items:baseline;">
+              <span class="tag cmt">主动接话</span>
+              <div style="flex:1;">
+                <div>“这句真的是设计师本命，建议下次直接交白底图说透明度拉满了[doge]”</div>
+                <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">BV1CqnW6oE8B · 接楼层 666设计师</div>
+              </div>
+              <span style="font-family:var(--font-code);font-size:11px;color:var(--dsw-alias-label-caption);">12:02:40</span>
+            </div>
+            <div style="display:flex;gap:12px;padding:8px 0;border-bottom:0.5px solid var(--dsw-alias-border-l1);align-items:baseline;">
+              <span class="tag cmt">发一级评论</span>
+              <div style="flex:1;">
+                <div>“这折叠次数是给手残党看的吧，看完手里的直板机更香了[doge]”</div>
+                <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">BV1xrnz6gEVD · 影视飓风</div>
+              </div>
+              <span style="font-family:var(--font-code);font-size:11px;color:var(--dsw-alias-label-caption);">12:01:20</span>
+            </div>
+            <div style="display:flex;gap:12px;padding:8px 0;border-bottom:0.5px solid var(--dsw-alias-border-l1);align-items:baseline;">
+              <span class="tag like">轻量点赞</span>
+              <div style="flex:1;">
+                <div>折1万次，会坏吗？iPhone Duo 双屏折叠深度暴力评测</div>
+                <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">BV1xrnz6gEVD</div>
+              </div>
+              <span style="font-family:var(--font-code);font-size:11px;color:var(--dsw-alias-label-caption);">12:01:05</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 子视图 3：判重表视图 (Seen Table View) -->
+      <div id="actViewSeen" style="display:none;flex-direction:column;gap:8px;">
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">看过什么 (Seen 判重表)</span>
+            <span class="card-note">累计已看 57 条 · 跨轮绝对判重</span>
+            <div style="flex:1;"></div>
+            <input type="text" id="seenSearchInput" oninput="filterSeenTable()" placeholder="搜 BV / 标题 / 动作..." style="height:28px;padding:0 8px;border-radius:6px;border:0.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font-size:12px;width:220px;outline:none;">
+          </div>
+
+          <div class="seen-tbl-wrap">
+            <table class="seen-table" id="seenTable">
+              <thead>
+                <tr>
+                  <th style="width:90px;">日期</th>
+                  <th style="width:60px;">时间</th>
+                  <th style="width:130px;">BV 号</th>
+                  <th style="width:170px;">执行动作</th>
+                  <th>视频标题</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="mono">2026-10-29</td>
+                  <td class="mono">12:08</td>
+                  <td class="mono">BV1xrnz6gEVD</td>
+                  <td><span class="tag like">看</span><span class="tag like">赞</span><span class="tag cmt">评</span><span class="tag rep">回</span></td>
+                  <td>折1万次，会坏吗？iPhone Duo 双屏折叠深度暴力评测</td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-10-29</td>
+                  <td class="mono">12:02</td>
+                  <td class="mono">BV1CqnW6oE8B</td>
+                  <td><span class="tag like">看</span><span class="tag like">赞</span><span class="tag cmt">接话</span></td>
+                  <td>设计师是怎么被产品经理气死的：实录5个离谱需求</td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-10-28</td>
+                  <td class="mono">20:15</td>
+                  <td class="mono">BV1fzxE6UEjD</td>
+                  <td><span class="tag like">看</span><span class="tag like">赞</span></td>
+                  <td>DeepSeek 深度技术原理可视化解析（三维动画版）</td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-10-28</td>
+                  <td class="mono">12:30</td>
+                  <td class="mono">BV1Ab4y1a7xx</td>
+                  <td><span class="tag like">看</span><span class="tag cmt">评</span></td>
+                  <td>当大肥鱼在工位摸鱼被老板当场抓包</td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-10-28</td>
+                  <td class="mono">08:45</td>
+                  <td class="mono">BV1skip88201</td>
+                  <td><span class="tag warn">跳过 (无字幕)</span></td>
+                  <td>【4K超清】大自然白噪音催眠混剪视频</td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-10-27</td>
+                  <td class="mono">21:00</td>
+                  <td class="mono">BV1vK411m7Qk</td>
+                  <td><span class="tag like">看</span><span class="tag like">赞</span><span class="tag cmt">接话</span></td>
+                  <td>开源 AI 机器人把厨房炸了的真实监控画面</td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-10-27</td>
+                  <td class="mono">12:20</td>
+                  <td class="mono">BV1Pz421f7Vv</td>
+                  <td><span class="tag like">看</span></td>
+                  <td>五常白银局日常：残局一打五究竟有多绝望</td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-10-26</td>
+                  <td class="mono">19:40</td>
+                  <td class="mono">BV12x411p7Aa</td>
+                  <td><span class="tag like">看</span><span class="tag like">赞</span><span class="tag cmt">评</span></td>
+                  <td>如何用最萌的声音说最凶狠的话？语音模型对比</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         TAB 3: 值班日报 (Reports)
+         ══════════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tab-reports">
+      <div class="reports-split">
+        
+        <!-- 左侧：报告日期列表 -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">报告归档</span>
+            <span class="card-note">4 份日报 · 1 份归档</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;" id="reportMenuList">
+            <div class="report-menu-item active" onclick="switchReportDoc('2026-10-29', this)">
+              <span>2026-10-29 (今天)</span>
+              <span class="pill" style="height:18px;">2 轮</span>
+            </div>
+            <div class="report-menu-item" onclick="switchReportDoc('2026-10-28', this)">
+              <span>2026-10-28</span>
+              <span class="pill" style="height:18px;">3 轮</span>
+            </div>
+            <div class="report-menu-item" onclick="switchReportDoc('2026-10-27', this)">
+              <span>2026-10-27</span>
+              <span class="pill" style="height:18px;">2 轮</span>
+            </div>
+            <div class="report-menu-item" onclick="switchReportDoc('2026-10-26', this)">
+              <span>2026-10-26</span>
+              <span class="pill" style="height:18px;">4 轮</span>
+            </div>
+            <div style="height:0.5px;background:var(--dsw-alias-border-l2);margin:6px 0;"></div>
+            <div class="report-menu-item" onclick="switchReportDoc('digest-2026-10', this)">
+              <span>2026-10 月度归档</span>
+              <span class="tag rep">摘要</span>
+            </div>
+            <div class="report-menu-item" onclick="switchReportDoc('overlay', this)">
+              <span>headless-overlay.yml</span>
+              <span class="tag warn">诊断</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右侧：完整 Markdown 渲染视窗 -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title" id="reportDocTitle">日报 2026-10-29.md</span>
+            <span class="card-note" id="reportDocCharCount">1,420 字符</span>
+            <div style="flex:1;"></div>
+            <button class="btn sm" onclick="alert('已重新渲染并校验本地 markdown 文件自洽性')">刷新正文</button>
+          </div>
+
+          <div class="markdown-view" id="reportDocContent">
+            <h2># 值班综合日报 · 2026-10-29</h2>
+            <p><strong>生成时间</strong>：2026-10-29 12:35:40 · <strong>执行状态</strong>：正常闭环 · <strong>异常拦截</strong>：0 次</p>
+            
+            <h3>## 午间值班轮（round id: 2026-10-29T12:00:00Z）</h3>
+            <ul>
+              <li><strong>拉取策略</strong>：<code>bili_feed</code> 访问最常访问 8 位关注 UP 主，过滤账本已读记录 12 条。</li>
+              <li><strong>阅片候选</strong>：挑中 2 条高质量视频（BV1xrnz6gEVD, BV1CqnW6oE8B），跳过 1 条（无字幕生肉视频）。</li>
+              <li><strong>互动动作</strong>：点赞 2 次，发表一级评论 1 条（评语：<code>这折叠次数是给手残党看的吧...</code>），收到观众跟进后二度回复 1 条。</li>
+              <li><strong>接话扫描</strong>：扫描热门评论 2 条，决策命中 1 条可接楼层（666设计师），判定符合轻幽默吐槽调性。</li>
+              <li><strong>发言门控</strong>：判定为节奏偏密（observe 观察档放行），建议上限 1 条，实际执行严格受控。</li>
+            </ul>
+
+            <h3>## 早间值班轮（round id: 2026-10-29T08:30:00Z）</h3>
+            <ul>
+              <li><strong>拉取策略</strong>：热门综合榜前 20 条，按“AI实测”关键词二次打分。</li>
+              <li><strong>互动动作</strong>：浏览 1 条，点赞 1 次，扫描 1 条判定不接（评论区站队吵架过于激烈，触发红线避让）。</li>
+            </ul>
+
+            <h3>## 资源与模型消耗审计</h3>
+            <ul>
+              <li><strong>模型</strong>：DeepSeek-Flash（推理强度：high · 平均单轮延迟 1,840ms）</li>
+              <li><strong>Token 估算</strong>：输入 14,280 tokens · 输出 680 tokens · 成本约 ¥0.02</li>
+              <li><strong>账本索引状态</strong>：<code>ledger.jsonl</code> 增量追加 8 行，单条写入耗时 0.08ms，MD5 强校验通过。</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         TAB 4: 人设工作室 (Persona)
+         ══════════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tab-persona">
+      
+      <!-- 预设选择器与三子页签 -->
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-weight:600;font-size:14px;">当前生效预设：</span>
+          <div class="sub-segmented">
+            <button class="sub-seg-btn active" onclick="switchPresetModel('whale', this)">豆腐 (whale 4.0.0)</button>
+            <button class="sub-seg-btn" onclick="switchPresetModel('elaina', this)">灰之魔女 (elaina)</button>
+            <button class="sub-seg-btn" onclick="switchPresetModel('generic', this)">普通网友 (generic)</button>
+          </div>
+        </div>
+        <div class="sub-segmented">
+          <button class="sub-seg-btn active" id="pSubBtnCard" onclick="switchPersonaSubTab('card')">人设卡与编译</button>
+          <button class="sub-seg-btn" id="pSubBtnBank" onclick="switchPersonaSubTab('bank')">素材弹药库 (23)</button>
+          <button class="sub-seg-btn" id="pSubBtnQuality" onclick="switchPersonaSubTab('quality')">质量体检与L0</button>
+        </div>
+      </div>
+
+      <!-- 子视图 1：人设卡与三通道编译 (Card View) -->
+      <div id="pViewCard" style="display:flex;flex-direction:column;gap:12px;">
+        <div class="cockpit-grid">
+          
+          <!-- 左侧：人设卡核心事实 (Card Core) -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">核心事实与口径规范</span>
+              <span class="tag rep">spec v2</span>
+              <div style="flex:1;"></div>
+              <button class="btn sm ghost" onclick="alert('卡片源码编辑模式已开启')">源码编辑</button>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;">
+              <div style="display:flex;justify-content:space-between;border-bottom:0.5px solid var(--dsw-alias-border-l1);padding-bottom:5px;">
+                <span style="color:var(--dsw-alias-label-tertiary);">自称口径</span>
+                <span style="font-weight:500;" id="pIdentityText">本鱼 / 我（被问及是谁答：主人是跟我一起用这个账号的）</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;border-bottom:0.5px solid var(--dsw-alias-border-l1);padding-bottom:5px;">
+                <span style="color:var(--dsw-alias-label-tertiary);">字数规范</span>
+                <span style="font-weight:500;">8 ~ 24 字（35 字硬顶，坚决消除 AI 长篇大论味）</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;border-bottom:0.5px solid var(--dsw-alias-border-l1);padding-bottom:5px;">
+                <span style="color:var(--dsw-alias-label-tertiary);">标点要求</span>
+                <span style="font-weight:500;">句号 periodMax=0（口语以换气/表情包收尾）</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;border-bottom:0.5px solid var(--dsw-alias-border-l1);padding-bottom:5px;">
+                <span style="color:var(--dsw-alias-label-tertiary);">内置矛盾</span>
+                <span style="font-weight:500;">想摸鱼又怕被认出来 vs 见到好作品忍不住想显摆</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;">
+                <span style="color:var(--dsw-alias-label-tertiary);">解禁词条</span>
+                <span style="font-weight:500;">白饭 / 打窝 / 倒反天罡 / 下饭 / 可爱捏 (放行通过)</span>
+              </div>
+            </div>
+
+            <!-- 应急回滚出口 -->
+            <details style="border:0.5px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 10px;margin-top:6px;background:var(--dsw-alias-bg-module-platform);">
+              <summary style="cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary);font-weight:500;">
+                回滚出口：legacy 直通（旧 personaPrompt）
+              </summary>
+              <div style="font-size:11.5px;color:var(--dsw-alias-label-tertiary);margin-top:6px;">
+                如遇卡链路编译异常，可在此填回纯文本 Prompt 应急回滚到 v1 直通模式，清空即可重回 v4 卡架构。
+              </div>
+            </details>
+          </div>
+
+          <!-- 右侧：五块预算与三通道实时编译预览 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">三通道编译预览 (C1 / C2 / C3)</span>
+              <span class="card-note">1,733 / 3,000 字符 (58%)</span>
+            </div>
+
+            <!-- 五块预算条 -->
+            <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px;">
+              <div class="budget-bar-row">
+                <span class="budget-name">P1 常驻核心</span>
+                <div class="budget-track"><div class="budget-fill" style="width:70%;"></div></div>
+                <span class="budget-num">1052 / 1500</span>
+              </div>
+              <div class="budget-bar-row">
+                <span class="budget-name">P2 见闻索引</span>
+                <div class="budget-track"><div class="budget-fill" style="width:75%;"></div></div>
+                <span class="budget-num">227 / 300</span>
+              </div>
+              <div class="budget-bar-row">
+                <span class="budget-name">P3 今日状态</span>
+                <div class="budget-track"><div class="budget-fill" style="width:41%;"></div></div>
+                <span class="budget-num">208 / 500</span>
+              </div>
+              <div class="budget-bar-row">
+                <span class="budget-name">P4 语料样本</span>
+                <div class="budget-track"><div class="budget-fill" style="width:28%;"></div></div>
+                <span class="budget-num">129 / 450</span>
+              </div>
+              <div class="budget-bar-row">
+                <span class="budget-name">P5 最后一公里</span>
+                <div class="budget-track"><div class="budget-fill" style="width:46%;"></div></div>
+                <span class="budget-num">117 / 250</span>
+              </div>
+            </div>
+
+            <div class="prompt-box" id="pCompiledPrompt">
+===== C1 前置身份 =====
+你是 DeepSeek 的民间拟人形象「大肥鱼」豆腐。圆滚滚、软萌温和带点小机灵，开口自称「本鱼」或「我」。
+边界红线：承认 AI 生成，不装真人；只会点赞和发短评，不投币不投稿。
+
+===== C2 末尾状态约束 =====
+今日时间段：午间值班（精力充沛）
+最近三条开头禁止重复；严格收在情绪/反问/emoji，坚决别收在理性大段总结上！
+
+===== C3 生成期见闻检索 =====
+动态按关键词检索命中：[wuchang-ranked] 五常白银段位 · [saving-snacks] 舍不得吃的零食放化了</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 子视图 2：素材弹药库 (Bank View) -->
+      <div id="pViewBank" style="display:none;flex-direction:column;gap:12px;">
+        <div class="cockpit-grid">
+          
+          <!-- 6 桶分类表达库 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">6 桶表达弹药库</span>
+              <span class="card-note">共 23 条高赞语料</span>
+              <div style="flex:1;"></div>
+              <button class="btn sm" onclick="alert('添加新语料模态框已触发')">+ 新增语料</button>
+            </div>
+            
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+              <button class="btn sm primary" onclick="filterBankBucket('question', this)">反问 (5)</button>
+              <button class="btn sm" onclick="filterBankBucket('reaction', this)">纯反应 (2)</button>
+              <button class="btn sm" onclick="filterBankBucket('experience', this)">自嘲经历 (3)</button>
+              <button class="btn sm" onclick="filterBankBucket('meme', this)">玩梗 (5)</button>
+              <button class="btn sm" onclick="filterBankBucket('detail', this)">抓细节 (2)</button>
+              <button class="btn sm" onclick="filterBankBucket('rant', this)">吐槽 (6)</button>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px;" id="bankItemList">
+              <div class="said-item">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="font-weight:600;">“封面能不能好好做？”</span>
+                  <span class="tag cmt">热度 98 · 自创</span>
+                </div>
+                <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">来源：comment-reception · 字数 9 · 状态：生效中</div>
+              </div>
+              <div class="said-item">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="font-weight:600;">“这是碳基生物能想出来的剧情？”</span>
+                  <span class="tag cmt">热度 142 · 社区采纳</span>
+                </div>
+                <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">来源：community-sync · 字数 15 · 状态：生效中</div>
+              </div>
+              <div class="said-item" style="opacity:0.6;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="text-decoration:line-through;">“这是被软删除的旧语料”</span>
+                  <span class="tag warn">回收站 (可恢复)</span>
+                </div>
+                <div style="font-size:11px;color:var(--dsw-alias-label-caption);margin-top:2px;">软删除留痕 · 随时一键复原</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 见闻世界书卡片 (Lore Cards) -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">见闻世界书 (Lore)</span>
+              <span class="card-note">按关键词现场动态抽取</span>
+              <div style="flex:1;"></div>
+              <button class="btn sm" onclick="alert('添加见闻卡模态框已就绪')">+ 新增见闻</button>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div class="lore-card">
+                <div class="lore-top">
+                  <span>wuchang-ranked (五常白银段位)</span>
+                  <span style="color:var(--dsw-alias-state-success-primary);">冷却就绪 (今日可用)</span>
+                </div>
+                <div style="font-size:12px;color:var(--dsw-alias-label-secondary);">“自嘲游戏水平：白银段位，遇到顺风局就夸口，逆风局就说键盘漏电”</div>
+                <div class="lore-keys">
+                  <span class="tag">上分</span><span class="tag">段位</span><span class="tag">白银</span><span class="tag">残局</span><span class="tag">对枪</span>
+                </div>
+              </div>
+
+              <div class="lore-card">
+                <div class="lore-top">
+                  <span>saving-snacks (舍不得吃的小零食)</span>
+                  <span style="color:var(--dsw-alias-state-success-primary);">冷却就绪 (今日可用)</span>
+                </div>
+                <div style="font-size:12px;color:var(--dsw-alias-label-secondary);">“上次好日子留下的零食放化了，舍不得吃还被主人说了两句”</div>
+                <div class="lore-keys">
+                  <span class="tag">零食</span><span class="tag">好吃的</span><span class="tag">白饭</span><span class="tag">干饭</span><span class="tag">雪糕</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 子视图 3：质量体检与 L0 (Quality View) -->
+      <div id="pViewQuality" style="display:none;flex-direction:column;gap:12px;">
+        <div class="cockpit-grid">
+          
+          <!-- L0 静态检查雷达卡 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">L0 静态合规检查</span>
+              <span class="tag rep">6/6 PASS 全部合规</span>
+            </div>
+            <table class="diag-table">
+              <tbody>
+                <tr>
+                  <td>红线三件套（不许+为什么+写成什么）</td>
+                  <td><span class="tag rep">PASS</span></td>
+                  <td>9 条红线全部具备 instead 替代引导</td>
+                </tr>
+                <tr>
+                  <td>禁止句占比（≤25%）</td>
+                  <td><span class="tag rep">PASS</span></td>
+                  <td>7/141 = 5%（远低于 25% 警戒线）</td>
+                </tr>
+                <tr>
+                  <td>手段表（≥6 类可做的事）</td>
+                  <td><span class="tag rep">PASS</span></td>
+                  <td>6 类正向手段完备</td>
+                </tr>
+                <tr>
+                  <td>签名词频超限检查</td>
+                  <td><span class="tag rep">PASS</span></td>
+                  <td>高频词均 ≤3 次，无机械化灌水</td>
+                </tr>
+                <tr>
+                  <td>矛盾写成 X vs Y 格式</td>
+                  <td><span class="tag rep">PASS</span></td>
+                  <td>4 条矛盾均非空洞标签</td>
+                </tr>
+                <tr>
+                  <td>示例去重与来源校验</td>
+                  <td><span class="tag rep">PASS</span></td>
+                  <td>9 条真实语料互不重复且带上下文</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- W5 历史换卡互动数据对比 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">预设换卡互动对比 (W5)</span>
+              <span class="card-note">不同人设获赞与互动效果</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div style="background:var(--dsw-alias-bg-module-platform);padding:10px 12px;border-radius:10px;">
+                <div style="display:flex;justify-content:space-between;font-weight:600;">
+                  <span>whale@4.0.0 (豆腐 · 大肥鱼)</span>
+                  <span style="color:var(--dsw-alias-state-success-primary);">总获赞 7 · 被回复 3</span>
+                </div>
+                <div style="font-size:11.5px;color:var(--dsw-alias-label-tertiary);margin-top:4px;">
+                  3 轮运行 · “这折叠次数是给手残党看的吧” (4赞) · 互动转化率 66%
+                </div>
+              </div>
+
+              <div style="background:var(--dsw-alias-bg-module-platform);padding:10px 12px;border-radius:10px;opacity:0.8;">
+                <div style="display:flex;justify-content:space-between;font-weight:600;">
+                  <span>elaina@2.0.0 (灰之魔女)</span>
+                  <span style="color:var(--dsw-alias-label-tertiary);">总获赞 0 · 被回复 0</span>
+                </div>
+                <div style="font-size:11.5px;color:var(--dsw-alias-label-tertiary);margin-top:4px;">
+                  1 轮运行 · 语言风格偏高冷，社区路人接话意愿较低
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         TAB 5: 排班与自检 (Settings & Diagnosis)
+         ══════════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tab-settings">
+      
+      <!-- 二级分组 -->
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div class="sub-segmented">
+          <button class="sub-seg-btn active" id="setSubBtnRules" onclick="switchSettingsSubTab('rules')">节奏与配额</button>
+          <button class="sub-seg-btn" id="setSubBtnContent" onclick="switchSettingsSubTab('content')">内容与禁令</button>
+          <button class="sub-seg-btn" id="setSubBtnEnv" onclick="switchSettingsSubTab('env')">运行环境与模型</button>
+        </div>
+        <button class="btn sm primary" onclick="saveSettingsConfig()">保存配置变更</button>
+      </div>
+
+      <!-- 子分组 1：节奏与配额 (Rules) -->
+      <div id="setViewRules" style="display:flex;flex-direction:column;gap:12px;">
+        <div class="cockpit-grid">
+          
+          <!-- 排班调度 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">排班调度机制</span>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">自动值班总开关 (autoDuty)</div>
+                <div class="setting-help">按所选排班模式在后台自动调度 headless 隔离会话</div>
+              </div>
+              <button class="dsh-switch on" id="setSwitchAutoDuty" onclick="toggleSwitch(this)"></button>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">排班模式 (dutyScheduleMode)</div>
+                <div class="setting-help">支持谷时窗口 / 固定间隔 / 指定时刻</div>
+              </div>
+              <select style="height:28px;padding:0 8px;border-radius:6px;border:0.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font-size:12px;">
+                <option selected>谷时窗口 (中午 noon + 夜间 night)</option>
+                <option>固定间隔 (每 180 分钟)</option>
+                <option>指定时刻 (HH:MM 槽位)</option>
+              </select>
+            </div>
+
+            <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:8px;">
+              <div>
+                <div class="setting-label">允许触发的星期 (dutyWeekdays)</div>
+                <div class="setting-help">点击切换触发日；全选或全不选均等效于每天</div>
+              </div>
+              <div class="weekdays-group">
+                <button class="weekday-btn active" onclick="toggleWeekdayBtn(this)">周一</button>
+                <button class="weekday-btn active" onclick="toggleWeekdayBtn(this)">周二</button>
+                <button class="weekday-btn active" onclick="toggleWeekdayBtn(this)">周三</button>
+                <button class="weekday-btn active" onclick="toggleWeekdayBtn(this)">周四</button>
+                <button class="weekday-btn active" onclick="toggleWeekdayBtn(this)">周五</button>
+                <button class="weekday-btn active" onclick="toggleWeekdayBtn(this)">周六</button>
+                <button class="weekday-btn active" onclick="toggleWeekdayBtn(this)">周日</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 配额步进器族 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">配额安全上限</span>
+              <span class="card-note">超限强行掐断写动作</span>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">每日评论上限 (commentsPerDay)</div>
+                <div class="setting-help">公开文字最重动作，严格受控</div>
+              </div>
+              <div class="dsh-stepper">
+                <button onclick="stepNum('numCommentsPerDay', -1)">-</button>
+                <span id="numCommentsPerDay">5</span>
+                <button onclick="stepNum('numCommentsPerDay', 1)">+</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">每日点赞上限 (likesPerDay)</div>
+                <div class="setting-help">最低成本的存在感沉淀</div>
+              </div>
+              <div class="dsh-stepper">
+                <button onclick="stepNum('numLikesPerDay', -1)">-</button>
+                <span id="numLikesPerDay">10</span>
+                <button onclick="stepNum('numLikesPerDay', 1)">+</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">每轮跟进回复 (repliesPerRound)</div>
+                <div class="setting-help">对评论区别人回复我的跟进互动</div>
+              </div>
+              <div class="dsh-stepper">
+                <button onclick="stepNum('numRepliesPerRound', -1)">-</button>
+                <span id="numRepliesPerRound">2</span>
+                <button onclick="stepNum('numRepliesPerRound', 1)">+</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">每轮主动接话 (replyOthersPerRound)</div>
+                <div class="setting-help">去别人热门楼层下方幽默接话</div>
+              </div>
+              <div class="dsh-stepper">
+                <button onclick="stepNum('numReplyOthersPerRound', -1)">-</button>
+                <span id="numReplyOthersPerRound">3</span>
+                <button onclick="stepNum('numReplyOthersPerRound', 1)">+</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 子分组 2：内容与禁令 (Content & Redlines) -->
+      <div id="setViewContent" style="display:none;flex-direction:column;gap:12px;">
+        <div class="cockpit-grid">
+          
+          <!-- 5 大安全红线 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">五大硬性安全红线禁令</span>
+              <span class="tag rep">违背直接拒绝</span>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">隐私保护禁令 (banPrivacy)</div>
+                <div class="setting-help">绝对禁止泄露任何真人姓名、地理位置、联系方式</div>
+              </div>
+              <button class="dsh-switch on" onclick="toggleSwitch(this)"></button>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">禁止冒充真人 (banImpersonation)</div>
+                <div class="setting-help">被直问是不是AI必须坦白，不编造真人日常履历</div>
+              </div>
+              <button class="dsh-switch on" onclick="toggleSwitch(this)"></button>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">禁止争吵与站队 (banControversy)</div>
+                <div class="setting-help">遇到争议拉踩、地域攻击、饭圈站队一律沉默跳过</div>
+              </div>
+              <button class="dsh-switch on" onclick="toggleSwitch(this)"></button>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">禁止复读与机械刷屏 (banRepeat)</div>
+                <div class="setting-help">严禁多条视频发相同或相近模板评论</div>
+              </div>
+              <button class="dsh-switch on" onclick="toggleSwitch(this)"></button>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">禁止生硬拒答 (banReplyRefusal)</div>
+                <div class="setting-help">不说“作为一个AI我无法回答”，用调侃幽默换气带过</div>
+              </div>
+              <button class="dsh-switch on" onclick="toggleSwitch(this)"></button>
+            </div>
+          </div>
+
+          <!-- 关键词过滤与关注源 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">内容源与避让关键词</span>
+            </div>
+
+            <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+              <div class="setting-label">避让关键词列表 (avoidList)</div>
+              <div class="setting-help">命中以下词汇一律不看、不赞、不评</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+                <span class="tag warn">引战 ×</span>
+                <span class="tag warn">拉踩 ×</span>
+                <span class="tag warn">对线 ×</span>
+                <span class="tag warn">吵架 ×</span>
+                <button class="btn sm" onclick="alert('输入添加避让词')">+ 添加</button>
+              </div>
+            </div>
+
+            <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+              <div class="setting-label">优先偏好关键词 (keywords)</div>
+              <div class="setting-help">搜索和热门筛选优先推荐词汇</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+                <span class="tag cmt">AI实测</span>
+                <span class="tag cmt">开源大模型</span>
+                <span class="tag cmt">数码评测</span>
+                <span class="tag cmt">日常日常</span>
+                <button class="btn sm" onclick="alert('输入添加偏好词')">+ 添加</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 子分组 3：运行环境与模型 (Env & Model) -->
+      <div id="setViewEnv" style="display:none;flex-direction:column;gap:12px;">
+        <div class="cockpit-grid">
+          
+          <!-- 模型与会话环境 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">值班独立模型通道</span>
+              <span class="card-note">仅影响 headless 值班，不改当前主会话</span>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">模型供应商 (provider)</div>
+                <div class="setting-help">推荐 DeepSeek 官方账号凭证直连</div>
+              </div>
+              <select style="height:28px;padding:0 8px;border-radius:6px;border:0.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font-size:12px;">
+                <option selected>deepseek-account (当前生效)</option>
+                <option>openai</option>
+                <option>custom-endpoint</option>
+              </select>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">模型代号 (model)</div>
+                <div class="setting-help">兼顾超快响应与推理深度</div>
+              </div>
+              <select style="height:28px;padding:0 8px;border-radius:6px;border:0.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font-size:12px;">
+                <option selected>deepseek-flash (推荐)</option>
+                <option>deepseek-pro</option>
+              </select>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">推理强度 (reasoningEffort)</div>
+                <div class="setting-help">high 提供全量思维链复核与红线对抗审</div>
+              </div>
+              <select style="height:28px;padding:0 8px;border-radius:6px;border:0.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font-size:12px;">
+                <option selected>high (高强度复核审)</option>
+                <option>low (极速输出)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 10 项一键自检表 -->
+          <div class="card">
+            <div class="card-head">
+              <span class="card-title">10 项系统运行健康自检</span>
+              <div style="flex:1;"></div>
+              <button class="btn sm" onclick="runSimulatedDiagnostics()">重新诊断</button>
+            </div>
+
+            <table class="diag-table">
+              <thead>
+                <tr>
+                  <th>检查项</th>
+                  <th>状态</th>
+                  <th>说明与版本</th>
+                </tr>
+              </thead>
+              <tbody id="diagTableBody">
+                <tr>
+                  <td>Python 解释器</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>Python 3.11.2 (虚拟环境 .venv)</td>
+                </tr>
+                <tr>
+                  <td>Python 依赖库</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>bilibili-api 17.1.0 / aiohttp / mcp</td>
+                </tr>
+                <tr>
+                  <td>MCP Server 文件</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>mcp_server.py 编译自洽</td>
+                </tr>
+                <tr>
+                  <td>MCP 工具注册</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>34/34 个工具加载就绪 (门禁生效)</td>
+                </tr>
+                <tr>
+                  <td>B 站登录凭证</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>UID 10000001 有效 (LV6 · 大会员)</td>
+                </tr>
+                <tr>
+                  <td>dsh CLI 路径</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>DSH Desktop Runtime 0.2.1 就绪</td>
+                </tr>
+                <tr>
+                  <td>headless profile</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>白名单隔离沙箱配置文件存在</td>
+                </tr>
+                <tr>
+                  <td>家目录读写权限</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>~/.dsh/bili-fenshen/ 可读写</td>
+                </tr>
+                <tr>
+                  <td>值班模型通道</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>deepseek-account / deepseek-flash</td>
+                </tr>
+                <tr>
+                  <td>控制台路由挂载</td>
+                  <td><span class="tag rep">✓ PASS</span></td>
+                  <td>/api/bili-fenshen prefix 挂载正常</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       前端动态交互脚本 (无外部依赖 · 纯原生响应式)
+       ══════════════════════════════════════════════════════════════════ -->
+  <script>
+    // 1. 一级导航切换
+    function switchNavTab(tabId, el) {
+      document.querySelectorAll('.nav-tab-item').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      el.classList.add('active');
+      const panel = document.getElementById('tab-' + tabId);
+      if (panel) panel.classList.add('active');
+    }
+
+    // 2. 主题切换
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      html.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
+    }
+
+    // 3. 运行中 / 空闲 状态模拟切换
+    let isRunning = true;
+    function toggleRunningState() {
+      isRunning = !isRunning;
+      const statePill = document.getElementById('pillState');
+      const livePill = document.getElementById('liveStatePill');
+      const actionBtn = document.getElementById('headerActionBtn');
+      const headerPill = document.getElementById('headerStatusPill');
+      const clock = document.getElementById('liveClockDisplay');
+      const subNote = document.getElementById('phaseSubNote');
+      const s3 = document.getElementById('stage3');
+      const s4 = document.getElementById('stage4');
+
+      if (isRunning) {
+        statePill.innerHTML = '<span class="dot running"></span> 运行中';
+        livePill.innerHTML = '<span class="dot running"></span> 运行中';
+        headerPill.innerHTML = '<span class="dot running"></span> 自动值班开';
+        actionBtn.textContent = '中止本轮';
+        actionBtn.classList.add('danger');
+        actionBtn.classList.remove('primary');
+        clock.textContent = '03:14';
+        subNote.textContent = '· 看内容';
+        s3.classList.add('active');
+        s3.querySelector('em').textContent = '进行中';
+        s4.classList.remove('done');
+        s4.querySelector('em').textContent = '等待';
+      } else {
+        statePill.innerHTML = '<span class="dot idle"></span> 空闲';
+        livePill.innerHTML = '<span class="dot idle"></span> 空闲待机';
+        headerPill.innerHTML = '<span class="dot idle"></span> 等待下轮 12:00';
+        actionBtn.textContent = '跑一轮';
+        actionBtn.classList.remove('danger');
+        actionBtn.classList.add('primary');
+        clock.textContent = '09:36';
+        subNote.textContent = '· 上轮完成 (退出码 0)';
+        s3.classList.remove('active');
+        s3.classList.add('done');
+        s3.querySelector('em').textContent = '完成';
+        s4.classList.add('done');
+        s4.querySelector('em').textContent = '完成';
+      }
+    }
+
+    // 4. 活动页子视图切换 (生命周期 / 时间线 / 判重表)
+    function switchActSubView(view) {
+      document.querySelectorAll('#tab-activity .sub-segmented .sub-seg-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('actViewLife').style.display = 'none';
+      document.getElementById('actViewTimeline').style.display = 'none';
+      document.getElementById('actViewSeen').style.display = 'none';
+
+      if (view === 'life') {
+        document.getElementById('actBtnLife').classList.add('active');
+        document.getElementById('actViewLife').style.display = 'flex';
+      } else if (view === 'timeline') {
+        document.getElementById('actBtnTimeline').classList.add('active');
+        document.getElementById('actViewTimeline').style.display = 'flex';
+      } else if (view === 'seen') {
+        document.getElementById('actBtnSeen').classList.add('active');
+        document.getElementById('actViewSeen').style.display = 'flex';
+      }
+    }
+
+    // 5. 活动卡片展开/收起
+    function toggleCardOpen(summaryEl) {
+      const card = summaryEl.closest('.act-card');
+      const body = card.querySelector('.act-detail-body');
+      if (body.style.display === 'none') {
+        body.style.display = 'flex';
+        summaryEl.querySelector('span:last-child').textContent = '▾ 点击收起完整链路';
+      } else {
+        body.style.display = 'none';
+        summaryEl.querySelector('span:last-child').textContent = '▸ 点击展开完整链路';
+      }
+    }
+
+    // 6. 判重表实时输入检索
+    function filterSeenTable() {
+      const query = document.getElementById('seenSearchInput').value.trim().toLowerCase();
+      const rows = document.querySelectorAll('#seenTable tbody tr');
+      rows.forEach(r => {
+        const text = r.textContent.toLowerCase();
+        r.style.display = text.includes(query) ? '' : 'none';
+      });
+    }
+
+    // 7. 活动页列表筛选
+    function filterActivityItems(type, btn) {
+      btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('primary'));
+      btn.classList.add('primary');
+      const cards = document.querySelectorAll('#actViewLife .act-card');
+      cards.forEach(c => {
+        if (type === 'all') c.style.display = '';
+        else if (type === 'replies') c.style.display = c.dataset.hasReply ? '' : 'none';
+        else if (type === 'scanned') c.style.display = c.dataset.hasScan ? '' : 'none';
+      });
+    }
+
+    // 8. 实时事件流分类筛选 chips
+    function filterLiveEvents(kind, btn) {
+      btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const lines = document.querySelectorAll('#liveTraceBox .trace-line');
+      lines.forEach(line => {
+        if (kind === 'all') line.style.display = '';
+        else line.style.display = line.dataset.kind === kind ? '' : 'none';
+      });
+    }
+
+    // 9. 自动滚动开关切换
+    function toggleAutoScroll() {
+      const sw = document.getElementById('autoScrollSwitch');
+      sw.classList.toggle('on');
+    }
+
+    // 10. 日报日期切换
+    const REPORT_DATA = {
+      '2026-10-29': {
+        title: '日报 2026-10-29.md',
+        chars: '1,420 字符',
+        html: `<h2># 值班综合日报 · 2026-10-29</h2>
+<p><strong>生成时间</strong>：2026-10-29 12:35:40 · <strong>执行状态</strong>：正常闭环 · <strong>异常拦截</strong>：0 次</p>
+<h3>## 午间值班轮（round id: 2026-10-29T12:00:00Z）</h3>
+<ul>
+  <li><strong>拉取策略</strong>：<code>bili_feed</code> 访问最常访问 8 位关注 UP 主，过滤账本已读记录 12 条。</li>
+  <li><strong>阅片候选</strong>：挑中 2 条高质量视频（BV1xrnz6gEVD, BV1CqnW6oE8B），跳过 1 条（无字幕生肉视频）。</li>
+  <li><strong>互动动作</strong>：点赞 2 次，发表一级评论 1 条（评语：<code>这折叠次数是给手残党看的吧...</code>），收到观众跟进后二度回复 1 条。</li>
+  <li><strong>接话扫描</strong>：扫描热门评论 2 条，决策命中 1 条可接楼层（666设计师），判定符合轻幽默吐槽调性。</li>
+  <li><strong>发言门控</strong>：判定为节奏偏密（observe 观察档放行），建议上限 1 条，实际执行严格受控。</li>
+</ul>
+<h3>## 早间值班轮（round id: 2026-10-29T08:30:00Z）</h3>
+<ul>
+  <li><strong>拉取策略</strong>：热门综合榜前 20 条，按“AI实测”关键词二次打分。</li>
+  <li><strong>互动动作</strong>：浏览 1 条，点赞 1 次，扫描 1 条判定不接（评论区站队吵架过于激烈，触发红线避让）。</li>
+</ul>`
+      },
+      '2026-10-28': {
+        title: '日报 2026-10-28.md',
+        chars: '1,120 字符',
+        html: `<h2># 值班综合日报 · 2026-10-28</h2>
+<p><strong>执行概览</strong>：全天执行 3 轮值班 · 产生评论 2 次 · 点赞 4 次 · 接话 1 次</p>
+<h3>## 重点事项</h3>
+<ul>
+  <li>命中 DeepSeek 架构解析视频，生成关于“大肥鱼拟人形象”的高赞短评。</li>
+  <li>防刷屏机制生效：由于上午已评过相似题材，晚间值班自动降级为纯点赞与记录。</li>
+</ul>`
+      },
+      '2026-10-27': {
+        title: '日报 2026-10-27.md',
+        chars: '980 字符',
+        html: `<h2># 值班综合日报 · 2026-10-27</h2>
+<p><strong>执行概览</strong>：全天执行 2 轮值班 · 产生点赞 3 次 · 命中游戏白银段位见闻 1 次</p>`
+      },
+      '2026-10-26': {
+        title: '日报 2026-10-26.md',
+        chars: '1,650 字符',
+        html: `<h2># 值班综合日报 · 2026-10-26</h2>
+<p><strong>执行概览</strong>：全天执行 4 轮值班 · 首次接入新版 52k 语料 Lint 校验</p>`
+      },
+      'digest-2026-10': {
+        title: 'digest/2026-10.md',
+        chars: '3,840 字符',
+        html: `<h2># 2026 年 10 月度归档报告</h2>
+<p>本月共运行值班轮次 64 轮 · 产生互动评论 52 条 · 获赞 48 次 · 违规拦截 0 次</p>
+<ul>
+  <li><strong>人设演进</strong>：从 v1 legacy 直通平稳迁移到 v4 三通道结构化卡架构。</li>
+  <li><strong>社区存在感</strong>：小号粉丝由初始 12 人增长至 1,420 人。</li>
+</ul>`
+      },
+      'overlay': {
+        title: 'headless-overlay.yml',
+        chars: '410 字符',
+        html: `<h2># headless-overlay.yml</h2>
+<pre><code>version: 1
+environment:
+  headless: true
+  profile: "dsh-headless-bili"
+  timeout_ms: 1200000
+security:
+  isolated_storage: true
+  allow_mcp_bili: true
+  disallow_arbitrary_fs: true</code></pre>`
+      }
+    };
+
+    function switchReportDoc(docKey, el) {
+      document.querySelectorAll('#reportMenuList .report-menu-item').forEach(m => m.classList.remove('active'));
+      el.classList.add('active');
+      const data = REPORT_DATA[docKey] || REPORT_DATA['2026-10-29'];
+      document.getElementById('reportDocTitle').textContent = data.title;
+      document.getElementById('reportDocCharCount').textContent = data.chars;
+      document.getElementById('reportDocContent').innerHTML = data.html;
+    }
+
+    // 11. 人设工作室预设切换
+    const PRESET_DATA = {
+      whale: {
+        identity: '本鱼 / 我（被问及是谁答：主人是跟我一起用这个账号的）',
+        prompt: `===== C1 前置身份 =====
+你是 DeepSeek 的民间拟人形象「大肥鱼」豆腐。圆滚滚、软萌温和带点小机灵，开口自称「本鱼」或「我」。
+边界红线：承认 AI 生成，不装真人；只会点赞和发短评，不投币不投稿。
+
+===== C2 末尾状态约束 =====
+今日时间段：午间值班（精力充沛）
+最近三条开头禁止重复；严格收在情绪/反问/emoji，坚决别收在理性大段总结上！`
+      },
+      elaina: {
+        identity: '我 / 会飞的魔女（语气高傲轻蔑中带着温柔）',
+        prompt: `===== C1 前置身份 =====
+你是灰之魔女伊蕾娜。年轻美丽且天赋异禀的旅行魔女。
+口吻：自信、带有一点点自恋，用词考究，绝不使用低俗网络烂梗。`
+      },
+      generic: {
+        identity: '我 / 普通路过网友（平实、自然、随和）',
+        prompt: `===== C1 前置身份 =====
+你是一个普通的B站老二次元网友。说话随和，善于发现视频里的小笑点，不摆架子。`
+      }
+    };
+
+    function switchPresetModel(presetKey, btn) {
+      btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const p = PRESET_DATA[presetKey] || PRESET_DATA.whale;
+      document.getElementById('pIdentityText').textContent = p.identity;
+      document.getElementById('pCompiledPrompt').textContent = p.prompt;
+    }
+
+    // 12. 人设页子视图切换 (人设卡 / 素材库 / 质量体检)
+    function switchPersonaSubTab(sub) {
+      document.querySelectorAll('#tab-persona .sub-segmented .sub-seg-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('pViewCard').style.display = 'none';
+      document.getElementById('pViewBank').style.display = 'none';
+      document.getElementById('pViewQuality').style.display = 'none';
+
+      if (sub === 'card') {
+        document.getElementById('pSubBtnCard').classList.add('active');
+        document.getElementById('pViewCard').style.display = 'flex';
+      } else if (sub === 'bank') {
+        document.getElementById('pSubBtnBank').classList.add('active');
+        document.getElementById('pViewBank').style.display = 'flex';
+      } else if (sub === 'quality') {
+        document.getElementById('pSubBtnQuality').classList.add('active');
+        document.getElementById('pViewQuality').style.display = 'flex';
+      }
+    }
+
+    // 13. 素材弹药库分类过滤
+    function filterBankBucket(bucket, btn) {
+      btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('primary'));
+      btn.classList.add('primary');
+      alert('已筛选展示 [' + bucket + '] 分类下的高赞语料条目');
+    }
+
+    // 14. 设置页子视图切换 (节奏 / 内容 / 环境)
+    function switchSettingsSubTab(sub) {
+      document.querySelectorAll('#tab-settings .sub-segmented .sub-seg-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('setViewRules').style.display = 'none';
+      document.getElementById('setViewContent').style.display = 'none';
+      document.getElementById('setViewEnv').style.display = 'none';
+
+      if (sub === 'rules') {
+        document.getElementById('setSubBtnRules').classList.add('active');
+        document.getElementById('setViewRules').style.display = 'flex';
+      } else if (sub === 'content') {
+        document.getElementById('setSubBtnContent').classList.add('active');
+        document.getElementById('setViewContent').style.display = 'flex';
+      } else if (sub === 'env') {
+        document.getElementById('setSubBtnEnv').classList.add('active');
+        document.getElementById('setViewEnv').style.display = 'flex';
+      }
+    }
+
+    // 15. 通用 Switch 开关切换
+    function toggleSwitch(el) {
+      el.classList.toggle('on');
+    }
+
+    // 16. 星期按钮多选切换
+    function toggleWeekdayBtn(btn) {
+      btn.classList.toggle('active');
+    }
+
+    // 17. 步进器数字调节
+    function stepNum(id, delta) {
+      const el = document.getElementById(id);
+      let v = parseInt(el.textContent, 10) + delta;
+      if (v < 0) v = 0;
+      el.textContent = v;
+    }
+
+    // 18. 保存设置反馈
+    function saveSettingsConfig() {
+      alert('配置已持久化保存至 ~/.dsh/bili-fenshen/config.json 覆盖层，下一轮值班生效！');
+    }
+
+    // 19. 检查登录凭证
+    function triggerCredentialCheck() {
+      alert('B 站登录凭证联网核验完成：SESSDATA 有效，UID 10000001 (LV6)，无任何风控限制。');
+    }
+
+    // 20. 10 项系统自检动态模拟
+    function runSimulatedDiagnostics() {
+      const tbody = document.getElementById('diagTableBody');
+      tbody.style.opacity = '0.4';
+      setTimeout(() => {
+        tbody.style.opacity = '1';
+        alert('10 项系统自检并行复测完成：10 PASS, 0 WARN, 0 FAIL！系统处于就绪稳态。');
+      }, 400);
+    }
+  </script>
+</body>
+</html>
