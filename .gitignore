@@ -38,3 +38,7 @@ _login_diag.*
 TEST-REPORT-*.md
 commandcode-mcp/
 dsh-session-*.zip
+# Node（pnpm/npm 本地产物）
+node_modules/
+# 误生成的路径转义目录
+%SystemDrive%/
