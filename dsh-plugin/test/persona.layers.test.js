@@ -80,8 +80,8 @@ test('setStats：五块体量 + 总长（与旧 summarize 口径一致）', () =
 
 /* ───────────────────────── W1-2：场域字数 ───────────────────────── */
 
-test('modes：卡里 voice.modes 读出 评论 100 / 楼中楼 40 / 动态 60', () => {
-  assert.deepEqual(resolveModes(whaleCard()), { comment: 100, reply: 40, dynamic: 60 })
+test('modes：卡里 voice.modes 读出 评论 60 / 楼中楼 40 / 动态 60（2026-10-29 核验 §2.3 Step 3：100→60，p90=60）', () => {
+  assert.deepEqual(resolveModes(whaleCard()), { comment: 60, reply: 40, dynamic: 60 })
   // 卡里没写就回落缺省（不是 undefined）
   assert.deepEqual(resolveModes(smokeCard()), { comment: 100, reply: 40, dynamic: 60 })
   // 纯数字 / {maxChars} 两种写法都认
@@ -89,15 +89,15 @@ test('modes：卡里 voice.modes 读出 评论 100 / 楼中楼 40 / 动态 60', 
     { comment: 120, reply: 30, dynamic: 50 })
 })
 
-test('P3 场域表：白天 100/40/60；凌晨与场域取更严（全 40，不把楼中楼放宽）', () => {
+test('P3 场域表：白天 60/40/60；凌晨与场域取更严（全 40，不把楼中楼放宽）', () => {
   const modes = resolveModes(whaleCard())
   const day = buildState(stateAt(whaleCard(), 15), { modes })
-  assert.match(day, /评论 100 \/ 楼中楼 40 \/ 动态 60 字封顶/)
+  assert.match(day, /评论 60 \/ 楼中楼 40 \/ 动态 60 字封顶/)
   assert.match(day, /现在最紧 40 字/)
 
   const night = buildState(stateAt(whaleCard(), 2), { modes })
   assert.match(night, /评论 40 \/ 楼中楼 40 \/ 动态 40 字封顶/, '凌晨必须按更严的 40')
-  assert.ok(!/评论 100/.test(night), '凌晨不能把评论放宽到 100')
+  assert.ok(!/评论 60/.test(night), '凌晨不能把评论放宽到 60')
 
   // 旧口径（不传 modes）保持原样：单一上限 + 时段取更严
   assert.match(buildState(stateAt(whaleCard(), 15), { maxChars: 100 }), /这条按 100 字以内来。/)
@@ -107,7 +107,7 @@ test('P3 场域表：白天 100/40/60；凌晨与场域取更严（全 40，不�
 test('effectiveModes：时段上限与场域上限取 min，永不放宽', () => {
   assert.deepEqual(effectiveModes(resolveModes(whaleCard()), 40), { comment: 40, reply: 40, dynamic: 40 })
   assert.deepEqual(effectiveModes(resolveModes(whaleCard()), 60), { comment: 60, reply: 40, dynamic: 60 })
-  assert.deepEqual(effectiveModes(resolveModes(whaleCard()), null), { comment: 100, reply: 40, dynamic: 60 })
+  assert.deepEqual(effectiveModes(resolveModes(whaleCard()), null), { comment: 60, reply: 40, dynamic: 60 })
 })
 
 test('P5 尾注：behaviorStyle 1 行 + 场域行（楼中楼 40 / 动态 60）', () => {
@@ -121,11 +121,13 @@ test('P5 尾注：behaviorStyle 1 行 + 场域行（楼中楼 40 / 动态 60）'
   for (const s of whaleCard().voice.samples.good) assert.ok(!tail.includes(s.text))
 })
 
-test('编译 modes：80 字楼中楼按 40 判超限（P3 与尾注都钉 40）', () => {
+test('编译 modes：80 字楼中楼按 40 判超限（P3 与尾注都钉 40）；评论按 venues 默认档收紧到 35', () => {
   const card = whaleCard()
   const out = compilePersona(card, { state: stateAt(card), bank: null, roundId: 'R-modes', modes: resolveModes(card) })
   assert.match(out.text, /楼中楼 40/)
-  assert.match(out.text, /评论 100/)
+  // §2.4 决策 A：venues 接进编译——评论提示上限取默认档（普通区 35），并注入「剧场分层」音量段
+  assert.match(out.text, /评论 35/)
+  assert.match(out.text, /剧场分层（评论先选档，发评论时给 bili_reply 传 venue=档名）：普通区（默认） 5-20 字 上限 35；生态区 8-28 字 上限 40；AI话题区 10-35 字 上限 50。/)
   assert.match(out.text, /动态 60/)
   // 旧口径那行不该再出现（避免"口径两套"）
   assert.ok(!out.text.includes('这条按 100 字以内来'))

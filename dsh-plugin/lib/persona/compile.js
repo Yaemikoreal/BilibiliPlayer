@@ -15,6 +15,7 @@ import { resolveLoreIndex, renderLoreIndex } from './lore.js'
 import { debtLine, usedToday } from './state.js'
 import { pickExpression, renderExpression } from './expression.js'
 import { pickGoodSamples, pickBadSample, renderSamples } from './sample.js'
+import { venuePlanOf } from './lint.js'
 
 const wrap = (title, body) => (body ? `===== ${title} =====\n${body}\n` : '')
 
@@ -38,7 +39,10 @@ const voiceFacts = (v = {}) => {
   if (s.hardMax) bits.push(`硬上限 ${s.hardMax} 字`)
   const p = v.punctuation || {}
   const punct = []
-  if (p.periodMaxPerComment !== undefined) punct.push(`句号一条最多 ${p.periodMaxPerComment} 个`)
+  if (p.periodMaxPerComment !== undefined) {
+    // 2026-10-29 核验 §2.4：periodMax=0 是本号的风格规定（非语料事实），提示语按"不使用句号"说
+    punct.push(p.periodMaxPerComment === 0 ? '不使用句号（换行或表情结句）' : `句号一条最多 ${p.periodMaxPerComment} 个`)
+  }
   if (p.semicolon === 'never') punct.push('不用分号')
   if (p.quoteMaxPerRound) punct.push(`引号整轮最多 ${p.quoteMaxPerRound} 次且只引台词`)
   if (punct.length) bits.push(punct.join('；'))
@@ -55,6 +59,29 @@ const voiceFacts = (v = {}) => {
 /** 说一下"我"的在场感（来自 intensity 三档，比抽象形容词有效）。 */
 const selfPresence = (v = {}) =>
   v.intensity ? `情绪有档：轻「${v.intensity['轻'] || ''}」/ 中「${v.intensity['中'] || ''}」/ 重「${v.intensity['重'] || ''}」` : ''
+
+/**
+ * venues 三档音量段（2026-10-29 核验 §2.4 决策 A：接进 prompt + 质量门 + bili_reply venue 参数）。
+ * 一行给出各档字数上限与选档动作，注入 P3 状态块；默认档排最前。没有 venues / 数值 max 的卡返回空串。
+ */
+const venueTextOf = (card = {}) => {
+  const venues = card?.venues
+  const list = venues && typeof venues === 'object' && venues.list && typeof venues.list === 'object' ? venues.list : {}
+  const def = String(venues?.default || '').trim()
+  const rows = []
+  for (const [name, v] of Object.entries(list)) {
+    const n = Number(v?.max)
+    if (!String(name).trim() || !Number.isFinite(n) || n <= 0) continue
+    const chars = String(v?.chars || '').trim()
+    rows.push({
+      name: String(name).trim(),
+      text: `${name === def ? `${String(name).trim()}（默认）` : String(name).trim()}${chars ? ` ${chars} 字` : ''} 上限 ${n}`,
+    })
+  }
+  if (!rows.length) return ''
+  rows.sort((a, b) => (a.name === def ? -1 : b.name === def ? 1 : 0))
+  return `剧场分层（评论先选档，发评论时给 bili_reply 传 venue=档名）：${rows.map((r) => r.text).join('；')}。`
+}
 
 /**
  * canon 的"今天用过了吗"判定。
@@ -151,8 +178,9 @@ export const buildCore = (card = {}, { state = {} } = {}) => {
  * @param {boolean} [opts.shrink] 降级动作 `state:shrink`：丢掉"最近说过"列表，保住状态/欠账/字数
  * @param {string} [opts.memoryText] W7-1 记忆段（已渲染好的人话；空串=不注入）
  * @param {string} [opts.selfCorrect] W7-3 体检自纠（一句动作提示；空串=不注入）
+ * @param {string} [opts.venueText] venues 三档音量段（§2.4 决策 A；空串=卡里没有 venues）
  */
-export const buildState = (state = {}, { maxChars = null, modes = null, shrink = false, memoryText = '', selfCorrect = '' } = {}) => {
+export const buildState = (state = {}, { maxChars = null, modes = null, shrink = false, memoryText = '', selfCorrect = '', venueText = '' } = {}) => {
   if (!state) return ''
   const lines = []
   const mood = state.mood || {}
@@ -186,6 +214,8 @@ export const buildState = (state = {}, { maxChars = null, modes = null, shrink =
     const caps = effectiveModes(modes, tod.maxChars)
     const strict = Math.min(...Object.keys(MODE_LABELS).map((k) => caps[k]))
     lines.push(`字数：评论 ${caps.comment} / 楼中楼 ${caps.reply} / 动态 ${caps.dynamic} 字封顶（哪个场域用哪个数；现在最紧 ${strict} 字）。`)
+    // §2.4 决策 A：venues 三档音量段跟在场域表后面（评论字数以档位为准）
+    if (venueText && !shrink) lines.push(venueText)
   } else {
     // 时段会压上限（凌晨/深夜 40 字），与场域上限取更严的那个
     const hardMax = maxChars ? Math.min(Number(maxChars) || 100, Number(tod.maxChars) || 100) : tod.maxChars
@@ -321,13 +351,22 @@ export const compilePersona = (card = {}, ctx = {}) => {
     if (bad?.text) p4 += `\n反例（别这样）：${bad.text}${bad.reason ? ` —— ${bad.reason}` : ''}`
   }
 
-  const stateText = buildState(state, { maxChars: modeMax, modes, shrink: has('state:shrink'), memoryText, selfCorrect })
+  // venues 三档（§2.4 决策 A）：评论场域的提示上限按默认档取（质量门按现场档取，lint.js venuePlanOf 同源）；
+  // 卡里没有 venues / 默认档不在表里时保持原 modes，一个字节都不动。
+  const venue = venuePlanOf(card)
+  const venueDefaultMax = venue.default ? Number(venue.limits[venue.default]) : NaN
+  const effModesForPrompt = modes && typeof modes === 'object' && Number.isFinite(venueDefaultMax) && venueDefaultMax > 0
+    ? { ...modes, comment: venueDefaultMax }
+    : modes
+  const venueText = venueTextOf(card)
+
+  const stateText = buildState(state, { maxChars: modeMax, modes: effModesForPrompt, shrink: has('state:shrink'), memoryText, selfCorrect, venueText })
   const blocks = {
     core: fitBlock('core', buildCore(card, { state }), effBudget),
     lore: loreBlock,
     state: fitBlock('state', has('state:drop') ? '' : stateText, effBudget),
     samples: fitBlock('samples', p4, effBudget),
-    tail: fitBlock('tail', buildTail(card, { modeMax, modes, todMaxChars: state?.timeOfDay?.maxChars ?? null }), effBudget),
+    tail: fitBlock('tail', buildTail(card, { modeMax, modes: effModesForPrompt, todMaxChars: state?.timeOfDay?.maxChars ?? null }), effBudget),
   }
 
   let text = renderPersonaText(blocks)

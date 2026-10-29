@@ -2439,7 +2439,7 @@ window.__ModuleLoader__.load({
         ),
       )
 
-      /* ── ③ 体检：说话还像它吗（近 N 条 vs 247 条基线） ── */
+      /* ── ③ 体检：说话还像它吗（近 N 条 vs 全量语料基线） ── */
       const ckMetrics = (ck && ck.metrics) || null
       const ckN = Number(ck && ck.n) || 0
       const ckMetric = (k) => Number(ckMetrics && ckMetrics[k]) || 0
@@ -2456,7 +2456,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'bf-card-title' }, '体检'),
             h('span', { className: 'bf-card-note' },
               ck && ckN
-                ? '近 ' + ckN + ' 条 vs 247 条基线 · 窗口 ' + (Number(ck.windowDays) || 14) + ' 天'
+                ? '近 ' + ckN + ' 条 vs 52,464 条基线 · 窗口 ' + (Number(ck.windowDays) || 14) + ' 天'
                 : ck ? '暂无数据' : '正在连接…'),
             h(Sp),
             ck && ckN ? h(Tag, { kind: ckView.kind }, ckView.text) : null,
@@ -2466,10 +2466,10 @@ window.__ModuleLoader__.load({
                 ck ? '暂无数据' + (ckReasons[0] ? '：' + ckReasons[0] : '') : '正在连接…')
             : h('div', null,
                 h('div', { className: 'bf-grid-4' },
-                  h(Metric, { label: '中位字数', value: String(ckMetric('medianChars')) + ' 字', foot: '基线 27 字' }),
-                  h(Metric, { label: '句号 / 条', value: ckMetric('periodPerComment').toFixed(3), foot: '基线 0.109' }),
-                  h(Metric, { label: '表情占比', value: pctText(ckMetric('emojiRatio')), foot: '基线 41.7%' }),
-                  h(Metric, { label: '问号占比', value: pctText(ckMetric('questionRatio')), foot: '基线 12.6%' }),
+                  h(Metric, { label: '中位字数', value: String(ckMetric('medianChars')) + ' 字', foot: '基线 19 字' }),
+                  h(Metric, { label: '句号 / 条', value: ckMetric('periodPerComment').toFixed(3), foot: '基线 0.170' }),
+                  h(Metric, { label: '表情占比', value: pctText(ckMetric('emojiRatio')), foot: '基线 31.4%' }),
+                  h(Metric, { label: '问号占比', value: pctText(ckMetric('questionRatio')), foot: '基线 7.4%' }),
                 ),
                 h('div', { className: 'bf-tools', style: { marginTop: 8 } },
                   h('span', { className: 'bf-note' }, '禁用词命中 ' + pctText(ckMetric('avoidHits')) + '（基线 0）'),

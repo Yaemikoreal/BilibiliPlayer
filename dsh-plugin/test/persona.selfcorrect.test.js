@@ -48,12 +48,13 @@ test('中位字数偏高 ⇒ 收短；偏低 ⇒ 给细节', () => {
 })
 
 test('句号 / 表情 / 问号 / 禁用词各自给不同动作', () => {
-  assert.match(selfCorrectFromCheckup(verdict('warn', ['每条句号 0.8（基线 0.109，偏多 0.69）'])), /只留一个句号/)
-  const lessEmoji = selfCorrectFromCheckup({ ...verdict('warn', ['表情占比 5%（基线 42%，偏离 -37%）']), metrics: { emojiRatio: 0.05 } })
+  // 2026-10-29 核验 §2.4 决策 ①：本号不使用句号（periodMax=0），自纠动作同步改
+  assert.match(selfCorrectFromCheckup(verdict('warn', ['每条句号 0.8（基线 0.1704，偏多 0.63）'])), /一个句号都别用/)
+  const lessEmoji = selfCorrectFromCheckup({ ...verdict('warn', ['表情占比 5%（基线 31%，偏离 -26%）']), metrics: { emojiRatio: 0.05 } })
   assert.match(lessEmoji, /带一个/)
-  const moreEmoji = selfCorrectFromCheckup({ ...verdict('warn', ['表情占比 90%（基线 42%，偏离 +48%）']), metrics: { emojiRatio: 0.9 } })
+  const moreEmoji = selfCorrectFromCheckup({ ...verdict('warn', ['表情占比 90%（基线 31%，偏离 +59%）']), metrics: { emojiRatio: 0.9 } })
   assert.match(moreEmoji, /别带/)
-  assert.match(selfCorrectFromCheckup(verdict('warn', ['问号占比 0%（基线 13%）'])), /问一句/)
+  assert.match(selfCorrectFromCheckup(verdict('warn', ['问号占比 0%（基线 7%）'])), /问一句/)
   assert.match(selfCorrectFromCheckup(verdict('bad', ['禁用词命中 3/10 条（30%）'])), /禁用/)
 })
 

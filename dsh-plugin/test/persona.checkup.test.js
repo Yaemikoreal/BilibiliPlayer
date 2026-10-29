@@ -16,6 +16,7 @@ import vm from 'node:vm'
 import {
   buildCheckup, avoidWordsOf, CHECKUP_BASELINE, CHECKUP_THRESHOLDS, CHECKUP_MIN_SAMPLES,
 } from '../lib/persona/checkup.js'
+import { HUMAN_BASELINE } from '../lib/persona/lint.js'
 import { buildTagStats } from '../lib/persona/tagstats.js'
 import { PERSONA_EVENT } from '../lib/persona/attribution.js'
 
@@ -38,10 +39,15 @@ const BASELINE_LIKE = [
 
 /* ══════════════════ ① buildCheckup：口径与两态 ══════════════════ */
 
-test('checkup：基线是 §8.2 固定常量（27 / 0.109 / 0.417 / 0.126）', () => {
+test('checkup：基线单源自 lint.js（52,464 实测：19 / 0.1704 / 0.3139 / 0.0742，字段映射后形状不变）', () => {
   assert.deepEqual({ ...CHECKUP_BASELINE }, {
-    medianChars: 27, periodPerComment: 0.109, emojiRatio: 0.417, questionRatio: 0.126,
+    medianChars: 19, periodPerComment: 0.1704, emojiRatio: 0.3139, questionRatio: 0.0742,
   })
+  // 单源：数值必须与 lint.js 的 HUMAN_BASELINE 逐字段相同（不许抄第二份）
+  assert.equal(CHECKUP_BASELINE.medianChars, HUMAN_BASELINE.medianChars)
+  assert.equal(CHECKUP_BASELINE.periodPerComment, HUMAN_BASELINE.periodRate)
+  assert.equal(CHECKUP_BASELINE.emojiRatio, HUMAN_BASELINE.emojiRate)
+  assert.equal(CHECKUP_BASELINE.questionRatio, HUMAN_BASELINE.questionRate)
   assert.equal(CHECKUP_MIN_SAMPLES, 5)
   // 阈值必须是「稳健」的：warn 阈值先于 bad 触发（warn 区间包住 bad 区间）
   assert.ok(CHECKUP_THRESHOLDS.medianChars.warnHigh < CHECKUP_THRESHOLDS.medianChars.badHigh)
@@ -88,12 +94,12 @@ test('checkup：贴近基线 → ok 且没有偏离原因', () => {
 
 test('checkup：单边阈值 —— 中位字数偏长 warn / 严重偏长 bad（低侧对称）', () => {
   const long = (n) => [0, 1, 2, 3, 4].map((i) => comment(`2026-10-28T0${i}:00:00.000Z`, '一'.repeat(n)))
-  const warn = buildCheckup({ events: long(45), now: NOW })       // 45/27 = 1.67×
+  const warn = buildCheckup({ events: long(35), now: NOW })       // 35/19 = 1.84×
   assert.equal(warn.verdict.level, 'warn')
   assert.match(warn.verdict.reasons.join(''), /中位字数/)
-  const bad = buildCheckup({ events: long(65), now: NOW })        // 65/27 = 2.41×
+  const bad = buildCheckup({ events: long(45), now: NOW })        // 45/19 = 2.37×
   assert.equal(bad.verdict.level, 'bad')
-  const short = buildCheckup({ events: long(10), now: NOW })      // 10/27 = 0.37×
+  const short = buildCheckup({ events: long(7), now: NOW })       // 7/19 = 0.37×
   assert.equal(short.verdict.level, 'bad')
   assert.match(short.verdict.reasons.join(''), /中位字数/)
 })
@@ -105,10 +111,10 @@ test('checkup：表情占比单边拉满 → bad；只有一处轻微偏离 → 
   assert.equal(bad.verdict.level, 'bad')
   assert.match(bad.verdict.reasons.join(''), /表情占比/)
 
-  // 只有 3/5 带表情（60% vs 41.7%，Δ=0.183 < 0.22）⇒ 不偏离；4/5=80%，Δ=0.383 > 0.22 ⇒ warn
-  const mild = [0, 1, 2, 3, 4].map((i) => comment(`2026-10-28T0${i}:00:00.000Z`, '一'.repeat(26) + (i < 3 ? '😀' : '')))
+  // 基线 31.4%（2026-10-29 全量实测）：3/5=60%，Δ=0.286 > 0.22 ⇒ warn；2/5=40%，Δ=0.086 ⇒ 不偏离
+  const mild = [0, 1, 2, 3, 4].map((i) => comment(`2026-10-28T0${i}:00:00.000Z`, '一'.repeat(26) + (i < 2 ? '😀' : '')))
   assert.equal(buildCheckup({ events: mild, now: NOW }).verdict.level, 'ok')
-  const warn = [0, 1, 2, 3, 4].map((i) => comment(`2026-10-28T0${i}:00:00.000Z`, '一'.repeat(26) + (i < 4 ? '😀' : '')))
+  const warn = [0, 1, 2, 3, 4].map((i) => comment(`2026-10-28T0${i}:00:00.000Z`, '一'.repeat(26) + (i < 3 ? '😀' : '')))
   const r = buildCheckup({ events: warn, now: NOW })
   assert.equal(r.verdict.level, 'warn')
   assert.match(r.verdict.reasons.join(''), /表情占比/)

@@ -40,8 +40,13 @@ export const GROWTH_LIMITS = {
   checkedOnly: false,     // 人工位：true 时只转正 checked===true 的候选（= 麦麦 checked_only）
 }
 
-/** 元话语禁词：候选里出现即拒（与章程"永远不要提"同源）。 */
-const META_WORDS = ['小号', '分身', '值班', '运营', '账号主人', '主人', '本鲸', 'prompt', '上下文']
+/**
+ * 元话语禁词：候选里出现即拒（与章程"永远不要提"同源）。
+ * 2026-10-29 核验 §2.2-A：去掉裸「主人」——卡里把「主人是跟我一起用这个账号的捏」定为合法定案台词，
+ * 裸子串包含会把自家台词一起拦掉（候选永不入库）；「本鲸」是 v3 遗留（v4 自称已改「本鱼」），一并去掉。
+ * 「账号主人」是运营术语，显式保留拦截；「@主人汇报」收进来（卡 bannedWords 里那条失礼用法的具体形态）。
+ */
+const META_WORDS = ['小号', '分身', '值班', '运营', '账号主人', '@主人汇报', 'prompt', '上下文']
 /** 政治词表（no-politics 红线的质检位；保守粗筛，人工兜底）。 */
 const POLITICS_WORDS = ['政治', '国家主席', '总统', '选举', '政权', '意识形态', '时评', '政治局', '政府', '两岸', '台独']
 /** 真实性红线（no-fabricate 延伸）：见闻正文/语料里不许出现的"可被当真的事实断言"。 */
@@ -118,15 +123,24 @@ const appendProcessed = (records) => {
 
 /* ───────────────────────── 质检链 ───────────────────────── */
 
+/** 定案台词豁免源：card.canon 的 say 文本（2026-10-29 核验 §2.2-A 推荐的 +20 行版）。 */
+const canonSay = (card) => (Array.isArray(card?.canon) ? card.canon : [])
+  .map((c) => String(c?.say || ''))
+  .filter(Boolean)
+
 const bannedHit = (text, card) => {
-  const words = [...META_WORDS, ...((card?.voice?.avoid?.bannedWords) || [])]
-  const low = String(text || '').toLowerCase()
-  for (const w of words) {
+  const t = String(text || '')
+  const low = t.toLowerCase()
+  // ① 元话语词（小号 / 值班 / 账号主人 …）：整句就是已定案台词 ⇒ 放行（豁免只认「整句包含/被包含」）
+  const exempt = canonSay(card).some((s) => s.includes(t) || t.includes(s))
+  for (const w of META_WORDS) {
+    const s = String(w || '').trim().toLowerCase()
+    if (s && low.includes(s)) return exempt ? '' : s
+  }
+  // ② 卡禁词 + 政治红线：不豁免——否则「canon 台词 + 政治词」会连红线一起被放行
+  for (const w of [...((card?.voice?.avoid?.bannedWords) || []), ...POLITICS_WORDS]) {
     const s = String(w || '').trim().toLowerCase()
     if (s && low.includes(s)) return s
-  }
-  for (const w of POLITICS_WORDS) {
-    if (low.includes(w)) return w
   }
   return ''
 }

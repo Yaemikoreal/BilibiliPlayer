@@ -77,6 +77,60 @@ test('质检链：禁词 / 政治词表 / 查重 → 拒', () => {
   assert.match(dup.reason, /重合/)
 })
 
+/* ───────────── 2026-10-29 核验 §2.2-A：词表收窄 + 定案台词豁免 ───────────── */
+
+// 与 whale 卡同形的卡：canon 定案台词 + 收窄后的 bannedWords
+const canonCard = {
+  canon: [{ when: '被问是谁家的鱼 / 你主人是谁', say: '主人是跟我一起用这个账号的捏', cooldown: '1/day' }],
+  voice: { avoid: { bannedWords: ['@主人汇报'] } },
+}
+
+test('§2.2-A 三例①：定案台词「主人是跟我一起用这个账号的捏」→ 通过（裸「主人」已出词表）', () => {
+  const out = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '主人是跟我一起用这个账号的捏', origin: 'self' },
+    { bank: normalizeBank({}), card: canonCard, ownTexts: ['主人是跟我一起用这个账号的捏'] },
+  )
+  assert.equal(out.ok, true, out.reason)
+})
+
+test('§2.2-A 三例②：「@主人汇报」→ 拒（卡禁词 + 元话语双闸，永不豁免）', () => {
+  const out = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '@主人汇报今天的饭钱', origin: 'self' },
+    { bank: normalizeBank({}), card: canonCard, ownTexts: ['@主人汇报今天的饭钱'] },
+  )
+  assert.equal(out.ok, false)
+  assert.match(out.reason, /禁词|红线词/)
+})
+
+test('§2.2-A 三例③：含「值班 / 小号 / 账号主人」→ 拒（元话语闸保留）', () => {
+  for (const [text, hit] of [['今天我值班到凌晨', '值班'], ['这号是不是小号啊', '小号'], ['账号主人今天不在家', '账号主人']]) {
+    const out = vetCorpus(
+      { kind: 'corpus', form: 'reaction', text, origin: 'self' },
+      { bank: normalizeBank({}), card: canonCard, ownTexts: [text] },
+    )
+    assert.equal(out.ok, false, `${text} 应被拒`)
+    assert.match(out.reason, new RegExp(hit))
+  }
+})
+
+test('§2.2-A 豁免边界：整句是 canon 台词才放行元话语词；canon + 政治词照拒', () => {
+  // canon 台词本身含元话语词「值班」→ 整句豁免 → 通过
+  const exemptCard = { canon: [{ say: '值班结束记得喂鱼' }], voice: { avoid: { bannedWords: [] } } }
+  const exempt = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '值班结束记得喂鱼', origin: 'self' },
+    { bank: normalizeBank({}), card: exemptCard, ownTexts: ['值班结束记得喂鱼'] },
+  )
+  assert.equal(exempt.ok, true, exempt.reason)
+
+  // 不是 canon 的句子含「值班」→ 拒
+  const notCanon = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '值班结束聊聊选举', origin: 'self' },
+    { bank: normalizeBank({}), card: exemptCard, ownTexts: ['值班结束聊聊选举'] },
+  )
+  assert.equal(notCanon.ok, false)
+  assert.match(notCanon.reason, /选举|值班/)
+})
+
 test('processGrowth 全链：self 过审入库为 candidate + 拒绝原因落 processed', async () => {
   seedLedger()
   const ledgerEvents = [

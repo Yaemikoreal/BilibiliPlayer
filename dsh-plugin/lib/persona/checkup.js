@@ -1,33 +1,40 @@
 /**
  * 人设体检（W5-2 / W7-3 的数据面）—— 纯函数，不读盘、不看真实时钟。
  *
- * 口径（方案 §8.2）：取最近 `windowDays` 天内**自己发出去的** `comment` / `dynamic` 事件，
- * 最多 `limit` 条，算五个指标：
- *   - 中位字数（句长分布）
+ * 口径（方案 §8.2 + 2026-10-29 核验 §2.3）：取最近 `windowDays` 天内**自己发出去的**
+ * `comment` / `dynamic` 事件，最多 `limit` 条，算五个指标：
+ *   - 中位字数（charLen 口径：剥 [表情]/Unicode emoji、去空白，与 lint/语料单源）
  *   - 每条句号数
  *   - 表情占比（含表情的条数 / 总条数）
  *   - 问号占比
  *   - `card.voice.avoid.*` 命中率（没有卡 / 没有禁用词时恒为 0）
- * 基线是 247 条真人样本的**固定常量**（§8.2 拍板值，别改）：
- *   中位 27 字 / 句号 0.109 每条 / 表情 41.7% / 问号 12.6%。
+ * 基线是 52,464 条全量语料（2026-10-29 实测）的**单源常量**——数值只有 lint.js 一份，
+ * 这里只做字段映射（periodRate→periodPerComment 等），不许再抄第二份。
  *
  * 阈值为什么这样定（稳健优先，宁漏报不误报）：
  *   样本只有 limit（≤20）条，中位数与占比的抖动都不小；体检的价值是「长期形态漂移」，
  *   不是「这一条写得不一样」。所以：
  *   - 中位字数按**倍数**判：>1.55× 或 <0.6× → warn；>2.1× 或 <0.4× → bad。
  *   - 三个占比按**绝对差**判：|Δ| > 0.18~0.22 → warn；|Δ| > 0.4~0.45 → bad。
- *     （问号基线 12.6%，低侧低于 0 不可达 ⇒ 实际是单边阈值，这是正常现象。）
+ *     （问号基线 7.4%，低侧低于 0 不可达 ⇒ 实际是单边阈值，这是正常现象。）
  *   - 禁用词：任何一条命中即为 warn（基数是 0，「命中」本身就是信号）；命中率 ≥20% → bad。
  *   - n < 5 一律 ok + 「数据不足」，不拿 2 条评论下结论。
  */
-import { hasEmoji } from './text.js'
+import { hasEmoji, charLen } from './text.js'
+import { HUMAN_BASELINE } from './lint.js'
 
-/** 247 条真人基线（§8.2 拍板值；只读，测试会逐字段锁住）。 */
+/**
+ * 体检基线（字段映射，2026-10-29 核验 §2.3 Step 2）：
+ * 数值只有 lint.js 的 HUMAN_BASELINE 一份；两边字段名不同，直接赋值会让三项判定
+ * 静默 NaN（Math.abs(m - undefined)），所以这里显式映射。
+ * ⚠️ periodPerComment 拿的是「含句号的评论占比」（periodRate），不是每条几个句号——
+ * 语料里带句号的评论极少，两口径差距可忽略；字段名沿用体检输出形状。
+ */
 export const CHECKUP_BASELINE = Object.freeze({
-  medianChars: 27,
-  periodPerComment: 0.109,
-  emojiRatio: 0.417,
-  questionRatio: 0.126,
+  periodPerComment: HUMAN_BASELINE.periodRate,
+  emojiRatio: HUMAN_BASELINE.emojiRate,
+  questionRatio: HUMAN_BASELINE.questionRate,
+  medianChars: HUMAN_BASELINE.medianChars,
 })
 
 /** 少于这个条数不下结论（n<5 只报「数据不足」）。 */
@@ -82,8 +89,12 @@ export const avoidWordsOf = (card) => {
   return out
 }
 
-/** 一条文本的字符数（按码点，emoji 算 1 个「字」而不是 2 个）。 */
-const charsOf = (text) => Array.from(String(text)).length
+/**
+ * 一条文本的字符数：与 lint/语料同口径 charLen（剥 [表情] 与 Unicode emoji、去空白）。
+ * 2026-10-29 核验 §2.3 Step 2：以前用 Array.from 直接数——[doge] 算 6 个字符、空白也算字，
+ * 会把含表情标签/空白的正常评论系统性判成「偏长」；基线换 19 字（charLen 口径）时必须同口径。
+ */
+const charsOf = (text) => charLen(text)
 
 const countOf = (text, re) => (String(text).match(re) || []).length
 
@@ -189,7 +200,7 @@ function verdictOf(n, metrics, avoidHitCount) {
     }
   }
 
-  // ② 句号/条：绝对差（只会偏高：基线 0.109，低侧不可达）
+  // ② 句号/条：绝对差（只会偏高：基线=含句号评论占比 0.1704，低侧不可达）
   {
     const th = CHECKUP_THRESHOLDS.periodPerComment
     const m = metrics.periodPerComment

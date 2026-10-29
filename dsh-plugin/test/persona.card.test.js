@@ -19,6 +19,20 @@ test('合规卡：schema 通过，L0 六条全过', () => {
   assert.equal(l0.checks.length, 6)
 })
 
+test('whale 卡：creatorNotes 声明的 periodMax 必须等于 punctuation.periodMaxPerComment（§2.4.4 文档债防线）', () => {
+  const card = JSON.parse(readFileSync(preset('persona/whale.card.json'), 'utf8'))
+  const m = /periodMax[=＝]\s*(\d+)/.exec(String(card.creatorNotes || ''))
+  assert.ok(m, 'creatorNotes 应写明 periodMax=N（文档债：说明与执行配置必须可对账）')
+  assert.equal(
+    Number(m[1]),
+    card.voice.punctuation.periodMaxPerComment,
+    'creatorNotes 声明的句号上限与执行配置不一致——改哪个都要同步另一个',
+  )
+  // §2.4 决策 ①：本号不使用句号（风格规定，非语料事实）
+  assert.equal(card.voice.punctuation.periodMaxPerComment, 0)
+  assert.match(String(card.creatorNotes), /风格规定，非语料事实/, '必须标注为风格规定，不得伪装成统计事实')
+})
+
 test('schema：spec / id / version 必填且格式正确', () => {
   const card = smokeCard()
   delete card.spec

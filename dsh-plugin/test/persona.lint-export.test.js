@@ -71,7 +71,10 @@ test('保存卡 → 规则文件生成：默认 warn、场域上限 100/40/60 �
   assert.equal(rules.spec, LINT_SPEC)
   assert.equal(rules.mode, 'warn', '默认先 warn（§6.3-2）')
   assert.equal(rules.card.id, 'whale')
-  assert.deepEqual(rules.limits, { comment: 100, reply: 40, dynamic: 60 })
+  assert.deepEqual(rules.limits, { comment: 60, reply: 40, dynamic: 60 })
+  // §2.4 决策 A：venues 三档随规则文件导出，Python 质量门按档执行
+  assert.deepEqual(rules.venueLimits, { '生态区': 40, 'AI话题区': 50, '普通区': 35 })
+  assert.equal(rules.venueDefault, '普通区')
 
   const banned = rules.checks.find((c) => c.code === 'L7:bannedWords')
   assert.ok(banned, 'voice.avoid.bannedWords 要进词表')

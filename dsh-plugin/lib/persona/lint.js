@@ -13,11 +13,11 @@
  *   同一套判据要在两种语言里执行（宿主 JS 能拿到 live 语料库，MCP Python 只有文件）。
  *   把判据写成数据，Python 侧就只有"解释器"没有"规则"；改判据只改这里，导出一遍即可。
  *
- * 阈值来源（§8.1）：247 条真人基线 + 当前卡 `voice` 事实 + 场域上限。
- *   - 场域上限：`card.voice.modes[form].maxChars`（评论 100 / 楼中楼 40 / 动态 60），缺省见 DEFAULT_LIMITS；
- *   - 句号/表情：`card.voice.punctuation.periodMaxPerComment`、`card.voice.emoji.perComment`；
- *   - 247 条基线（中位 27 字 / 句号 10.9% / 问号 12.6% / 表情 41.7%）进 `baseline` 段，
- *     当前用于把建议写成"人话"，后续 W5-2 体检直接复用这一段，不再抄第二份数字。
+ * 阈值来源（§8.1）：全量语料基线 + 当前卡 `voice` 事实 + 场域上限。
+ *   - 场域上限：`card.voice.modes[form].maxChars`（评论 60 / 楼中楼 40 / 动态 60），缺省见 DEFAULT_LIMITS；
+ *   - venues 三档：`card.venues.list[*].max`（2026-10-29 核验 §2.4 决策 A）进 `venueLimits` 段并接进质量门；
+ *   - 全量基线（中位 19 字 / 句号 17.0% / 问句 7.4% / 表情 31.4%，52,464 条实测）进 `baseline` 段，
+ *     用于把建议写成"人话"；checkup.js 从本文件 import 同一份，不再抄第二份数字。
  */
 import { jaccard, charLen, stripEmoji, countEmoji } from './text.js'
 import { looksCopied, bankOverlap, activeTexts } from './expression.js'
@@ -32,14 +32,19 @@ export const DEFAULT_ROLLOUT = 'warn'
 export const DEFAULT_LIMITS = Object.freeze({ comment: 100, reply: 40, dynamic: 60 })
 export const LINT_FORMS = ['comment', 'reply', 'dynamic']
 
-/** 247 条真人热评基线（§1.3，固定常量；随版本号改，不许各自漂移）。 */
+/**
+ * 52,464 条全量语料基线（2026-10-29 重算，charLen 口径；checkup.js 从这里 import，单源不许抄第二份）。
+ * 2026-10-29 核验 §2.3：旧值（247 条 / 中位 27 / 句号 10.9% / 问号 12.6% / 表情 41.7%）是小样本
+ * + 无口径的产物；口径写进 note，防止再次出现"同名额不同义"。
+ */
 export const HUMAN_BASELINE = Object.freeze({
-  comments: 247,
-  medianChars: 27,
-  periodRate: 0.109,
-  questionRate: 0.126,
-  emojiRate: 0.417,
-  note: '247 条真人热评（10-25 语料统计）：中位 27 字 / 句号 10.9% / 问号 12.6% / 表情 41.7%；阈值取保守侧。',
+  comments: 52464,
+  medianChars: 19,        // charLen 口径（剥 [表情] 与 Unicode emoji、去空白）实测中位
+  periodRate: 0.1704,     // 含"。"的评论占比
+  questionRate: 0.0742,
+  emojiRate: 0.3139,
+  note: '52,464 条全量语料（2026-10-29，四组合并）实测：中位 19 字 / 句号 17.0% / 问句 7.4% / 表情 31.4%。'
+      + '口径：charLen=剥 [表情] 与 Unicode emoji、去空白后的字符数；句号率=含"。"的评论占比。',
 })
 
 /** L1 落点：收尾不得是空泛捧场（§8.1 词表原文）。 */
@@ -98,6 +103,24 @@ const renderTemplate = (template, vars) =>
 
 const asList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : [])
 const finiteOr = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d)
+
+/**
+ * venues 三档（2026-10-29 核验 §2.4 决策 A）：把卡里数值型的 `max` 整理成「档名 → 评论字数上限」。
+ * 只认数值 max；缺/写坏 ⇒ 该档不进表（该档回落 modes 上限，绝不自造缺省值）。
+ * @returns {{limits:Object<string,number>, default:string}} default 只在它也在 limits 里时返回
+ */
+export const venuePlanOf = (card) => {
+  const venues = card?.venues
+  const list = venues && typeof venues === 'object' && venues.list && typeof venues.list === 'object' ? venues.list : {}
+  const limits = {}
+  for (const [name, v] of Object.entries(list)) {
+    const n = Number(v?.max)
+    if (String(name).trim() && Number.isFinite(n) && n > 0) limits[String(name).trim()] = Math.round(n)
+  }
+  const rawDefault = String(venues?.default || '').trim()
+  const def = rawDefault && limits[rawDefault] ? rawDefault : ''
+  return { limits, default: def }
+}
 
 export const normalizeForm = (mode) => (LINT_FORMS.includes(mode) ? mode : 'comment')
 
@@ -240,7 +263,9 @@ export const buildLintRules = ({ card = null, bank = null, mode = DEFAULT_ROLLOU
       char: '。',
       max: periodMax,
       reasonTemplate: '句号 {count} 个（上限 {max}），像在写小作文',
-      advice: `真人句号率 ${(base.periodRate * 100).toFixed(1)}%，一句话一口气说完，句号留一个。`,
+      // 2026-10-29 核验 §2.4.3：不再引用"真人句号率 X%"（实测 17.04%，写成 0% 是在教模型假分布）；
+      // 这是风格规定，不是统计事实。{count}/{max} 占位符由解释器渲染（JS/Python 同一套）。
+      advice: '句号 {count} 个（上限 {max}）。本号规定不使用句号：换行或表情结句更有口气。',
     },
     {
       code: 'L5c',
@@ -256,12 +281,16 @@ export const buildLintRules = ({ card = null, bank = null, mode = DEFAULT_ROLLOU
   ]
 
   const active = bank ? activeTexts(bank) : []
+  const venue = venuePlanOf(c)
   return {
     spec: LINT_SPEC,
     generatedAt: new Date().toISOString(),
     mode: normalizeRollout(mode),
     card: { id: String(c.id ?? ''), version: String(c.version ?? ''), name: String(c.name ?? '') },
     limits,
+    // venues 三档（§2.4 决策 A）：comment 场域按档取上限；未传/未知档 ⇒ venueDefault（没有 ⇒ 维持 modes 上限）
+    venueLimits: venue.limits,
+    venueDefault: venue.default,
     baseline: { ...base },
     checks,
     bank: { count: active.length, active },
@@ -382,7 +411,7 @@ const evalCheck = (check, ctx) => {
     code: String(check.code || kind),
     level: check.level === 'block' ? 'block' : 'warn',
     reason: renderTemplate(check.reasonTemplate, vars) || `${String(check.code || kind)} 未通过`,
-    advice: String(check.advice || ''),
+    advice: renderTemplate(check.advice, vars), // 2026-10-29 核验 §2.4.3：advice 也吃 {占位符}（与 Python 同一套）
   }
 }
 
@@ -392,13 +421,15 @@ const evalCheck = (check, ctx) => {
  * @param {object} opts
  * @param {string} opts.text 待发布正文
  * @param {'comment'|'reply'|'dynamic'} [opts.mode] 场域（决定字数上限；缺省 comment）
+ * @param {string} [opts.venue] venues 档名（§2.4 决策 A；只作用于 comment 场域。
+ *        未传 ⇒ 用规则的默认档；默认档也没有 ⇒ 维持 modes 上限）
  * @param {object} [opts.card] 生效人设卡（rules 缺省时用来现场生成规则）
  * @param {object} [opts.rules] 规则对象（导出 JSON 的内容）；传了就以它为准
  * @param {object} [opts.bank] live 语料库（传了就真接 looksCopied；否则用 rules.bank.active）
  * @returns {{ok:boolean, level:'block'|'warn', codes:string[], reasons:string[], advice:string}}
  *   通过时 ok=true、codes=[]；level 只在未通过时有意义（block=硬判据，warn=软判据）。
  */
-export const lintComment = ({ text, mode = 'comment', card = null, rules = null, bank = null } = {}) => {
+export const lintComment = ({ text, mode = 'comment', venue = '', card = null, rules = null, bank = null } = {}) => {
   const raw = String(text ?? '')
   const form = normalizeForm(mode)
   const rs = rules && typeof rules === 'object' ? rules : buildLintRules({ card, bank })
@@ -406,6 +437,13 @@ export const lintComment = ({ text, mode = 'comment', card = null, rules = null,
   // 上限从规则读，缺省才用 W1 的 100/40/60
   const limits = { ...DEFAULT_LIMITS, ...(rs.limits && typeof rs.limits === 'object' ? rs.limits : {}) }
   for (const f of LINT_FORMS) limits[f] = finiteOr(limits[f], DEFAULT_LIMITS[f])
+
+  // venues 档位（§2.4 决策 A）：comment 上限按档取——同一句话在普通区/生态区拿到不同 maxChars。
+  // 未传 venue ⇒ 默认档（卡里 venues.default）；规则里没有默认档 ⇒ 不动（没有 venues 的卡保持旧行为）。
+  const venueLimits = rs.venueLimits && typeof rs.venueLimits === 'object' ? rs.venueLimits : {}
+  const venueName = String(venue ?? '').trim() || String(rs.venueDefault ?? '')
+  const venueMax = Number(venueLimits[venueName])
+  if (venueName && Number.isFinite(venueMax) && venueMax > 0) limits.comment = venueMax
 
   const ctx = { raw, form, limits, rules: rs, bank }
   const hits = []

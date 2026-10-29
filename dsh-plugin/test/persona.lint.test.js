@@ -138,14 +138,17 @@ test('L5a 形态：reply 未超上限 → 通过', () => {
   assert.equal(r.ok, true, JSON.stringify(r))
 })
 
-test('L5b 形态：句号 > 1 → warn', () => {
+test('L5b 形态：句号 > 上限（periodMax=0 ⇒ 任何句号都点名）→ warn', () => {
   const r = lint('我去了。饭没了。锅还在')
   assert.equal(r.ok, false)
   assert.deepEqual(r.codes, ['L5b'])
-  assert.match(r.reasons[0], /句号 2 个（上限 1）/)
+  assert.match(r.reasons[0], /句号 2 个（上限 0）/)
+  // §2.4.3：advice 不再引用"真人句号率"，改成风格规定（{count}/{max} 由解释器渲染）
+  assert.match(r.advice, /本号规定不使用句号：换行或表情结句更有口气。/)
+  assert.ok(!/真人句号率/.test(r.advice), 'advice 不许再教模型假分布')
 })
 
-test('L5b 形态：句号 ≤ 1 → 通过', () => {
+test('L5b 形态：句号 = 0 → 通过', () => {
   const r = lint('我去了饭没了锅还在')
   assert.equal(r.ok, true, JSON.stringify(r))
 })
@@ -194,20 +197,48 @@ test('L7 禁用词：不命中 → 通过', () => {
 
 /* ───────────────────────── 规则：单一事实来源 + 导出脚本 ───────────────────────── */
 
-test('buildLintRules：判据 / 上限 / 247 基线 / active 语料全部由 JS 产出', () => {
+test('buildLintRules：判据 / 上限 / 全量基线 / venues 档位 / active 语料全部由 JS 产出', () => {
   const rules = buildLintRules({ card: whale, bank })
   assert.equal(rules.spec, LINT_SPEC)
   assert.equal(rules.mode, 'warn', '默认先 warn 三天（§6.3）')
-  assert.deepEqual(rules.limits, { comment: 100, reply: 40, dynamic: 60 })
+  assert.deepEqual(rules.limits, { comment: 60, reply: 40, dynamic: 60 })
+  // §2.4 决策 A：venues 三档进规则文件（数值 max），Python 质量门据此按档执行
+  assert.deepEqual(rules.venueLimits, { '生态区': 40, 'AI话题区': 50, '普通区': 35 })
+  assert.equal(rules.venueDefault, '普通区')
   const codes = rules.checks.map((c) => c.code)
   for (const code of ['L1', 'L2', 'L3', 'L4', 'L5a', 'L5b', 'L5c', 'L6:no-politics', 'L7:aiCues', 'L7:bookish', 'L7:bannedWords']) {
     assert.ok(codes.includes(code), `缺判据 ${code}：${codes.join(',')}`)
   }
-  assert.equal(rules.baseline.comments, 247)
-  assert.equal(rules.baseline.medianChars, 27)
-  assert.equal(rules.baseline.periodRate, HUMAN_BASELINE.periodRate)
+  // 2026-10-29 核验 §2.2-B：基线锁字面量（旧断言拿 HUMAN_BASELINE 跟自己比，恒真无保护）
+  assert.equal(rules.baseline.comments, 52464)
+  assert.equal(rules.baseline.medianChars, 19)
+  assert.equal(rules.baseline.periodRate, 0.1704)
+  assert.equal(rules.baseline.questionRate, 0.0742)
+  assert.equal(rules.baseline.emojiRate, 0.3139)
+  assert.match(rules.baseline.note, /charLen/)
   assert.equal(rules.bank.count, 2, '只有 active 进规则文件')
   assert.equal(buildLintRules({ card: whale, mode: 'blok' }).mode, 'warn', '坏档位降级 warn，不擅自拦')
+})
+
+test('venues 档位：同一句话在普通区/生态区取得不同 maxChars（§2.4.4 验收）', () => {
+  // 39 字：普通区（35）超限，生态区（40）/ AI话题区（50）通过；42 字 reply 不受档位影响
+  const t39 = '今天下班顺路买了半只烧鸡，回家路上没忍住站在楼下啃了两个鸡腿，油都蹭到袖子上了'
+  assert.equal([...t39].length, 39)
+  const t42 = t39 + '真的'
+  assert.equal([...t42].length, 41)
+
+  const normal = lintComment({ text: t39, mode: 'comment', card: whale, bank: null })
+  assert.ok(normal.codes.includes('L5a'), `普通区 35 应拦 39 字：${JSON.stringify(normal)}`)
+  assert.match(normal.reasons[0], /comment 上限 35/)
+  const eco = lintComment({ text: t39, mode: 'comment', venue: '生态区', card: whale, bank: null })
+  assert.equal(eco.ok, true, `生态区 40 应放行 39 字：${JSON.stringify(eco)}`)
+  const ai = lintComment({ text: t39, mode: 'comment', venue: 'AI话题区', card: whale, bank: null })
+  assert.equal(ai.ok, true, `AI话题区 50 应放行 39 字：${JSON.stringify(ai)}`)
+  // 未传 venue ⇒ 默认档（普通区 35）；楼中楼不按档（保持 reply 40）
+  const def = lintComment({ text: t39, mode: 'comment', card: whale, bank: null })
+  assert.ok(def.codes.includes('L5a'))
+  const reply = lintComment({ text: t42, mode: 'reply', venue: 'AI话题区', card: whale, bank: null })
+  assert.ok(reply.codes.includes('L5a'), 'reply 场域不受 venue 档位影响')
 })
 
 test('lintComment 从 rules 读场域上限（不硬编第二份）', () => {
@@ -236,9 +267,10 @@ test('导出脚本：默认 mode=warn、重导保留已改档位、--mode 显式
   const first = JSON.parse(readFileSync(file, 'utf8'))
   assert.equal(first.spec, LINT_SPEC)
   assert.equal(first.mode, 'warn')
-  assert.deepEqual(first.limits, DEFAULT_LIMITS)
+  assert.deepEqual(first.limits, { comment: 60, reply: 40, dynamic: 60 }, '场域上限取自卡（60/40/60），不是缺省 100')
+  assert.equal(first.venueDefault, '普通区', 'venues 默认档随规则文件导出')
   assert.equal(first.card.id, 'whale')
-  assert.equal(first.baseline.comments, 247)
+  assert.equal(first.baseline.comments, 52464)
   assert.ok(first.checks.some((c) => c.code === 'L1'))
   assert.ok(first.checks.some((c) => c.code === 'L6:no-politics'))
   assert.ok(first.bank.count > 0, '语料 active 要带上给 Python 反抄用')

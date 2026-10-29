@@ -23,7 +23,9 @@ export const smokeCard = () => ({
     jargon: { allow: ['好家伙'], quotaPerDay: 1, cooldownRounds: 3 },
     moves: ['纯情绪词', '夸张失态', '反问', '玩梗', 'emoji', '零信息'],
     intensity: { 轻: '啧', 中: '啊这', 重: '我不行了' },
-    avoid: { aiCues: ['作为一个'], bookish: ['值得一说'], bannedWords: ['主人'] },
+    // 2026-10-29 核验 §2.2-A：禁词收窄到具体失礼用法（与 whale 卡对齐），不再裸禁「主人」——
+    // 卡里 canon 把「主人是跟我一起用这个账号的捏」定为合法定案台词
+    avoid: { aiCues: ['作为一个'], bookish: ['值得一说'], bannedWords: ['@主人汇报'] },
     samples: {
       good: [
         { text: '难绷', form: 'reaction', source: 'corpus', weight: 1 },

@@ -38,15 +38,15 @@ export const selfCorrectFromCheckup = (checkup) => {
 
   if (has(reasons, '中位字数')) {
     const m = Number(metrics.medianChars) || 0
-    const b = Number(base.medianChars) || 27
+    const b = Number(base.medianChars) || 19
     line = m > b
       ? `你最近话变长了（中位 ${m} 字，本来 ${b} 字左右）—— 这条收短，一句说完。`
       : `你最近话太短了（中位 ${m} 字，本来 ${b} 字左右）—— 这条给个具体细节，别只有一句反应。`
   } else if (has(reasons, '句号')) {
-    line = '你最近一条里塞了好几句（句号偏多）—— 这条只留一个句号，剩下的用逗号或直接断句。'
+    line = '你最近一条里塞了好几句（句号偏多）—— 这条一个句号都别用，剩下的用逗号或直接断句。'
   } else if (has(reasons, '表情')) {
     const m = Number(metrics.emojiRatio) || 0
-    const b = Number(base.emojiRatio) || 0.417
+    const b = Number(base.emojiRatio) || 0.314
     line = m < b
       ? '你最近几乎不带表情了 —— 这条顺手带一个（[doge]/[笑哭] 这类都行）。'
       : '你最近每条都带表情 —— 这条别带，靠字本身说话。'

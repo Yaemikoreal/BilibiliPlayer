@@ -853,14 +853,23 @@ def _lint_eval_check(check: dict, text: str, form: str, limits: dict, rules: dic
         "code": str(check.get("code") or kind),
         "level": "block" if check.get("level") == "block" else "warn",
         "reason": _lint_render(check.get("reasonTemplate"), variables) or f"{check.get('code') or kind} 未通过",
-        "advice": str(check.get("advice") or ""),
+        # 2026-10-29 核验 §2.4.3：advice 也吃 {占位符}（与 JS lintComment 同一套渲染）
+        "advice": _lint_render(str(check.get("advice") or ""), variables),
     }
 
 
-def _lint_eval(text: str, mode: str, rules: dict) -> dict:
-    """哑执行：按规则文件里的 checks 逐条跑；返回与 JS lintComment 同形的结果。"""
+def _lint_eval(text: str, mode: str, rules: dict, venue: str = "") -> dict:
+    """哑执行：按规则文件里的 checks 逐条跑；返回与 JS lintComment 同形的结果。
+
+    venues 档位（2026-10-29 核验 §2.4 决策 A）：comment 场域按档取上限——
+    未传 venue ⇒ 规则里的默认档；规则没有默认档 ⇒ 维持 modes 上限（与 JS lintComment 同一套）。
+    """
     form = mode if mode in _LINT_FORMS else "comment"
     limits = rules.get("limits") if isinstance(rules.get("limits"), dict) else {}
+    vlimits = rules.get("venueLimits") if isinstance(rules.get("venueLimits"), dict) else {}
+    vname = str(venue or "").strip() or str(rules.get("venueDefault") or "")
+    if form == "comment" and vname and isinstance(vlimits.get(vname), (int, float)) and vlimits[vname] > 0:
+        limits = {**limits, "comment": vlimits[vname]}
     hits = []
     for check in rules.get("checks") or []:
         hit = _lint_eval_check(check, text, form, limits, rules)
@@ -883,11 +892,12 @@ def _lint_eval(text: str, mode: str, rules: dict) -> dict:
     }
 
 
-def _lint_precheck(text: str, mode: str) -> dict:
+def _lint_precheck(text: str, mode: str, venue: str = "") -> dict:
     """发布前质量门。返回 {"blocked": bool, "payload": dict|None, "warn": dict|None, "notice": str}。
 
     blocked=True 时 payload 就是工具对外返回的 JSON；放行时 warn 非空表示"本该被拦但当前档位只告警"。
     任何意外（文件缺失/坏 JSON/判据异常）都走放行，绝不让质量门把发布整条链路拖死。
+    venue：venues 档名（§2.4 决策 A），只作用于 comment 场域的字数上限。
     """
     try:
         rules, why = _load_lint_rules()
@@ -899,7 +909,7 @@ def _lint_precheck(text: str, mode: str) -> dict:
             apply_mode = "warn"  # 写坏档位按最保守的 warn 处理，不擅自拦
         if apply_mode == "off":
             return {"blocked": False, "payload": None, "warn": None, "notice": ""}
-        verdict = _lint_eval(text, mode, rules)
+        verdict = _lint_eval(text, mode, rules, venue)
         if verdict["ok"]:
             return {"blocked": False, "payload": None, "warn": None, "notice": ""}
         summary = "；".join(verdict["reasons"])
@@ -956,7 +966,7 @@ def _load_lint_rules():
 # ========== Tool 6: 回复评论 ==========
 
 @_gated_tool()
-async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
+async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0, venue: str = "") -> str:
     """
     在B站视频下发表评论或回复某条评论
 
@@ -965,6 +975,8 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         text: 评论/回复的文本内容
         rpid: 要回复的目标评论ID（0表示发表新评论）
         root: 楼层根评论ID（回复一级评论时不用填，回复楼中楼时填根评论ID）
+        venue: 剧场档位（普通区/生态区/AI话题区，默认普通区）。按现场选：
+               涉及大肥鱼/DSH/养鱼话题或 UP 是 AI 号 ⇒ 生态区；模型/教程/AI新闻/工具实测 ⇒ AI话题区；其余不传。
 
     主动接话（回复别人的一级评论、进他的楼中楼）：**只传 rpid=对方一级评论的 rpid，root 留空**
     （内部会把 root 置成 rpid）；返回里的 rpid 是你自己这条回复的楼层 id。
@@ -988,7 +1000,8 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         except Exception as _e:  # 判重自身异常不拦正常发送
             logger.warning("已回复目标判重异常，本次放行：%s", _e)
     # 发布前质量门：规则来自 <家目录>/persona/lint-rules.json（JS 导出）；缺失/损坏则放行 + 告警
-    gate = _lint_precheck(text, "reply" if rpid else "comment")
+    # venue（§2.4 决策 A）：comment 场域按档取字数上限；未传/未知档 ⇒ 规则里的默认档
+    gate = _lint_precheck(text, "reply" if rpid else "comment", venue)
     if gate["blocked"]:
         return json.dumps(gate["payload"], ensure_ascii=False)
     lint_warn = gate.get("warn")
@@ -1036,6 +1049,8 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
             "bvid": bvid,
             "rpid": rpid_out,
         }
+        if venue:
+            payload["venue"] = venue
         if lint_warn:
             payload["lint"] = lint_warn  # warn 档：照发，但把"本该被拦"的判据回给模型
         return json.dumps(payload, ensure_ascii=False)
@@ -2367,7 +2382,7 @@ def _validate_ledger_event(ev, idx: int, round_id: str):
 
 
 @_gated_tool()
-async def bili_ledger_append(events: list[dict]) -> str:
+async def bili_ledger_append(events: list[dict], venue: str = "") -> str:
     """
     把本轮动作一次性追加进账本（宿主补 t/round、校验字段、去重、UTF-8 落盘）
 
@@ -2379,6 +2394,8 @@ async def bili_ledger_append(events: list[dict]) -> str:
             [{"type":"view","bvid":"BV1xx","title":"…","author":"…","views":123,"duration":892,"source":"follow","grade":"worth"},
              {"type":"comment","bvid":"BV1xx","text":"正文","rpid":318480352401},
              {"type":"reply-scan","bvid":"BV1xx","candidates":[],"decision":"skipped","reason":"热评全在站队"}]
+        venue: 本轮评论所在剧场档位（普通区/生态区/AI话题区，§2.4 决策 A）。给了就补进没带 venue
+            字段的事件（评论/接话按现场选档；view/skip 等不区分档位，跟着带也不影响配额）。
 
     Returns:
         written（写入条数）、rejected（[{index,reason}]）、round（本轮 round id）
@@ -2390,6 +2407,13 @@ async def bili_ledger_append(events: list[dict]) -> str:
     round_id = _current_round_id()
     if not round_id:
         return _err("读不到本轮 round id（state.json 缺 lastRunStartedAt）；退回直接写文件")
+    venue_name = str(venue or "").strip()
+    if venue_name:
+        # 档位名单以规则文件（卡里 venues）为准：未知档不报错，只忽略（不让记账卡在风格参数上）
+        rules, _why = _load_lint_rules()
+        known = ((rules or {}).get("venueLimits") or {}) if isinstance(rules, dict) else {}
+        if known and venue_name not in known:
+            venue_name = ""
     existing = _ledger_cache.read(limit=800)  # 2026-10-29 核验 §2.5 Step 2：进程内缓存，size+mtime 变了才重解析
     seen_keys = {(e.get("round"), e.get("type"), e.get("bvid"), e.get("text")) for e in existing}
     path = _persona_home() / "ledger.jsonl"
@@ -2400,6 +2424,8 @@ async def bili_ledger_append(events: list[dict]) -> str:
         if obj is None:
             rejected.append({"index": idx, "reason": why})
             continue
+        if venue_name and not str(obj.get("venue") or "").strip():
+            obj["venue"] = venue_name  # §2.4 决策 A：本轮档位补进没带 venue 的事件（事后可按档分析）
         if "\ufffd" in json.dumps(obj, ensure_ascii=False):
             rejected.append({"index": idx, "reason": "文本里有 U+FFFD（编码坏了），重发一次"})
             continue
