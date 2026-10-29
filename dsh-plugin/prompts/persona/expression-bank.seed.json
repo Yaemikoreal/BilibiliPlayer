@@ -1,48 +1,19 @@
 {
   "spec": "bili-fenshen.expression-bank/v1",
-  "updatedAt": "2026-10-26T00:00:00Z",
+  "updatedAt": "2026-10-29T01:45:00Z",
   "buckets": {
-    "reaction": [
-      { "text": "难绷", "form": "reaction", "source": "corpus 2026-10-25（BV1VkgK6NEZS）", "status": "active" },
-      { "text": "怎么会这样", "form": "reaction", "source": "corpus 2026-10-25（BV1tpHN6EE7R）", "status": "active" }
-    ],
-    "question": [
-      { "text": "封面能不能好好做？", "form": "question", "source": "comment-reception 2026-10-25（4424 赞）", "status": "active" },
-      { "text": "能不能分析一下为什么都是坏在同一个位置？", "form": "question", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" },
-      { "text": "这个内阁是什么新英雄吗？[思考]", "form": "question", "source": "corpus 2026-10-25（BV1tpHN6EE7R）", "status": "active" },
-      { "text": "能隔空取奖杯吗？[星星眼]", "form": "question", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" },
-      { "text": "原来中国也有这种校车吗，我还没在现实里见过", "form": "question", "source": "comment-reception 2026-10-25（448 赞）", "status": "active" }
-    ],
-    "experience": [
-      { "text": "我是广西人，第一次去东北同学家里蹭婚宴，三天吃了这辈子最多的馒头，每天都有随便喝的大窑汽水，吃晕了[doge]", "form": "experience", "source": "corpus 2026-10-25（BV1Mwn16wECL）", "status": "active" },
-      { "text": "我操，真到我家了，我在宽甸县宽甸镇", "form": "experience", "source": "corpus 2026-10-25（BV1Mwn16wECL）", "status": "active" },
-      { "text": "我以为这是怕吓到我们打的码，结果居然是雨哥自己切的。。咋反应这么快。我不行了", "form": "experience", "source": "comment-reception 2026-10-25（1787 赞）", "status": "active" }
-    ],
-    "meme": [
-      { "text": "无世凯依旧窃取猛攻果实（）", "form": "meme", "source": "corpus 2026-10-25（BV1mkHK6WEY6）", "status": "active" },
-      { "text": "见Phone使Duo的家伙[doge]", "form": "meme", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" },
-      { "text": "史味的巧克力", "form": "meme", "source": "corpus 2026-10-25（BV1xrnz6gEVD）", "status": "active" },
-      { "text": "69：（拿起对面水晶）这个归我啦🤓👆", "form": "meme", "source": "comment-reception 2026-10-25（153 赞）", "status": "active" },
-      { "text": "我单三，我怯战，我飞升，跑路了兄弟！", "form": "meme", "source": "corpus 2026-10-25（BV1mkHK6WEY6）", "status": "active" }
-    ],
-    "detail": [
-      { "text": "可以底层代码都是一样的，以中心点向四周扩散有障碍物就没用的大招[吃瓜]", "form": "detail", "source": "corpus 2026-10-25（BV1tpHN6EE7R）", "status": "active" },
-      { "text": "magpie是版本答案", "form": "detail", "source": "corpus 2026-10-25（BV1bjHN6pE26）", "status": "active" }
-    ],
-    "rant": [
-      { "text": "最后一队真区啊，开透还打不过", "form": "rant", "source": "corpus 2026-10-25（BV1mkHK6WEY6）", "status": "active" },
-      { "text": "苹果是我爹，不许你们这么说它[大哭]", "form": "rant", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" },
-      { "text": "就这半斤重的雷霆手机买的人这辈子有了。", "form": "rant", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" },
-      { "text": "华为的三折叠含金量还在提升[doge]", "form": "rant", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" },
-      { "text": "引领在哪？推动在哪？", "form": "rant", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" },
-      { "text": "引领者？推动者？我没看错吧？", "form": "rant", "source": "corpus 2026-10-25（BV1EtHM6kEFd）", "status": "active" }
-    ]
+    "reaction": [],
+    "question": [],
+    "experience": [],
+    "meme": [],
+    "detail": [],
+    "rant": []
   },
   "stats": {
-    "total": 23,
-    "byBucket": { "reaction": 2, "question": 5, "experience": 3, "meme": 5, "detail": 2, "rant": 6 },
+    "total": 0,
+    "byBucket": { "reaction": 0, "question": 0, "experience": 0, "meme": 0, "detail": 0, "rant": 0 },
     "harvested": 0,
-    "fromCorpus": 23
+    "fromCorpus": 0
   },
-  "notes": "首批种子：全部逐字取自 247 条真人热评语料与收赞核查文档，零编造。reaction(2)/detail(2) 明显不足 20 条，需按周从账本 + 新视频评论区扩充；扩充时同样只收逐字原文并标 source（见设计 §7.7）。"
+  "notes": "2026-10-29 主人拍板清空：首批 23 条种子（corpus 2026-10-25）全部移除。种子只在首次物化用户副本时落一次家目录，清空不影响已配置的账号；新语料按周从账本 + 评论区重新收割（只收逐字原文并标 source，见设计 §7.7）。"
 }
