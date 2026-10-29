@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
@@ -933,10 +933,24 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
     主动接话（回复别人的一级评论、进他的楼中楼）：**只传 rpid=对方一级评论的 rpid，root 留空**
     （内部会把 root 置成 rpid）；返回里的 rpid 是你自己这条回复的楼层 id。
     例：bili_reply(bvid="BV1xx", text="……", rpid=321560862800)
-    
+
     Returns:
         发表结果
     """
+    # ⭐ 已回复目标硬判重（2026-10-29）：同一目标评论只回一次。账本里（跨轮）或本进程
+    #    内存里（轮内）已经回过这个 rpid ⇒ 直接拒绝，不再碰 B站 API。
+    #    通知列表里同一条还挂着 ≠ 新互动；对方又发新话 = 新 rpid，不会命中这里。
+    if rpid:
+        try:
+            replied = _replied_targets()
+            if (str(bvid), int(rpid)) in replied:
+                return _err(
+                    f"目标评论 {rpid} 已经回复过（同一评论只回一次；通知还挂着不等于新互动）。"
+                    "若对方有新回复，请改传新那条的 rpid；不要重试本调用。",
+                    bvid=bvid, rpid=int(rpid), alreadyReplied=True,
+                )
+        except Exception as _e:  # 判重自身异常不拦正常发送
+            logger.warning("已回复目标判重异常，本次放行：%s", _e)
     # 发布前质量门：规则来自 <家目录>/persona/lint-rules.json（JS 导出）；缺失/损坏则放行 + 告警
     gate = _lint_precheck(text, "reply" if rpid else "comment")
     if gate["blocked"]:
@@ -974,6 +988,12 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         rpid_out = None
         if isinstance(result, dict):
             rpid_out = result.get("rpid") or (result.get("data") or {}).get("rpid")
+        # ⭐ 回复成功（rpid!=0 即回复别人的评论）⇒ 目标记进进程内存，防本轮内重复
+        if rpid:
+            try:
+                _remember_replied_target(bvid, int(rpid))
+            except Exception:
+                pass
         payload = {
             "success": True,
             "message": "评论发送成功",
@@ -1821,15 +1841,52 @@ async def bili_received_replies() -> str:
     """
     获取最近收到的评论回复通知
 
+    每条通知带 already_replied 标注：true = 对方那条评论我已经回过（账本+本进程内存判定）。
+    ⚠️ 同一条通知每轮都会出现（B站不会因为你回过就移除它）——already_replied=true 的
+    **不是新互动，直接跳过**；只有 already_replied=false 的才需要跟进。
+
     Returns:
-        回复列表
+        回复列表（含 already_replied / bvid / target_rpid 标注）
     """
     cred = get_cred()
     try:
         result = await session.get_replies(credential=cred)
-        return _ok(result)
     except Exception as e:
         return _err(f"获取回复通知失败: {e}")
+    # ⭐ 已回复目标标注（2026-10-29）：跟进回复此前没有任何判重数据（已接话清单只认接话、
+    #    seen.md 跟进行记的是自己楼层），同一评论被连回 2 轮才被发现。这里把判重做进工具返回。
+    try:
+        replied = _replied_targets()
+        items = result.get("items") if isinstance(result, dict) else None
+        annotated = 0
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                inner = it.get("item") if isinstance(it.get("item"), dict) else {}
+                m = re.search(r"/video/(BV[0-9A-Za-z]+)", str(inner.get("uri") or inner.get("native_uri") or ""))
+                bv = m.group(1) if m else ""
+                try:
+                    src = int(inner.get("source_id"))
+                except Exception:
+                    src = None
+                ar = bool(bv and src is not None and (bv, src) in replied)
+                it["already_replied"] = ar
+                if bv:
+                    it["bvid"] = bv
+                if src is not None:
+                    it["target_rpid"] = src
+                if ar:
+                    annotated += 1
+        if isinstance(result, dict):
+            result = {**result,
+                      "alreadyRepliedCount": annotated,
+                      "note": "already_replied=true 的通知是已经回过的评论，不是新互动，别再回；只跟进 already_replied=false 的"}
+        return _ok(result)
+    except Exception as e:
+        # 标注自身失败就原样返回，不阻断值班
+        logger.warning("回复通知标注失败，原样返回：%s", e)
+        return _ok(result)
 
 
 # ========== Tool 24: 最近收到的@和点赞 ==========
@@ -2006,6 +2063,46 @@ def _ledger_seen_bvids() -> set:
     return seen
 
 
+# ───────── 已回复目标判重（2026-10-29，配合 dsh-plugin/lib/replies.js repliedTargetsFromLedger）─────────
+# 「同一评论只回一次，除非对方有新互动」：判重键 = 对方那条评论的 rpid（reply-out.parent）。
+# 对方再发新话 = 新 rpid = 新互动，自然不在集合里；老 rpid 永远在集合里 ⇒ 永不重复回。
+# 两层防线：账本（跨轮）+ 本进程内存（轮内，账本往往轮末才批量落盘）。
+
+_session_replied_targets: set = set()  # {(bvid, parent_rpid)} 本 MCP 进程里成功回过的目标
+
+
+def _replied_targets(window_days: int = 0) -> set:
+    """账本里回过的目标评论 (bvid, parent_rpid) 集合；window_days=0 不限窗口（判重要宁多勿漏）。"""
+    out: set = set()
+    cutoff = 0.0
+    if window_days and window_days > 0:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
+    for ev in _ledger_read_events():
+        if ev.get("type") != "reply-out":
+            continue
+        if cutoff:
+            try:
+                t = datetime.fromisoformat(str(ev.get("t") or "").replace("Z", "+00:00")).timestamp()
+            except Exception:
+                t = None
+            if t is not None and t < cutoff:
+                continue
+        bv = ev.get("bvid")
+        try:
+            parent = int(ev.get("parent"))
+        except Exception:
+            continue  # 没有目标 rpid 的残行没法判重
+        if isinstance(bv, str) and bv:
+            out.add((bv, parent))
+    return out | _session_replied_targets
+
+
+def _remember_replied_target(bvid: str, parent_rpid: int) -> None:
+    """本轮刚回成功的目标记进进程内存（账本可能要等轮末才写，跨工具调用也得住）。"""
+    if bvid and parent_rpid:
+        _session_replied_targets.add((str(bvid), int(parent_rpid)))
+
+
 @_gated_tool()
 async def bili_feed(limit_up: int = 8, per_up: int = 3, only_new: bool = True) -> str:
     """
@@ -2123,7 +2220,11 @@ def _now_iso() -> str:
 
 
 def _current_round_id() -> str:
-    """本轮 round id = 宿主起轮时写进 state.json 的 lastRunStartedAt（与 prompt 里那个值同源）。"""
+    """本轮 round id：优先读宿主注入的 BILI_FENSHEN_ROUND_ID（与 prompt 里那个值同源），
+    读不到再退 state.json.lastRunStartedAt（2026-10-29 之前它俩差 1s+，是双源 bug 的根源）。"""
+    env_round = str(os.environ.get("BILI_FENSHEN_ROUND_ID") or "").strip()
+    if env_round:
+        return env_round
     st = _persona_read_json(_persona_home() / "state.json") or {}
     return str(st.get("lastRunStartedAt") or "")
 

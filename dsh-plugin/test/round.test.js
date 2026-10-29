@@ -9,7 +9,7 @@ import { roundAccounting, lastRoundFrom, presenceFrom } from '../lib/round.js'
 import { buildOverview, nextWindowLabel, nextWindow } from '../lib/overview.js'
 import { createOverviewHub } from '../lib/realtime.js'
 import { parseRoundReport, parseProactiveScan } from '../lib/report.js'
-import { proactiveTargetsFromLedger } from '../lib/replies.js'
+import { proactiveTargetsFromLedger, repliedTargetsFromLedger } from '../lib/replies.js'
 
 const iso = (s) => new Date(s).toISOString()
 const DAY = 86400_000
@@ -283,18 +283,51 @@ test('parseProactiveScan：空文本不抛、返回空', () => {
   assert.deepEqual(parseProactiveScan(null), { scans: [], proactive: [] })
 })
 
-/* ───────── 已接话清单 ───────── */
+/* ───────── 已回复清单（2026-10-29：接话+跟进统一目标判重） ───────── */
 
-test('proactiveTargetsFromLedger：窗口过滤 + 去重 + 只取接话', () => {
+test('repliedTargetsFromLedger：接话+跟进都进清单，窗口过滤 + 去重 + 残行(parent=null)跳过', () => {
   const now = Date.parse('2026-10-28T00:00:00Z')
   const events = [
     { t: new Date(now - 1 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1a', parent: 111, kind: 'proactive' },
+    { t: new Date(now - 1 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1a', parent: 111, kind: 'proactive' }, // 同轮重复记账
+    { t: new Date(now - 1 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1a', parent: 111, kind: 'proactive', rpid: null, source: 'report' }, // 回填重复行
+    { t: new Date(now - 2 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1b', parent: 222 }, // 跟进（无 kind）也要进清单
+    { t: new Date(now - 30 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1c', parent: 333, kind: 'proactive' }, // 窗外
+    { t: new Date(now - 2 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1d', parent: null, kind: 'proactive' }, // 残行
+    { t: new Date(now - 2 * DAY).toISOString(), type: 'comment', bvid: 'BV1e', rpid: 444 }, // 不是 reply-out
+  ]
+  const out = repliedTargetsFromLedger(events, { days: 14, now })
+  assert.equal(out.proactive.length, 1)
+  assert.equal(out.proactive[0].bvid, 'BV1a')
+  assert.equal(out.proactive[0].parent, 111)
+  assert.equal(out.followup.length, 1)
+  assert.equal(out.followup[0].bvid, 'BV1b')
+  assert.equal(out.followup[0].parent, 222)
+})
+
+test('repliedTargetsFromLedger：跟进目标必须在清单里（Aria 楼 318480411329 被连回 2 轮的回归用例）', () => {
+  // 2026-10-29 真实事故：01:13 轮跟进 Aria 的 rpid 318480411329，03:14 轮又跟了一遍——
+  // 旧清单只认 kind=proactive，跟进目标查无记录 ⇒ 模型判"新鲜"再回一次。
+  const now = Date.parse('2026-10-29T03:14:16Z')
+  const events = [
+    { t: '2026-10-29T01:18:26.000Z', round: 'r-0914', type: 'reply-out', bvid: 'BV1TisX6dEFS', parent: 318480411329, text: '刚盛好饭，手快有[doge]', rpid: 318499873361 },
+    { t: '2026-10-29T01:18:26.000Z', round: 'r-0914', type: 'reply-out', bvid: 'BV192n66dEDQ', parent: 317852573329, text: '好家伙，补仓还带自助的[doge]', rpid: 318499756881 },
+  ]
+  const out = repliedTargetsFromLedger(events, { days: 14, now })
+  const all = [...out.proactive, ...out.followup].map((x) => `${x.bvid}→${x.parent}`)
+  assert.ok(all.includes('BV1TisX6dEFS→318480411329'), 'Aria 的跟进目标必须出现在清单里')
+  assert.ok(all.includes('BV192n66dEDQ→317852573329'), '究极无敌路由器的跟进目标必须出现在清单里')
+  assert.equal(out.followup.length, 2)
+  assert.equal(out.proactive.length, 0)
+})
+
+test('proactiveTargetsFromLedger：旧接口保留，只返回接话目标', () => {
+  const now = Date.parse('2026-10-28T00:00:00Z')
+  const events = [
     { t: new Date(now - 1 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1a', parent: 111, kind: 'proactive' },
-    { t: new Date(now - 2 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1b', parent: 222 }, // 跟进，不算
-    { t: new Date(now - 30 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1c', parent: 333, kind: 'proactive' },
+    { t: new Date(now - 2 * DAY).toISOString(), type: 'reply-out', bvid: 'BV1b', parent: 222 },
   ]
   const out = proactiveTargetsFromLedger(events, { days: 14, now })
   assert.equal(out.length, 1)
-  assert.equal(out[0].bvid, 'BV1a')
   assert.equal(out[0].parent, 111)
 })

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 报告 → 兜底事件（设计文档 §4.3）。
  * 只在账本缺该事件时使用，事件带 source:'report'，前端标注「据报告回填」。
  * 解析失败一律返回空结果，绝不抛。
@@ -128,15 +128,21 @@ export function roundSection(text, roundId) {
  *
  * 旧实现的去重键带 `t`（回填时间是「现在」，模型写的是轮内时刻）⇒ 永远不相等，等于没去重。
  * 现在按语义去重：`posted` 认 targetRpid，`skipped` 认 bvid（一行只写一条视频的结论）。
+ * ⭐ 2026-10-29：两种键都**全局**去重（不再按 round 过滤）——
+ *    ① posted：「同一 target rpid 永不重复接」本来就是全局纪律；
+ *    ② skipped：同一视频被上一轮跳过后必然进「已看过清单」，不会再被合法扫描一轮，
+ *       重复的 skipped 记录没有任何信息量（01:37 失败轮回填实测漏过 1 条）。
+ *    旧实现按 round 过滤时，MCP 补的 round 与宿主 roundId 双源不一致（差 1s+）导致
+ *    同轮都对不上，跨轮失败轮还会把旧扫描整套抄一遍（01:37/02:13 实测各多 1 条）。
  */
 export function dedupeScans(existing, candidates, roundId = null) {
+  void roundId // 保留参数兼容旧调用方；去重已是全局语义
   const key = (e) => (e && e.decision === 'posted'
     ? `posted|${e.targetRpid == null ? '' : e.targetRpid}`
     : `skipped|${(e && e.bvid) || ''}`)
   const seen = new Set()
   for (const e of asArrLite(existing)) {
     if (!e || e.type !== 'reply-scan') continue
-    if (roundId && e.round !== roundId) continue
     seen.add(key(e))
   }
   const out = []

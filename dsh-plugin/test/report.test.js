@@ -193,3 +193,21 @@ test('dedupeScans：模型已经写过的扫描不再补（旧实现拿 `t` 比�
   assert.equal(dup.length, 1)
 })
 
+test('dedupeScans：键全局去重（2026-10-29：round 双源时代按轮过滤漏掉跨轮重复）', () => {
+  // 上一轮（R1）已经接过 target 2，本轮（R2）失败轮回填又带来同 target 的扫描 ⇒ 必须拦
+  const existing = [
+    { type: 'reply-scan', round: R1, bvid: 'BV1old', decision: 'posted', targetRpid: 2 },
+  ]
+  const out = dedupeScans(existing, [
+    { round: R2, bvid: 'BV1new', decision: 'posted', targetRpid: 2 },
+  ], R2)
+  assert.equal(out.length, 0, '同一 target rpid 的 posted 扫描跨轮也要去重')
+  // skipped 同理：同一视频上一轮跳过过（必已进已看过清单），重复记录没有信息量
+  const out2 = dedupeScans([
+    { type: 'reply-scan', round: R1, bvid: 'BV1x', decision: 'skipped' },
+  ], [
+    { round: R2, bvid: 'BV1x', decision: 'skipped' },
+  ], R2)
+  assert.equal(out2.length, 0, 'skipped 跨轮也去重（回填只补缺，不重记）')
+})
+

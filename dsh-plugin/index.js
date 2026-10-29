@@ -669,12 +669,14 @@ const backfillFromReport = (roundId) => {
     const scoped = roundSection(full, roundId)
     let text = scoped.text
     if (!scoped.found) {
-      if (scoped.rounds > 1) {
-        // 多个轮次却定位不到本轮 ⇒ 标题没带 round id；宁可这条不补，也别把别人的事件记到本轮头上
+      // ⭐ 2026-10-29 收窄：只要日报里存在**任何**带 round id 的轮次标题（rounds ≥ 1），
+      //    找不到本轮就宁可这条不补——以前 rounds ≤ 1 时退回解析**整份日报**，
+      //    失败轮（如 01:37 / 02:13 两轮）会把上一轮的接话扫描整套抄到自己名下（挂错 round）。
+      if (scoped.rounds >= 1) {
         log(`报告兜底回填跳过：日报里有 ${scoped.rounds} 个轮次，找不到 round=${roundId}（标题缺 round id？）`)
         return
       }
-      text = full   // 老格式（整份日报 = 一个轮次）
+      text = full   // 老格式（整份日报 = 一个轮次，标题里没有 round id 可定位）
     }
     const { views, skips } = parseRoundReport(text, { round: roundId })
     const events = []
@@ -693,6 +695,10 @@ const backfillFromReport = (roundId) => {
     // ⭐ 接话扫描/接话也从报告回填（设计定稿 §3.3）。
     //    去重按**语义**（posted 认 targetRpid / skipped 认 bvid），不再用 `t`：
     //    回填时间是"现在"、模型写的是轮内时刻，拿 `t` 比永远不相等 ⇒ 以前等于没去重。
+    //    ⭐ 2026-10-29：reply-out 的回填去重改成**全局**（bvid+parent）——以前还带
+    //       `x.round === e.round` 条件，而 MCP 补的 round 与宿主 roundId 是双源（差 1s+），
+    //       同轮都对不上 ⇒ 每轮轮末把模型已记过的接话再补一份 rpid=null 的重复行。
+    //       同一目标评论本来就只回一次，全局判不会误伤。
     try {
       const scans = parseProactiveScan(text, { round: roundId })
       const scanEvents = dedupeScans(
@@ -702,8 +708,8 @@ const backfillFromReport = (roundId) => {
       )
       const proactiveEvents = scans.proactive
         .map((p) => ({ ...p, round: roundId, type: 'reply-out', kind: 'proactive', source: 'report' }))
-        .filter((e) => !existing.some((x) => x && x.type === 'reply-out' && x.round === e.round
-          && x.parent === e.parent && x.bvid === e.bvid))
+        .filter((e) => !existing.some((x) => x && x.type === 'reply-out'
+          && String(x.parent ?? '') === String(e.parent ?? '') && x.bvid === e.bvid))
       const extra = [...scanEvents, ...proactiveEvents]
       if (extra.length) {
         appendEvents(LEDGER_FILE, extra)
@@ -789,7 +795,7 @@ export const dutyToolList = (cfg) => {
   return list
 }
 
-const buildOverlay = (cfg, em) => {
+const buildOverlay = (cfg, em, roundId = '') => {
   const yml = []
   // ⭐ headless（0.2.1-rc.2）默认禁用三个服务 ⇒ overlay 是最后一层，把它们打开
   for (const id of ['credentials', 'authorization', 'deepseek-account']) {
@@ -844,6 +850,10 @@ const buildOverlay = (cfg, em) => {
     '        env:',
     `          BILI_MCP_TOOLS: '${tools.join(',')}'`,
     `          BILI_FENSHEN_HOME: '${HOME.replace(/\\/g, "/")}'`,
+    // ⭐ 2026-10-29 round id 单源化：MCP server 补账本 round 字段以前读 state.json.lastRunStartedAt
+    //    （那是 spawn 之后另打的时间戳，与 prompt 里的 roundId 差 1s+）⇒ 同一轮出现两个 round 值，
+    //    所有按 round 对账/去重的逻辑全部失灵。现在直接把本轮 roundId 注进来，MCP 优先读它。
+    `          BILI_FENSHEN_ROUND_ID: '${String(roundId || '').replace(/'/g, "''")}'`,
     "          PYTHONUTF8: '1'",
     "          PYTHONIOENCODING: 'utf-8'",
     '',
@@ -953,7 +963,7 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   //   - `degrade` 非空 = 超软线后的**二次编译**（W1-5），只砍见闻/示例/状态，**L0 尾注永远保留**。
   // ⭐ W4-2b：人设编译链（状态 / 记忆 / 体检）只看近两周 —— 传全量账本进去等于每轮多一次 O(n) 扫描
   //    （Lead 的实现里 resolvePersona 会跑 buildCheckup，扫全量取近 14 天 ≤20 条）。
-  //    ⚠️ 只裁「人设/体检」这一路；下面的「已看过清单 / 已接话清单」仍用**全量** ledgerEvents
+  //    ⚠️ 只裁「人设/体检」这一路；下面的「已看过清单 / 已回复清单」仍用**全量** ledgerEvents
   //       （判重需要更早历史，lib/seen.js 自己按 14 天窗口算，别在这里提前裁）。
   const personaEvents = windowPool(ledgerEvents, new Date(), 14)
   const personaOnce = (degrade = []) =>
@@ -968,8 +978,10 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
   const avoid = Array.isArray(cfg?.avoidList) ? cfg.avoidList.map((x) => String(x ?? '').trim()).filter(Boolean) : []
   // ⭐ 已看过清单：宿主从账本算好的硬判重（设计文档 2026-10-27-proactive-reply-dedup §4）
   const seenBvs = seenListFromLedger(ledgerEvents)
-  // ⭐ 已接话清单：宿主从账本算好，命中就别再重复接（章程「同一 target 永不重复」只能靠它落地）
-  const proactiveMine = proactiveTargetsFromLedger(ledgerEvents, { days: 14 })
+  // ⭐ 已回复清单：宿主从账本算好（接话 + 跟进都算），命中就别再回同一条
+  //    （「同一 target rpid 只回一次」只能靠它落地；跟进目标 2026-10-29 前不在清单里，
+  //     导致上一轮刚回过的评论下一轮又被回一遍——Aria 楼连回 2 次的根因）。
+  const repliedMine = repliedTargetsFromLedger(ledgerEvents, { days: 14 })
   const report = cfg?.reportLevel === 'off'
     ? '本轮不写日报文件，只把做过的动作记进判重表。'
     : cfg?.reportLevel === 'brief'
@@ -1052,10 +1064,11 @@ export const buildDutyPrompt = (cfg, roundId, ledgerEvents = []) => {
     + (seenBvs.length ? `${seenBvs.join('、')}。\n`
         + `  命中的候选**直接丢**：不读信息、不读字幕、不点赞不评论、不进报告、不记判重表（账本里本来就有，别再花任何调用）。\n`
       : '（空——账本里还没有看过的记录，照常逐条判。）\n')
-    + `- 已接话清单（宿主从账本算好，近 14 天；命中 = 别再重复接同一条/同一个人）：`
-    + (proactiveMine.length
-      ? `${proactiveMine.map((x) => `${x.bvid}→对方 rpid ${x.parent}`).join('、')}。\n`
-      : '（空——还没接过，照常挑。）\n')
+    + `- ⭐ 已回复清单（宿主从账本算好，近 14 天，接话+跟进都在内；**回复任何评论前先对它：对方的 rpid 在清单里 = 我已经回过这条，永远不再回**；对方又发新话（新 rpid）才算新互动，新 rpid 可以回）：`
+    + ((repliedMine.proactive.length || repliedMine.followup.length)
+      ? `\n  - 接话（主动回过别人的评论）：${repliedMine.proactive.length ? repliedMine.proactive.map((x) => `${x.bvid}→对方 rpid ${x.parent}`).join('、') : '（无）'}。`
+        + `\n  - 跟进（回过别人对我说的）：${repliedMine.followup.length ? repliedMine.followup.map((x) => `${x.bvid}→对方 rpid ${x.parent}`).join('、') : '（无）'}。\n`
+      : '（空——最近没回复过任何人的评论，照常挑。）\n')
     + `- 接话正确姿势：bili_comments 返回的每条热评都带 rpid；接话时 bili_reply 传 rpid=<对方一级评论 rpid>、root 留空`
     + `（工具会自动把 root 置成 rpid、进楼中楼）；返回里的 rpid 是你自己的楼层，记进账本。\n`
     + `- 内容源（按这个优先级拉；上一档挑够或没有可看的，再看下一档）：\n${sourceLines.join('\n')}\n`
@@ -1179,7 +1192,7 @@ const runDuty = async (why = 'manual') => {
     const em = await resolveEffectiveModel(cfg)
     starting = false
     if (running) return { started: false, why, error: '上一轮还没结束' }
-    const overlay = buildOverlay(cfg, em)
+    const overlay = buildOverlay(cfg, em, roundId)
     // ⭐ W3-1：overlay 写不出去 ⇒ **本轮不 spawn**。旧实现只是不 push `--patch`，
     //    结果用「残缺 overlay」起轮：三个服务没开、MCP 工具一个都没有，模型空转烧配额。
     //    宁可这一轮明确失败（lastError 进 state、控制台/诊断可见），也不烧一轮配额。
@@ -1326,7 +1339,9 @@ const runDuty = async (why = 'manual') => {
     })
     // ⭐ 只记「本轮开始时间」；lastRunAt/lastCode/lastDurationMs 是**上一轮的结果**，轮末才写。
     //    旧版两处都写 lastRunAt，于是运行中概览显示「本轮开始时间 + 上一轮退出码」。
-    bumpState({ lastRunStartedAt: new Date().toISOString(), lastWhy: why, lastError: '' })
+    //    ⭐ 2026-10-29：lastRunStartedAt 直接写 **roundId 本身**——MCP server 曾把它当
+    //       round id 补进账本（差 1s+ ⇒ 双源），写同一个值后注释"与 prompt 同源"才真的成立。
+    bumpState({ lastRunStartedAt: roundId, lastWhy: why, lastError: '' })
     try { overviewHub.publish('round-start') } catch { /* 兜住 */ }
     return {
       started: true, why, roundId, profile, cli, cwd: HOME, log: LOG_FILE,

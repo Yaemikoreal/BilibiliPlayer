@@ -89,7 +89,7 @@ DSH 插件：把本仓库的 [bilibili-mcp](../README.md)（29 个工具）挂�
 
 - **扫描必做**：每轮必须从已拉到的热评里评估 ≥1 条，结论写成报告一行 `接话扫描：…` + 账本 `reply-scan` 事件（`decision: posted|skipped`）。不写 = 本轮不合规，宿主会记 `note` 并在概览「接话」卡标红「未扫描」。
 - **发不发自由**：可发上限 `replyOthersPerRound`（默认 2，0 = 只扫描不发）；扫描本身不占「工具调用 ≤20」预算，接一条只多 1 次 `bili_reply`。
-- **去重靠宿主**：`已接话清单`（近 14 天 `BV→对方 rpid`）随 prompt 注入；同 BV 每轮 ≤1、同一 target 永不重复、同一人 7 天 ≤1。
+- **去重靠宿主（2026-10-29 v6：目标级统一判重）**：`已回复清单`（近 14 天全部 `reply-out` 的 `BV→对方 rpid`，接话+跟进都在内）随 prompt 注入；`bili_received_replies` 每条通知带 `already_replied` 标注；`bili_reply` 对已回过的目标硬拦截。**同一 target rpid 只回一次**——对方又发新话（新 rpid）才算新互动；同 BV 每轮 ≤1、同一人 7 天 ≤1。
 - **可接三类**：能答清的提问 / 被逗到共鸣 / **轻互动**（被夸、道谢、生日这类，一句就够）。
 - 报告解析器会先剥离「接话」段再解析评论段（避免把接话的 rpid/正文误回填成评论），并从报告兜底回填 `reply-scan` / `reply-out(proactive)`。
 

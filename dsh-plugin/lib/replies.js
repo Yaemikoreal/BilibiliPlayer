@@ -81,34 +81,48 @@ export async function fetchReplyNotifs(cookieHeader, fetchImpl = fetch, opts = {
   return Array.isArray(items) ? items : []
 }
 
-/* ───────── 已接话清单（设计定稿 2026-10-28 §3.3(6)） ─────────
- * 「同一 target rpid 永不重复接」这条纪律，宿主得帮模型算：把近 14 天的接话 (bvid, parent)
- * 平铺出来注入值班 prompt。与 lib/seen.js 同款「窗口 + 上限 + 纯函数」写法，可单测。 */
-export function proactiveTargetsFromLedger(events, opts = {}) {
+/* ───────── 已回复清单（2026-10-29：接话+跟进统一目标判重） ─────────
+ * 「同一 target rpid 只回一次」这条纪律，宿主得帮模型算：把近 14 天**所有**回复别人的
+ * reply-out（接话 kind=proactive + 跟进无 kind）按 (bvid, parent) 平铺出来注入值班 prompt。
+ *
+ * 为什么跟进也要进清单：2026-10-29 实测（账本 + duty.log），跟进目标不在任何判重数据里
+ * （旧清单只认 kind=proactive；seen.md 的跟进行记的是自己楼层 rpid）⇒ 模型拿通知里的
+ * 对方 rpid 查无记录，把"上一轮刚回过的评论"当新的又回了一遍（Aria 楼 318480411329
+ * 被连回 2 次、12:25 轮还想回第 3 次，被 12022 挡住）。
+ * 与 lib/seen.js 同款「窗口 + 上限 + 纯函数」写法，可单测。 */
+export function repliedTargetsFromLedger(events, opts = {}) {
   const days = Math.max(1, Number(opts.days) || 14)
   const limit = Math.max(1, Number(opts.limit) || 100)
   const now = opts.now ?? Date.now()
   const cutoff = now - days * 86400_000
-  const out = []
-  const seen = new Set()
+  const out = { proactive: [], followup: [] }
+  const seen = { proactive: new Set(), followup: new Set() }
   const list = Array.isArray(events) ? events : []
   for (let i = list.length - 1; i >= 0; i--) {
     const e = list[i]
-    if (!e || e.type !== 'reply-out' || e.kind !== 'proactive') continue
+    if (!e || e.type !== 'reply-out') continue
+    const kind = e.kind === 'proactive' ? 'proactive' : 'followup'
     const t = Date.parse(String(e.t || ''))
     if (Number.isFinite(t) && t < cutoff) continue
-    const key = `${e.bvid || ''}\u0000${e.parent ?? ''}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({
+    const parent = e.parent ?? null
+    if (parent == null) continue // 没有目标 rpid 的残行没法判重，跳过
+    const key = `${e.bvid || ''}\u0000${parent}`
+    if (seen[kind].has(key)) continue
+    seen[kind].add(key)
+    out[kind].push({
       bvid: String(e.bvid || ''),
-      parent: e.parent ?? null,
+      parent,
       round: e.round ?? null,
       t: String(e.t || ''),
     })
-    if (out.length >= limit) break
+    if (out.proactive.length >= limit && out.followup.length >= limit) break
   }
   return out
+}
+
+/** 旧名字保留：只取接话目标（兼容旧调用方/测试；新代码一律用 repliedTargetsFromLedger）。 */
+export function proactiveTargetsFromLedger(events, opts = {}) {
+  return repliedTargetsFromLedger(events, opts).proactive
 }
 
 /* ───────── 归属轮次（从 index.js 收口成纯函数；设计文档 2026-10-27 §5） ─────────

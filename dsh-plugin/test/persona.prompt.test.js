@@ -55,13 +55,16 @@ test('没有任何人设来源：降级为中性，不报错也不编人格', ()
   assert.match(p, /值班章程/)
 })
 
-test('本轮参数：主动接话（硬步骤）+ 已接话清单 + 空账本的已看过清单行（空态）', () => {
+test('本轮参数：主动接话（硬步骤）+ 已回复清单 + 空账本的已看过清单行（空态）', () => {
   const p = buildDutyPrompt({ ...baseCfg, personaPrompt: '', replyOthersPerRound: 2 }, 'R-seen-empty')
   // v5：接话不再是「最多 N 条」的可选动作，而是每轮必做的扫描（发不发另算）
   assert.match(p, /主动接话（\*\*每轮硬步骤\*\*/, '接话要写成每轮硬步骤')
   assert.match(p, /必须先做一次「接话扫描」/, '要明确要求扫描')
   assert.match(p, /可发上限 2 条/, '可发上限要出现在本轮参数里')
-  assert.match(p, /已接话清单（宿主从账本算好，近 14 天/, '要注入已接话清单（去重弹药）')
+  // v6：已接话清单升级为已回复清单（接话+跟进统一目标判重）
+  assert.match(p, /已回复清单（宿主从账本算好，近 14 天，接话\+跟进都在内/, '要注入已回复清单（去重弹药）')
+  assert.match(p, /对方的 rpid 在清单里 = 我已经回过这条，永远不再回/, '目标级判重要写明命中后果')
+  assert.match(p, /（空——最近没回复过任何人的评论，照常挑。）/, '空账本要明说清单为空并给出正常指令')
   assert.match(p, /已看过清单（宿主从账本算好，最近 14 天，命中 = 之前看过\/评过\/赞过\/跳过过）：（空/, '空账本要明说清单为空')
   assert.match(p, /照常逐条判/, '空态要给出正常判重的指令')
 })
@@ -88,4 +91,16 @@ test('本轮参数：账本里看过的 BV 注入清单，命中纪律完整', (
   assert.match(p, /BV1SeEnA0001、BV1SeEnA0002/, '近 14 天的 BV 要按新→旧注入（跳过过的也算看过）')
   assert.doesNotMatch(p, /BV1SeEnA0003/, '20 天前的不注入（窗口外）')
   assert.match(p, /命中的候选\*\*直接丢\*\*：不读信息、不读字幕、不点赞不评论、不进报告、不记判重表/, '命中纪律要完整')
+})
+
+test('本轮参数：跟进目标也要注入已回复清单（2026-10-29 Aria 楼连回 2 轮的回归）', () => {
+  const day = 86400_000
+  const iso = (d) => new Date(Date.now() - d * day).toISOString()
+  const events = [
+    { t: iso(1), round: 'r-a', type: 'reply-out', bvid: 'BV1TisX6dEFS', parent: 318480411329, text: '跟进话', rpid: 111 }, // 跟进
+    { t: iso(1), round: 'r-a', type: 'reply-out', bvid: 'BV1Qsnt6HExf', parent: 318012908193, kind: 'proactive', text: '接话', rpid: 222 }, // 接话
+  ]
+  const p = buildDutyPrompt({ ...baseCfg, personaPrompt: '' }, 'R-followup-list', events)
+  assert.match(p, /跟进（回过别人对我说的）：BV1TisX6dEFS→对方 rpid 318480411329/, '跟进目标必须进清单')
+  assert.match(p, /接话（主动回过别人的评论）：BV1Qsnt6HExf→对方 rpid 318012908193/, '接话目标必须进清单')
 })
