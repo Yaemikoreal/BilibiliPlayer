@@ -341,16 +341,16 @@ export const FIX = {
     ok: true,
     versions: [{ name: 'whale-2.0.0-2026-10-26.json', mtime: 1761400000000 }],
   },
-  // W5-2 体检（GET /persona/checkup）：近 12 条 vs 247 条基线，一处表情占比偏离 → warn
+  // W5-2 体检（GET /persona/checkup）：近 12 条 vs 52,464 条基线，一处表情占比偏离 → warn
   '/api/bili-fenshen/persona/checkup': {
     ok: true,
     windowDays: 14,
     n: 12,
     metrics: { medianChars: 24, periodPerComment: 0.083, emojiRatio: 0.75, questionRatio: 0.167, avoidHits: 0 },
-    baseline: { medianChars: 27, periodPerComment: 0.109, emojiRatio: 0.417, questionRatio: 0.126 },
+    baseline: { medianChars: 19, periodPerComment: 0.1704, emojiRatio: 0.3139, questionRatio: 0.0742 },
     verdict: {
       level: 'warn',
-      reasons: ['表情占比 75%（基线 42%，偏离 +33%）'],
+      reasons: ['表情占比 75%（基线 31%，偏离 +44%）'],
     },
     samples: [
       { bvid: 'BV1xrnz6gEVD', text: '原来不是打码，是他自己秒切的屏', t: '2026-10-23T08:27:00Z' },
@@ -507,7 +507,7 @@ export const PERSONA_CHECKUP_EMPTY = {
   windowDays: 14,
   n: 0,
   metrics: { medianChars: 0, periodPerComment: 0, emojiRatio: 0, questionRatio: 0, avoidHits: 0 },
-  baseline: { medianChars: 27, periodPerComment: 0.109, emojiRatio: 0.417, questionRatio: 0.126 },
+  baseline: { medianChars: 19, periodPerComment: 0.1704, emojiRatio: 0.3139, questionRatio: 0.0742 },
   verdict: { level: 'ok', reasons: ['数据不足（最近 0 条，至少 5 条才体检）'] },
   samples: [],
 }

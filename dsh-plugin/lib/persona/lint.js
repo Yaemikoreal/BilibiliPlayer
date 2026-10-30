@@ -13,11 +13,12 @@
  *   同一套判据要在两种语言里执行（宿主 JS 能拿到 live 语料库，MCP Python 只有文件）。
  *   把判据写成数据，Python 侧就只有"解释器"没有"规则"；改判据只改这里，导出一遍即可。
  *
- * 阈值来源（§8.1）：247 条真人基线 + 当前卡 `voice` 事实 + 场域上限。
+ * 阈值来源（§8.1）：52,464 条全量语料实测基线（2026-10-29 四组合并，PLAN-2026-10-30 Task 1.2）
+ *   + 当前卡 `voice` 事实 + 场域上限。
  *   - 场域上限：`card.voice.modes[form].maxChars`（评论 100 / 楼中楼 40 / 动态 60），缺省见 DEFAULT_LIMITS；
  *   - 句号/表情：`card.voice.punctuation.periodMaxPerComment`、`card.voice.emoji.perComment`；
- *   - 247 条基线（中位 27 字 / 句号 10.9% / 问号 12.6% / 表情 41.7%）进 `baseline` 段，
- *     当前用于把建议写成"人话"，后续 W5-2 体检直接复用这一段，不再抄第二份数字。
+ *   - 52,464 条基线（中位 19 字 / 句号 17.0% / 问号 7.4% / 表情 31.4%）进 `baseline` 段，
+ *     当前用于把建议写成"人话"，W5-2 体检从本段单源引用（checkup.js 不再抄第二份数字）。
  */
 import { jaccard, charLen, stripEmoji, countEmoji } from './text.js'
 import { looksCopied, bankOverlap, activeTexts } from './expression.js'
@@ -32,14 +33,16 @@ export const DEFAULT_ROLLOUT = 'warn'
 export const DEFAULT_LIMITS = Object.freeze({ comment: 100, reply: 40, dynamic: 60 })
 export const LINT_FORMS = ['comment', 'reply', 'dynamic']
 
-/** 247 条真人热评基线（§1.3，固定常量；随版本号改，不许各自漂移）。 */
+/** 真人评论基线（§1.3，固定常量；随版本号改，不许各自漂移）。
+ *  2026-10-30 合并为 52,464 条全量语料实测口径（四组合并，charLen 口径；PLAN Task 1.2）：
+ *  checkup.js 的 CHECKUP_BASELINE 从这里单源引用，禁止再抄第二份数字。 */
 export const HUMAN_BASELINE = Object.freeze({
-  comments: 247,
-  medianChars: 27,
-  periodRate: 0.109,
-  questionRate: 0.126,
-  emojiRate: 0.417,
-  note: '247 条真人热评（10-25 语料统计）：中位 27 字 / 句号 10.9% / 问号 12.6% / 表情 41.7%；阈值取保守侧。',
+  comments: 52464,
+  medianChars: 19,        // charLen 口径实测中位
+  periodRate: 0.1704,     // 含句号的评论占比 17.04%
+  questionRate: 0.0742,   // 问句率 7.42%
+  emojiRate: 0.3139,      // 表情率 31.39%
+  note: '52,464 条全量语料（2026-10-29，四组合并）实测：中位 19 字 / 句号 17.0% / 问句 7.4% / 表情 31.4%。',
 })
 
 /** L1 落点：收尾不得是空泛捧场（§8.1 词表原文）。 */

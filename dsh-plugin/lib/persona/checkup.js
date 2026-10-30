@@ -8,8 +8,8 @@
  *   - 表情占比（含表情的条数 / 总条数）
  *   - 问号占比
  *   - `card.voice.avoid.*` 命中率（没有卡 / 没有禁用词时恒为 0）
- * 基线是 247 条真人样本的**固定常量**（§8.2 拍板值，别改）：
- *   中位 27 字 / 句号 0.109 每条 / 表情 41.7% / 问号 12.6%。
+ * 基线是 52,464 条全量语料实测的**固定常量**（2026-10-29 四组合并；从 lint.js 单源引用，别改）：
+ *   中位 19 字 / 句号 17.04% / 表情 31.39% / 问句 7.42%（PLAN-2026-10-30 Task 1.2）。
  *
  * 阈值为什么这样定（稳健优先，宁漏报不误报）：
  *   样本只有 limit（≤20）条，中位数与占比的抖动都不小；体检的价值是「长期形态漂移」，
@@ -20,14 +20,17 @@
  *   - 禁用词：任何一条命中即为 warn（基数是 0，「命中」本身就是信号）；命中率 ≥20% → bad。
  *   - n < 5 一律 ok + 「数据不足」，不拿 2 条评论下结论。
  */
-import { hasEmoji } from './text.js'
+import { hasEmoji, charLen } from './text.js'
+import { HUMAN_BASELINE } from './lint.js'
 
-/** 247 条真人基线（§8.2 拍板值；只读，测试会逐字段锁住）。 */
+/** 真人基线（§8.2 拍板值；只读，测试会逐字段锁住）。
+ *  2026-10-30 起从 lint.js 的 HUMAN_BASELINE 单源引用 + 字段名映射，
+ *  不再自持一份会漂移的数字（PLAN-2026-10-30 Task 1.2）。 */
 export const CHECKUP_BASELINE = Object.freeze({
-  medianChars: 27,
-  periodPerComment: 0.109,
-  emojiRatio: 0.417,
-  questionRatio: 0.126,
+  periodPerComment: HUMAN_BASELINE.periodRate,
+  emojiRatio: HUMAN_BASELINE.emojiRate,
+  questionRatio: HUMAN_BASELINE.questionRate,
+  medianChars: HUMAN_BASELINE.medianChars,
 })
 
 /** 少于这个条数不下结论（n<5 只报「数据不足」）。 */
@@ -82,8 +85,9 @@ export const avoidWordsOf = (card) => {
   return out
 }
 
-/** 一条文本的字符数（按码点，emoji 算 1 个「字」而不是 2 个）。 */
-const charsOf = (text) => Array.from(String(text)).length
+/** 一条文本的字符数：统一走 text.js 的 charLen（去表情与空白；PLAN Task 1.2 口径提示）——
+ *  旧的本地码点数会把 `[doge]` 这类表情标签算成 6 个字，把正常评论误判成超长。 */
+const charsOf = charLen
 
 const countOf = (text, re) => (String(text).match(re) || []).length
 

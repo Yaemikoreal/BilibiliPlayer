@@ -194,17 +194,17 @@ test('L7 禁用词：不命中 → 通过', () => {
 
 /* ───────────────────────── 规则：单一事实来源 + 导出脚本 ───────────────────────── */
 
-test('buildLintRules：判据 / 上限 / 247 基线 / active 语料全部由 JS 产出', () => {
+test('buildLintRules：判据 / 上限 / 52k 基线 / active 语料全部由 JS 产出', () => {
   const rules = buildLintRules({ card: whale, bank })
   assert.equal(rules.spec, LINT_SPEC)
   assert.equal(rules.mode, 'warn', '默认先 warn 三天（§6.3）')
-  assert.deepEqual(rules.limits, { comment: 100, reply: 40, dynamic: 60 })
+  assert.deepEqual(rules.limits, { comment: 60, reply: 40, dynamic: 60 })
   const codes = rules.checks.map((c) => c.code)
   for (const code of ['L1', 'L2', 'L3', 'L4', 'L5a', 'L5b', 'L5c', 'L6:no-politics', 'L7:aiCues', 'L7:bookish', 'L7:bannedWords']) {
     assert.ok(codes.includes(code), `缺判据 ${code}：${codes.join(',')}`)
   }
-  assert.equal(rules.baseline.comments, 247)
-  assert.equal(rules.baseline.medianChars, 27)
+  assert.equal(rules.baseline.comments, 52464)
+  assert.equal(rules.baseline.medianChars, 19)
   assert.equal(rules.baseline.periodRate, HUMAN_BASELINE.periodRate)
   assert.equal(rules.bank.count, 2, '只有 active 进规则文件')
   assert.equal(buildLintRules({ card: whale, mode: 'blok' }).mode, 'warn', '坏档位降级 warn，不擅自拦')
@@ -236,9 +236,10 @@ test('导出脚本：默认 mode=warn、重导保留已改档位、--mode 显式
   const first = JSON.parse(readFileSync(file, 'utf8'))
   assert.equal(first.spec, LINT_SPEC)
   assert.equal(first.mode, 'warn')
-  assert.deepEqual(first.limits, DEFAULT_LIMITS)
+  // 场域上限取自卡（whale 现为评论 60）；不再等于 DEFAULT_LIMITS（缺省 100 只是回落值）
+  assert.deepEqual(first.limits, { comment: 60, reply: 40, dynamic: 60 })
   assert.equal(first.card.id, 'whale')
-  assert.equal(first.baseline.comments, 247)
+  assert.equal(first.baseline.comments, 52464)
   assert.ok(first.checks.some((c) => c.code === 'L1'))
   assert.ok(first.checks.some((c) => c.code === 'L6:no-politics'))
   assert.ok(first.bank.count > 0, '语料 active 要带上给 Python 反抄用')

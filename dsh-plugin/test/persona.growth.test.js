@@ -77,6 +77,60 @@ test('质检链：禁词 / 政治词表 / 查重 → 拒', () => {
   assert.match(dup.reason, /重合/)
 })
 
+test('质检链：2026-10-30 禁词放宽——裸「主人」不再误杀定案合法台词（PLAN-2026-10-30 Task 1.1）', () => {
+  // whale.card.json canon 定案台词："主人是跟我一起用这个账号的捏"——旧词表裸 '主人' 会误杀
+  const CANON_LINE = '主人是跟我一起用这个账号的捏'
+  const ok = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: CANON_LINE, origin: 'self' },
+    { bank: normalizeBank({}), card: null, ownTexts: [CANON_LINE] },
+  )
+  assert.equal(ok.ok, true, ok.reason)
+
+  // 运营术语仍拦：'账号主人'
+  const stillBanned = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '有事找账号主人审批', origin: 'self' },
+    { bank: normalizeBank({}), card: null, ownTexts: ['有事找账号主人审批'] },
+  )
+  assert.equal(stillBanned.ok, false)
+  assert.match(stillBanned.reason, /账号主人/)
+
+  // 失礼用法仍拦：'@主人汇报'（whale.card.json bannedWords 与 META_WORDS 双保险）
+  const report = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '@主人汇报 今日工单已清', origin: 'self' },
+    { bank: normalizeBank({}), card: null, ownTexts: ['@主人汇报 今日工单已清'] },
+  )
+  assert.equal(report.ok, false)
+})
+
+test('质检链：canon 定案台词豁免——META 词命中但与 canon.say 互含 → 放行；卡 bannedWords 不豁免', () => {
+  // canon.say 里含 META 词（如"值班"）：定案台词是质检过的"人设原话"，元话语禁词不得误杀
+  const card = {
+    canon: [{ when: '被问几点下班', say: '值班到饭店点算敬业啊' }],
+    voice: { avoid: { bannedWords: [] } },
+  }
+  const exempt = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '值班到饭店点算敬业啊', origin: 'self' },
+    { bank: normalizeBank({}), card, ownTexts: ['值班到饭店点算敬业啊'] },
+  )
+  assert.equal(exempt.ok, true, exempt.reason)
+
+  // 非 canon 文本含同款 META 词 → 照拒
+  const notCanon = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '今晚值班到天亮', origin: 'self' },
+    { bank: normalizeBank({}), card, ownTexts: ['今晚值班到天亮'] },
+  )
+  assert.equal(notCanon.ok, false)
+  assert.match(notCanon.reason, /值班/)
+
+  // 卡级 bannedWords（voice.avoid）不享受 canon 豁免：smoke-card#L26 '主人' 夹具仍生效
+  const cardBanned = vetCorpus(
+    { kind: 'corpus', form: 'reaction', text: '主人是跟我一起用这个账号的捏', origin: 'self' },
+    { bank: normalizeBank({}), card: { voice: { avoid: { bannedWords: ['主人'] } } }, ownTexts: ['主人是跟我一起用这个账号的捏'] },
+  )
+  assert.equal(cardBanned.ok, false)
+  assert.match(cardBanned.reason, /主人/)
+})
+
 test('processGrowth 全链：self 过审入库为 candidate + 拒绝原因落 processed', async () => {
   seedLedger()
   const ledgerEvents = [
