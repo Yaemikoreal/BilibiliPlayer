@@ -498,6 +498,19 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
 
 # ========== Tool 3: 获取字幕 ==========
 
+# 进程级共享 HTTP 会话（PLAN-2026-10-30 Task 2.1）：避免每次字幕下载都新建/销毁
+# ClientSession 造成重复 TLS 握手；连接池随进程复用。
+_http_session: aiohttp.ClientSession | None = None
+
+
+async def get_http_session() -> aiohttp.ClientSession:
+    """全局共享 aiohttp.ClientSession（单例；关闭后自动重建）。"""
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+    return _http_session
+
+
 async def _fetch_subtitle(bvid: str, cred: Credential) -> dict:
     """获取字幕数据（内部helper，供 bili_subtitle / bili_crawl 复用）"""
     v = video.Video(bvid=bvid, credential=cred)
@@ -528,12 +541,12 @@ async def _fetch_subtitle(bvid: str, cred: Credential) -> dict:
     if not sub_url:
         raise ValueError("字幕下载地址为空，无法获取字幕")
 
-    timeout = aiohttp.ClientTimeout(total=20)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(sub_url) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"字幕下载失败，HTTP状态码 {resp.status}")
-            sub_data = await resp.json(content_type=None)
+    # 复用全局会话（Task 2.1）：不再每次 new ClientSession
+    session = await get_http_session()
+    async with session.get(sub_url) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"字幕下载失败，HTTP状态码 {resp.status}")
+        sub_data = await resp.json(content_type=None)
 
     texts = [item.get("content", "") for item in sub_data.get("body", [])]
     return {
@@ -2071,10 +2084,37 @@ def _ledger_read_events(limit: int = 0) -> list:
     return out[-limit:] if limit and limit > 0 else out
 
 
+class _LedgerCache:
+    """账本增量解析缓存（PLAN-2026-10-30 Task 2.3；对齐 dsh-plugin/lib/ledger-index.js）。
+
+    以 (size, mtime_ms) 为签名：文件没变就直接复用上次解析结果，不再整表重读——
+    同一轮里 bili_feed / bili_received_replies / 判重要反复读账本，命中的调用 0 I/O。
+    """
+
+    def __init__(self):
+        self._sig = None
+        self._events: list = []
+
+    def get_events(self) -> list:
+        path = _persona_home() / "ledger.jsonl"
+        try:
+            st = path.stat()
+        except OSError:
+            return []
+        sig = (st.st_size, int(st.st_mtime * 1000))
+        if sig != self._sig:
+            self._events = _ledger_read_events()
+            self._sig = sig
+        return self._events
+
+
+_ledger_cache = _LedgerCache()
+
+
 def _ledger_seen_bvids() -> set:
     """账本里"看过/动作过"的 BV（与 dsh-plugin/lib/seen.js 同口径：任何带合法 BV 的事件都算）。"""
     seen: set = set()
-    for ev in _ledger_read_events():
+    for ev in _ledger_cache.get_events():
         bv = ev.get("bvid")
         if isinstance(bv, str) and _BV_FULL_RE.match(bv):
             seen.add(bv)
@@ -2095,7 +2135,7 @@ def _replied_targets(window_days: int = 0) -> set:
     cutoff = 0.0
     if window_days and window_days > 0:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
-    for ev in _ledger_read_events():
+    for ev in _ledger_cache.get_events():
         if ev.get("type") != "reply-out":
             continue
         if cutoff:
@@ -2279,6 +2319,43 @@ def _validate_ledger_event(ev, idx: int, round_id: str):
     return out, ""
 
 
+# ───────── 阻塞 I/O 的线程收敛（PLAN-2026-10-30 Task 2.2）─────────
+# async 工具里的同步文件读写会卡住事件循环；统一封装成 sync helper，用 asyncio.to_thread 跑。
+
+
+def _sync_read_text_file(path: Path) -> str:
+    """整读一个小文本文件；不存在返回空串。"""
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def _sync_append_jsonl(path: Path, text: str) -> None:
+    """追加一行（自动建父目录）；账本 / pending 等追加型文件共用。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def _sync_append_ledger(path: Path, lines: list) -> None:
+    """账本批量追加：补上一行分隔符后写入（原逻辑原样搬进线程）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blob = "\n".join(lines) + "\n"
+    if path.exists() and path.stat().st_size > 0:
+        with open(path, "rb") as f:
+            f.seek(-1, os.SEEK_END)
+            tail = f.read(1)
+        if tail not in (b"\n", b"\r"):
+            blob = "\n" + blob
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(blob)
+
+
+def _sync_append_report(path: Path, head: str, sep: str, text: str) -> None:
+    """日报整段追加（原逻辑原样搬进线程）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(head + sep + text + "\n")
+
+
 @_gated_tool()
 async def bili_ledger_append(events: list[dict]) -> str:
     """
@@ -2303,7 +2380,7 @@ async def bili_ledger_append(events: list[dict]) -> str:
     round_id = _current_round_id()
     if not round_id:
         return _err("读不到本轮 round id（state.json 缺 lastRunStartedAt）；退回直接写文件")
-    existing = _ledger_read_events(limit=800)
+    existing = await asyncio.to_thread(_ledger_read_events, 800)
     seen_keys = {(e.get("round"), e.get("type"), e.get("bvid"), e.get("text")) for e in existing}
     path = _persona_home() / "ledger.jsonl"
     lines: list = []
@@ -2326,16 +2403,7 @@ async def bili_ledger_append(events: list[dict]) -> str:
         return _ok({"success": False, "written": 0, "rejected": rejected, "round": round_id,
                     "error": "没有一条通过校验，账本未改动"})
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        blob = "\n".join(lines) + "\n"
-        if path.exists() and path.stat().st_size > 0:
-            with open(path, "rb") as f:
-                f.seek(-1, os.SEEK_END)
-                tail = f.read(1)
-            if tail not in (b"\n", b"\r"):
-                blob = "\n" + blob
-        with open(path, "a", encoding="utf-8", newline="\n") as f:
-            f.write(blob)
+        await asyncio.to_thread(_sync_append_ledger, path, lines)
     except Exception as e:
         return _err(f"账本写入失败: {e}")
     return _ok({"success": True, "written": len(lines), "rejected": rejected, "round": round_id,
@@ -2378,15 +2446,16 @@ async def bili_report_append(markdown: str) -> str:
     day = datetime.now().astimezone().strftime("%Y-%m-%d")
     path = home / "out" / f"{day}.md"
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        old = path.read_text(encoding="utf-8") if path.exists() else ""
-        if round_id in old:
-            return _ok({"success": False, "code": "DUPLICATE_ROUND", "error": f"这一轮（{round_id}）已经写进报告了，别重复追加",
-                        "file": str(path), "roundId": round_id})
-        head = "" if old else f"# {day}\n\n"
-        sep = "" if not old or old.endswith("\n\n") else ("\n" if old.endswith("\n") else "\n\n")
-        with open(path, "a", encoding="utf-8", newline="\n") as f:
-            f.write(head + sep + text + "\n")
+        old = await asyncio.to_thread(_sync_read_text_file, path)
+    except Exception as e:
+        return _err(f"报告写入失败: {e}")
+    if round_id in old:
+        return _ok({"success": False, "code": "DUPLICATE_ROUND", "error": f"这一轮（{round_id}）已经写进报告了，别重复追加",
+                    "file": str(path), "roundId": round_id})
+    head = "" if old else f"# {day}\n\n"
+    sep = "" if not old or old.endswith("\n\n") else ("\n" if old.endswith("\n") else "\n\n")
+    try:
+        await asyncio.to_thread(_sync_append_report, path, head, sep, text)
     except Exception as e:
         return _err(f"报告写入失败: {e}")
     return _ok({"success": True, "file": str(path), "roundId": round_id,
@@ -2648,11 +2717,8 @@ async def bili_persona_note(
     """
     pending = _persona_pending_file()
     try:
-        pending.parent.mkdir(parents=True, exist_ok=True)
-        existing = []
-        if pending.exists():
-            with open(pending, encoding="utf-8") as f:
-                existing = [ln for ln in f.read().split("\n") if ln.strip()]
+        existing = await asyncio.to_thread(_sync_read_text_file, pending)
+        existing = [ln for ln in existing.split("\n") if ln.strip()]
     except Exception as e:
         return _err(f"候选文件读不了: {e}")
 
@@ -2709,8 +2775,8 @@ async def bili_persona_note(
         return _err(f"kind 只允许 corpus/lore，收到: {kind or '空'}")
 
     try:
-        with open(pending, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        await asyncio.to_thread(
+            _sync_append_jsonl, pending, json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as e:
         return _err(f"候选写盘失败: {e}")
 
