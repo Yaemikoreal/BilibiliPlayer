@@ -176,7 +176,15 @@ test('fetchReplyNotifs：超时真的会 abort（不靠外部取消）', async (
   // 用 10ms 超时 + 永不 resolve 的假 fetch：验证超时信号确实被触发
   const hang = (url, init) => new Promise((resolve, reject) => {
     if (!init?.signal) return reject(new Error('no signal'))
-    init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+    // 保活定时器（ref'd）：AbortSignal.timeout 内部的定时器是 unref 的，
+    // 若本测试是事件循环上唯一的等待者，循环会提前退场，abort 永远没机会触发
+    // （表现为 cancelled / "Promise resolution is still pending" 闪红）。
+    // ref 定时器只负责撑住循环；真正 reject 的是 abort 事件。
+    const keepAlive = setTimeout(() => reject(new Error('signal never fired')), 1000)
+    init.signal.addEventListener('abort', () => {
+      clearTimeout(keepAlive)
+      reject(new Error('aborted'))
+    }, { once: true })
   })
   await assert.rejects(() => fetchReplyNotifs('c', hang, { timeoutMs: 10 }), /aborted/)
 })
