@@ -94,7 +94,7 @@
 | 轮次生命周期 | `index.js:1161` `runDuty` + `index.js:1290-1362` 收尾 | 20 分钟硬超时、SIGTERM→强杀进程树、占位报告、报告兜底回填 |
 | 回复通知轮询 | `index.js:1363` 起（每 5 分钟） | 拉 msgfeed → `reply-in` 事件，失败退避（`lib/replies.js:9` 1→5→15 分钟） |
 | 心跳自愈 | `index.js:1408` | `running=true` 但子进程已消失 ⇒ 纠正状态 |
-| 发后复核（对抗压审） | `index.js:1427` `verifyRecentSafe` | **当前为未接入写入源的死代码桩**（全仓无 `commentsToVerify` 写入点；免登录探测方案不可行，重构方案 B 详见 `AUDIT-2026-10-29-IMPROVEMENT` §2.1 与 §8.2） |
+| 发后复核（对抗压审） | `mcp_server.py` `bili_reply` → `bili_verify_recent_comments` | **已按方案 B 落地（2026-10-30）**：`bili_reply` 发出时自记账 `verify-pending.jsonl`（7 天 TTL）；独立只读工具登录态出网核对（根评论 reply/main cursor 翻页 / 楼中楼 reply/reply），10 分钟审核宽限窗防误报。实验依据 `analysis/2026-10-30-post-reply-verification-probe.md` |
 
 ### 2.6 可观测与控制台
 
@@ -214,7 +214,7 @@ sequenceDiagram
     R->>F: round-end 事件 + 占位报告（缺报告时）
     R->>F: backfillFromReport（解析日报兜底回填 view/skip/接话）
     R->>F: 人设用量 pending → 轮末转正
-    R->>R: 90s 后 verifyRecentSafe（占位桩，待方案 B 数据层复核替换）
+    R->>M: 发出评论时写 verify-pending.jsonl（方案 B 自记账）
     F-->>T: 下一跳重新计算「下一轮」
 ```
 
@@ -308,7 +308,7 @@ flowchart LR
 | ⑬ 收尾 | `index.js:1290-1362` | 写 `round-end`（code/durationMs）；缺 `reply-scan` 补 `note`；缺报告补占位报告 |
 | ⑭ 回填 | `index.js:660` | 解析当日日报补 `view/skip/reply-scan/reply-out(proactive)`，`source:"report"` |
 | ⑮ 用量转正 | `index.js:864` 起 | 人设 pending 用量 → 冷却表闭环（否则 `usedToday` 永远 false） |
-| ⑯ 发后复核 | `index.js:1337` → `1427` | 90s 后调用；**当前输入源为空（死代码）**；新方案拟转为数据层自记账与轮末工具探测（方案 B） |
+| ⑯ 发后复核 | `bili_reply` → `verify-pending.jsonl` → `bili_verify_recent_comments` | 已按方案 B 落地：发出自记账 + 独立只读探测（登录态、10 分钟宽限窗）；原 90s `verifyRecentSafe` 死桩已删除 |
 
 ### 4.3 prompt 装配管线（`buildDutyPrompt`，`index.js:952`）
 

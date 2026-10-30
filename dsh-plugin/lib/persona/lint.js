@@ -259,12 +259,26 @@ export const buildLintRules = ({ card = null, bank = null, mode = DEFAULT_ROLLOU
   ]
 
   const active = bank ? activeTexts(bank) : []
+  // 剧场三档（PLAN-2026-10-30 Task 3.1）：卡里 venues 原样导出（只取 max），
+  // Python 质量门按 bili_reply 传入的 venue 取更严上限——消费 0 的死配置从此闭环。
+  const cardVenues = c?.venues && typeof c.venues === 'object' && c.venues.list && typeof c.venues.list === 'object'
+    ? {
+        spec: String(c.venues.spec || 'bili-fenshen.persona.venues/v1'),
+        default: String(c.venues.default || '普通区'),
+        list: Object.fromEntries(
+          Object.entries(c.venues.list)
+            .map(([k, v]) => [k, { max: finiteOr(v?.max, null) }])
+            .filter(([, v]) => v.max != null),
+        ),
+      }
+    : null
   return {
     spec: LINT_SPEC,
     generatedAt: new Date().toISOString(),
     mode: normalizeRollout(mode),
     card: { id: String(c.id ?? ''), version: String(c.version ?? ''), name: String(c.name ?? '') },
     limits,
+    venues: cardVenues,
     baseline: { ...base },
     checks,
     bank: { count: active.length, active },
@@ -398,10 +412,11 @@ const evalCheck = (check, ctx) => {
  * @param {object} [opts.card] 生效人设卡（rules 缺省时用来现场生成规则）
  * @param {object} [opts.rules] 规则对象（导出 JSON 的内容）；传了就以它为准
  * @param {object} [opts.bank] live 语料库（传了就真接 looksCopied；否则用 rules.bank.active）
+ * @param {string} [opts.venue] 剧场档（普通区/生态区/AI话题区）：评论上限取 min(场域上限, venue 上限)，永不放宽
  * @returns {{ok:boolean, level:'block'|'warn', codes:string[], reasons:string[], advice:string}}
  *   通过时 ok=true、codes=[]；level 只在未通过时有意义（block=硬判据，warn=软判据）。
  */
-export const lintComment = ({ text, mode = 'comment', card = null, rules = null, bank = null } = {}) => {
+export const lintComment = ({ text, mode = 'comment', card = null, rules = null, bank = null, venue = '' } = {}) => {
   const raw = String(text ?? '')
   const form = normalizeForm(mode)
   const rs = rules && typeof rules === 'object' ? rules : buildLintRules({ card, bank })
@@ -409,6 +424,9 @@ export const lintComment = ({ text, mode = 'comment', card = null, rules = null,
   // 上限从规则读，缺省才用 W1 的 100/40/60
   const limits = { ...DEFAULT_LIMITS, ...(rs.limits && typeof rs.limits === 'object' ? rs.limits : {}) }
   for (const f of LINT_FORMS) limits[f] = finiteOr(limits[f], DEFAULT_LIMITS[f])
+  // 剧场档上限（Task 3.1）：只收紧不放宽，且只作用于评论场（楼中楼/动态各有自己的闸门）
+  const venueMax = venue && rs.venues && rs.venues.list ? finiteOr(rs.venues.list[String(venue)]?.max, null) : null
+  if (venueMax != null && form === 'comment') limits.comment = Math.min(limits.comment, venueMax)
 
   const ctx = { raw, form, limits, rules: rs, bank }
   const hits = []

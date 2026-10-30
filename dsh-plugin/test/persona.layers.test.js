@@ -110,13 +110,21 @@ test('effectiveModes：时段上限与场域上限取 min，永不放宽', () =>
   assert.deepEqual(effectiveModes(resolveModes(whaleCard()), null), { comment: 60, reply: 40, dynamic: 60 })
 })
 
-test('P5 尾注：behaviorStyle 1 行 + 场域行（楼中楼 40 / 动态 60）', () => {
+test('P5 尾注：behaviorStyle 1 行 + 场域行（楼中楼 40 / 动态 60）+ 剧场分层行', () => {
   const modes = resolveModes(whaleCard())
   const tail = buildTail(whaleCard(), { modes })
   const lines = tail.split('\n')
-  assert.equal(lines.length, 5, '3 行约束 + 兴趣优先 + 场域字数')
+  // Task 3.1：卡里有 venues ⇒ 尾注多一行剧场分层速查（6 行 = 3 约束 + 兴趣优先 + 场域字数 + 剧场分层）
+  assert.equal(lines.length, 6, '3 行约束 + 兴趣优先 + 场域字数 + 剧场分层')
   assert.match(lines[3], /^4\) 兴趣优先：不感兴趣的热门不凑/)
   assert.match(lines[4], /^5\) 楼中楼 40 字、动态 60 字封顶/)
+  assert.match(lines[5], /^6\) 剧场分层：普通区≤35字（/)
+  assert.match(lines[5], /生态区≤40字/)
+  assert.match(lines[5], /AI话题区≤50字/)
+  assert.match(lines[5], /bili_reply 时按视频领域传 venue/)
+  // 没写 venues 的卡不注这一行（smoke 卡回归）
+  const plain = buildTail(smokeCard(), { modes })
+  assert.ok(!plain.includes('剧场分层'), '没有 venues 的卡不该有剧场分层行')
   // 尾注不写具体句子，仍然成立
   for (const s of whaleCard().voice.samples.good) assert.ok(!tail.includes(s.text))
 })

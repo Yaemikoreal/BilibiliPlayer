@@ -237,6 +237,23 @@ export const buildTail = (card = {}, { modeMax = 100, modes = null, todMaxChars 
     const caps = effectiveModes(modes, todMaxChars)
     lines.push(`${lines.length + 1}) 楼中楼 ${caps.reply} 字、动态 ${caps.dynamic} 字封顶，别把评论 ${caps.comment} 字的长度带过去。`)
   }
+
+  // 剧场三档（PLAN-2026-10-30 Task 3.1）：卡里有 venues 就给一行速查表——
+  // 模型按视频领域挑档，发评论/接话时把 venue 传给 bili_reply；闸门在质量门里按档收紧。
+  const vList = card.venues && typeof card.venues === 'object' ? card.venues.list : null
+  if (vList && typeof vList === 'object') {
+    const order = [String(card.venues.default || '普通区'), ...Object.keys(vList).filter((k) => k !== String(card.venues.default || '普通区'))]
+    const seg = order
+      .filter((k) => vList[k] && typeof vList[k] === 'object')
+      .map((k) => {
+        const v = vList[k]
+        const max = Number.isFinite(Number(v.max)) ? Number(v.max) : ''
+        const note = String(v.note || '').split(/[；;]/)[0]
+        return `${k}≤${max}字（${note}）`
+      })
+      .join(' / ')
+    if (seg) lines.push(`${lines.length + 1}) 剧场分层：${seg}；调 bili_reply 时按视频领域传 venue。`)
+  }
   return lines.join('\n')
 }
 

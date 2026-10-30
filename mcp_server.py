@@ -861,10 +861,11 @@ def _lint_eval(text: str, mode: str, rules: dict) -> dict:
     }
 
 
-def _lint_precheck(text: str, mode: str) -> dict:
+def _lint_precheck(text: str, mode: str, venue: str = "") -> dict:
     """发布前质量门。返回 {"blocked": bool, "payload": dict|None, "warn": dict|None, "notice": str}。
 
     blocked=True 时 payload 就是工具对外返回的 JSON；放行时 warn 非空表示"本该被拦但当前档位只告警"。
+    venue（剧场档，PLAN Task 3.1）：规则里带 venues 时，评论上限取 min(场域上限, venue 上限)——只收紧不放宽。
     任何意外（文件缺失/坏 JSON/判据异常）都走放行，绝不让质量门把发布整条链路拖死。
     """
     try:
@@ -872,6 +873,18 @@ def _lint_precheck(text: str, mode: str) -> dict:
         if rules is None:
             logger.warning("质量门规则不可用（%s）：本次放行", why)
             return {"blocked": False, "payload": None, "warn": None, "notice": f"lint 规则不可用，已放行：{why}"}
+        # 剧场档收紧（只对 comment 场；规则没有 venues 或 venue 不在表里就按全局闸门走）
+        vname = str(venue or "").strip()
+        venues = rules.get("venues") if isinstance(rules.get("venues"), dict) else None
+        vlist = venues.get("list") if isinstance(venues, dict) else None
+        ventry = vlist.get(vname) if isinstance(vlist, dict) else None
+        vmax = ventry.get("max") if isinstance(ventry, dict) else None
+        if vname and isinstance(vmax, (int, float)) and mode == "comment":
+            base_limits = rules.get("limits") if isinstance(rules.get("limits"), dict) else {}
+            base_comment = base_limits.get("comment")
+            if isinstance(base_comment, (int, float)):
+                rules = dict(rules)
+                rules["limits"] = {**base_limits, "comment": min(int(base_comment), int(vmax))}
         apply_mode = str(rules.get("mode") or "warn").strip().lower()
         if apply_mode not in ("off", "warn", "block"):
             apply_mode = "warn"  # 写坏档位按最保守的 warn 处理，不擅自拦
@@ -934,7 +947,7 @@ def _load_lint_rules():
 # ========== Tool 6: 回复评论 ==========
 
 @_gated_tool()
-async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
+async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0, venue: str = "普通区") -> str:
     """
     在B站视频下发表评论或回复某条评论
 
@@ -943,6 +956,7 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         text: 评论/回复的文本内容
         rpid: 要回复的目标评论ID（0表示发表新评论）
         root: 楼层根评论ID（回复一级评论时不用填，回复楼中楼时填根评论ID）
+        venue: 剧场档（普通区/生态区/AI话题区）：按视频领域选，决定评论字数闸门（35/40/50）
 
     主动接话（回复别人的一级评论、进他的楼中楼）：**只传 rpid=对方一级评论的 rpid，root 留空**
     （内部会把 root 置成 rpid）；返回里的 rpid 是你自己这条回复的楼层 id。
@@ -966,7 +980,7 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         except Exception as _e:  # 判重自身异常不拦正常发送
             logger.warning("已回复目标判重异常，本次放行：%s", _e)
     # 发布前质量门：规则来自 <家目录>/persona/lint-rules.json（JS 导出）；缺失/损坏则放行 + 告警
-    gate = _lint_precheck(text, "reply" if rpid else "comment")
+    gate = _lint_precheck(text, "reply" if rpid else "comment", venue=venue)
     if gate["blocked"]:
         return json.dumps(gate["payload"], ensure_ascii=False)
     lint_warn = gate.get("warn")
@@ -1008,6 +1022,20 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
                 _remember_replied_target(bvid, int(rpid))
             except Exception:
                 pass
+        # ⭐ 发后复核自记账（PLAN Task 3.2 方案 B）：尽力拿到 rpid 就写 verify-pending.jsonl
+        #    （7 天 TTL；bili_verify_recent_comments 拿它出网核对可见性）。写失败不影响发送结果。
+        if rpid_out:
+            try:
+                vp: dict = {
+                    "t": _now_iso(), "round": _current_round_id() or None,
+                    "bvid": bvid, "aid": aid, "rpid": int(rpid_out),
+                    "textHead": str(text or "")[:24],
+                }
+                if rpid:  # 楼中楼：记下对方楼层（root），核对时走 reply/reply
+                    vp["root"] = int(root if root != 0 else rpid)
+                _verify_pending_append(vp)
+            except Exception as _vp_e:
+                logger.warning("verify-pending 写入失败（不影响发送）：%s", _vp_e)
         payload = {
             "success": True,
             "message": "评论发送成功",
@@ -1019,6 +1047,178 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
         return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         return _err(f"评论发送失败: {e}", bvid=bvid)
+
+
+# ───────── 发后复核（PLAN-2026-10-30 Task 3.2 方案 B；实验依据 docs/analysis/2026-10-30-post-reply-verification-probe.md）─────────
+# 数据层自记账：bili_reply 发出时写 verify-pending.jsonl（7 天 TTL）；
+# bili_verify_recent_comments 登录态出网核对（根评论走 reply/main cursor 翻页、楼中楼走 reply/reply）。
+# 实测结论：游客态探测 100% 误报（未登录只回 ~3 条），已否决；复核必须登录态 + 审核宽限窗。
+
+_VERIFY_PENDING_TTL_DAYS = 7
+_VERIFY_GRACE_MIN_DEFAULT = 10          # 审核宽限窗：发出后 N 分钟内查不到 ≠ 被压审
+_VERIFY_CURSOR_PAGES_MAX = 4            # reply/main cursor 翻页上限（自己的新评论按时间序必在前面）
+
+
+def _verify_pending_file() -> Path:
+    return _persona_home() / "verify-pending.jsonl"
+
+
+def _verify_pending_append(entry: dict) -> None:
+    """追加一条待核记录（带 7 天 TTL 清理；同步函数，调用方放 to_thread）。"""
+    path = _verify_pending_file()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_VERIFY_PENDING_TTL_DAYS)).timestamp()
+    keep: list = []
+    if path.exists():
+        for ln in path.read_text(encoding="utf-8").split("\n"):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                old = json.loads(ln)
+            except Exception:
+                continue  # 坏行直接淘汰（复核记录丢了也只是少核一条，不值得留脏数据）
+            try:
+                ts = datetime.fromisoformat(str(old.get("t") or "").replace("Z", "+00:00")).timestamp()
+            except Exception:
+                continue
+            if ts >= cutoff:
+                keep.append(json.dumps(old, ensure_ascii=False, separators=(",", ":")))
+    keep.append(json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(keep) + "\n")
+
+
+def _verify_pending_read() -> list:
+    """读全量待核记录（7 天 TTL 内；同步函数，调用方放 to_thread）。"""
+    path = _verify_pending_file()
+    if not path.exists():
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_VERIFY_PENDING_TTL_DAYS)).timestamp()
+    out: list = []
+    for ln in path.read_text(encoding="utf-8").split("\n"):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            obj = json.loads(ln)
+        except Exception:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(obj.get("t") or "").replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if ts >= cutoff:
+            out.append(obj)
+    out.sort(key=lambda e: str(e.get("t") or ""))
+    return out
+
+
+async def _probe_reply_visible(sess: aiohttp.ClientSession, cred_headers: dict, entry: dict) -> dict:
+    """出网核对一条记录。返回 {"verdict": found/missing/probe-error, "detail": str}。不抛。"""
+    aid = entry.get("aid")
+    rpid = entry.get("rpid")
+    root = entry.get("root")
+    if not aid or not rpid:
+        return {"verdict": "probe-error", "detail": "记录缺 aid/rpid（旧格式）"}
+    try:
+        if root:
+            # 楼中楼：reply/reply 一次请求（实验 E3：稳定返回子回复列表）
+            url = f"https://api.bilibili.com/x/v2/reply/reply?oid={aid}&type=1&root={int(root)}&ps=49"
+            async with sess.get(url, headers=cred_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                data = (await resp.json(content_type=None)) or {}
+            if data.get("code") != 0:
+                return {"verdict": "probe-error", "detail": f"reply/reply code={data.get('code')} {str(data.get('message'))[:60]}"}
+            reps = ((data.get("data") or {}).get("replies")) or []
+            hit = any(str(r.get("rpid")) == str(rpid) for r in reps)
+            return {"verdict": "found" if hit else "missing", "detail": f"楼中楼页内 {len(reps)} 条"}
+        # 根评论：reply/main mode=2（时间序）+ cursor 翻页（实验 E1：pn 无效；新评论按时间序在前面）
+        next_offset = None
+        for _page in range(_VERIFY_CURSOR_PAGES_MAX):
+            url = f"https://api.bilibili.com/x/v2/reply/main?oid={int(aid)}&type=1&mode=2&ps=49"
+            if next_offset is not None:
+                url += f"&next={next_offset}"
+            async with sess.get(url, headers=cred_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                data = (await resp.json(content_type=None)) or {}
+            if data.get("code") != 0:
+                return {"verdict": "probe-error", "detail": f"reply/main code={data.get('code')} {str(data.get('message'))[:60]}"}
+            d = data.get("data") or {}
+            reps = d.get("replies") or []
+            if any(str(r.get("rpid")) == str(rpid) for r in reps):
+                return {"verdict": "found", "detail": f"主列表第 {_page + 1} 页命中"}
+            cursor = d.get("cursor") or {}
+            if cursor.get("is_end") or cursor.get("next") is None:
+                break
+            next_offset = cursor.get("next")
+        return {"verdict": "missing", "detail": f"cursor 翻 {_VERIFY_CURSOR_PAGES_MAX} 页未命中（共约 55 条内）"}
+    except Exception as e:
+        return {"verdict": "probe-error", "detail": f"{type(e).__name__}: {e}"}
+
+
+@_gated_tool()
+async def bili_verify_recent_comments(grace_min: int = _VERIFY_GRACE_MIN_DEFAULT, limit: int = 20) -> str:
+    """
+    发后复核：对 verify-pending 里的最近发出记录做登录态出网核对（只读，不改账本）
+
+    对抗压审/风控静默失败：bili_reply 返回成功 ≠ 评论真的可见。本工具逐条核对
+    B 站评论区里能否看到那条评论。**审核宽限窗**：发出后 grace_min 分钟内查不到
+    只报 in-review（审核中），不判 missing，杜绝把审核中误判成压审。
+
+    Args:
+        grace_min: 审核宽限窗（分钟），缺省 10；宽限期内只报 in-review
+        limit: 最多核对条数（默认 20，从最旧开始，避免一次出网太多）
+
+    Returns:
+        results（逐条 verdict：found / in-review / missing / probe-error）与 summary
+    """
+    try:
+        pending = await asyncio.to_thread(_verify_pending_read)
+    except Exception as e:
+        return _err(f"verify-pending 读取失败: {e}")
+    if not pending:
+        return _ok({"success": True, "results": [], "summary": {"total": 0, "note": "没有待核记录（bili_reply 发出时会自动记）"}})
+    cred = get_cred()
+    sessdata = str(getattr(cred, "sessdata", "") or "")
+    buvid3 = str(getattr(cred, "buvid3", "") or "")
+    dede = str(getattr(cred, "dedeuserid", "") or "")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Referer": "https://www.bilibili.com/",
+        "Cookie": f"SESSDATA={sessdata}; buvid3={buvid3}; DedeUserID={dede}",
+    }
+    grace = max(0, int(grace_min if grace_min is not None else _VERIFY_GRACE_MIN_DEFAULT))
+    cap = max(1, min(int(limit or 20), 50))
+    now_ts = datetime.now(timezone.utc).timestamp()
+    batch = pending[:cap]
+    results: list = []
+    async with aiohttp.ClientSession() as sess:
+        for entry in batch:
+            try:
+                ts = datetime.fromisoformat(str(entry.get("t") or "").replace("Z", "+00:00")).timestamp()
+                age_min = max(0.0, (now_ts - ts) / 60.0)
+            except Exception:
+                ts, age_min = None, None
+            item = {
+                "t": entry.get("t"), "round": entry.get("round"), "bvid": entry.get("bvid"),
+                "rpid": entry.get("rpid"), "root": entry.get("root") or None,
+                "textHead": entry.get("textHead") or "",
+            }
+            if age_min is not None and age_min < grace:
+                item.update({"verdict": "in-review", "ageMin": round(age_min, 1),
+                             "note": f"发出 {round(age_min, 1)} 分钟（<{grace}min 宽限窗），审核中不算压审；下轮再核"})
+            else:
+                probe = await _probe_reply_visible(sess, headers, entry)
+                item.update({"verdict": probe["verdict"], "detail": probe["detail"],
+                             **({"ageMin": round(age_min, 1)} if age_min is not None else {})})
+            results.append(item)
+    summary = {"total": len(pending), "checked": len(results),
+               "found": sum(1 for r in results if r["verdict"] == "found"),
+               "inReview": sum(1 for r in results if r["verdict"] == "in-review"),
+               "missing": sum(1 for r in results if r["verdict"] == "missing"),
+               "probeError": sum(1 for r in results if r["verdict"] == "probe-error")}
+    if summary["missing"]:
+        summary["note"] = "missing = 宽限窗后仍查不到，疑似被压审/删除；不要重发同文，先看 missing 条目的视频再定"
+    return _ok({"success": True, "results": results, "summary": summary})
 
 
 # ========== Tool 7: 批量采集 ==========
@@ -2357,7 +2557,7 @@ def _sync_append_report(path: Path, head: str, sep: str, text: str) -> None:
 
 
 @_gated_tool()
-async def bili_ledger_append(events: list[dict]) -> str:
+async def bili_ledger_append(events: list[dict], venue: str = "普通区") -> str:
     """
     把本轮动作一次性追加进账本（宿主补 t/round、校验字段、去重、UTF-8 落盘）
 
@@ -2369,6 +2569,7 @@ async def bili_ledger_append(events: list[dict]) -> str:
             [{"type":"view","bvid":"BV1xx","title":"…","author":"…","views":123,"duration":892,"source":"follow","grade":"worth"},
              {"type":"comment","bvid":"BV1xx","text":"正文","rpid":318480352401},
              {"type":"reply-scan","bvid":"BV1xx","candidates":[],"decision":"skipped","reason":"热评全在站队"}]
+        venue: 剧场档（普通区/生态区/AI话题区）：本批评论/接话落在哪类视频，缺省补进 comment/reply-out 事件
 
     Returns:
         written（写入条数）、rejected（[{index,reason}]）、round（本轮 round id）
@@ -2390,6 +2591,9 @@ async def bili_ledger_append(events: list[dict]) -> str:
         if obj is None:
             rejected.append({"index": idx, "reason": why})
             continue
+        # 剧场档落账（Task 3.1）：comment / reply-out 事件缺省补 venue（事件里显式给了就以事件为准）
+        if obj.get("type") in ("comment", "reply-out") and str(venue or "").strip():
+            obj.setdefault("venue", str(venue).strip())
         if "\ufffd" in json.dumps(obj, ensure_ascii=False):
             rejected.append({"index": idx, "reason": "文本里有 U+FFFD（编码坏了），重发一次"})
             continue

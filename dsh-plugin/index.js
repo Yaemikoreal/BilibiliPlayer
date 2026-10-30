@@ -1333,9 +1333,10 @@ const runDuty = async (why = 'manual') => {
           : (rawCode === 0 ? '' : `本轮退出码 ${rawCode}`),
       })
       try { overviewHub.publish('round-end') } catch { /* 兜住 */ }
-      // ⭐ 90 秒后复核（评论区压审对策）；不拖住宿主退出
-      const t = setTimeout(() => { verifyRecentSafe('round').catch(() => {}) }, 90_000)
-      t.unref?.()
+      // 2026-10-30（PLAN Task 3.2 方案 B）：90s verifyRecentSafe 死代码桩删除——它读的
+      // state.commentsToVerify 从来没人写（全仓 0 写入点）；发后复核改为数据层自记账
+      // （bili_reply 写 verify-pending.jsonl）+ 独立只读工具 bili_verify_recent_comments 出网核对，
+      // 实验依据见 docs/analysis/2026-10-30-post-reply-verification-probe.md。
     })
     // ⭐ 只记「本轮开始时间」；lastRunAt/lastCode/lastDurationMs 是**上一轮的结果**，轮末才写。
     //    旧版两处都写 lastRunAt，于是运行中概览显示「本轮开始时间 + 上一轮退出码」。
@@ -1422,17 +1423,11 @@ const heartbeat = () => {
   } catch { /* 兜住 */ }
 }
 
-/* ───────────────────────── 发后复核（占位：V1.5 用只读接口核对可见性） ───────────────────────── */
-
-const verifyRecentSafe = async (why) => {
-  // v1 先落日志桩：真正用 /x/v2/reply/main 复核在 V1.5 接入（需要 JS 直连 B站 + 凭证）
-  try {
-    const st = readJson(STATE_FILE, {})
-    const lastComments = st.commentsToVerify || []
-    if (!lastComments.length) return
-    log(`复核桩（${why}）：待核 ${lastComments.length} 条（V1.5 接入真实复核）`)
-  } catch { /* 兜住 */ }
-}
+/* 2026-10-30（PLAN Task 3.2 方案 B）：verifyRecentSafe 已删除。
+ * 它是未接入写入源的死代码桩（state.commentsToVerify 全仓 0 写入点），且白皮书的
+ * 游客态探测方案已被实测否定（未登录 reply/main 只回 ~3 条，100% 误报）。
+ * 真实发后复核：bili_reply 写 verify-pending.jsonl → bili_verify_recent_comments 登录态出网核对。
+ * 详见 docs/analysis/2026-10-30-post-reply-verification-probe.md。 */
 
 /* ───────────────────────── 调度器（排班：谷时窗口 / 固定间隔 / 指定时间；全部兜死） ─────────────────────────
  * 「该不该现在跑」全部交给 lib/schedule.js 的 dueNow（纯逻辑、可单测），这里只做三件事：
