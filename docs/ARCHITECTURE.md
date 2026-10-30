@@ -4,10 +4,10 @@
 >
 > | 项 | 值 |
 > |---|---|
-> | 生成时间 | 2026-10-29 |
-> | 代码基线 | `main` @ `76b8995`（本地与 `origin/main` 同步） |
+> | 更新时间 | 2026-10-30 |
+> | 代码基线 | `main` @ `f6abb5c` / `aaa052f`（已包含豆腐 v4.0.0 卡定稿与 52k 语料入库） |
 > | 测绘方式 | 逐文件只读测绘 + 行号标注（行号对应本次基线，改动后以符号名为准） |
-> | 权威顺序 | **代码 > 本文件 > 各 README**（README 有若干滞后点，见 §8.2） |
+> | 权威顺序 | **代码 > 本文件 > AUDIT-2026-10-29-IMPROVEMENT > 白皮书 > 各 README**（详见 §8.2） |
 
 ---
 
@@ -74,7 +74,7 @@
 
 | 功能 | 位置 | 说明 |
 |---|---|---|
-| 人设卡（运行时事实来源） | `prompts/persona/whale.card.json`（v3.0.0 生效） | 卡片 schema / L0 静态判据 / 旧 markdown 迁移：`lib/persona/card.js` |
+| 人设卡（运行时事实来源） | `prompts/persona/whale.card.json`（v4.0.0 生效） | 依据 52,464 条语料重构；全域「本鱼」自称、音量典型 8-24 字/上限 35 字、手段表 10 类、剧场三档（代码层待消费）；卡片 schema / L0 静态判据：`lib/persona/card.js` |
 | 五块编译 | `lib/persona/compile.js:88/155/208` + `lib/persona/layers.js:66` | 身份 / 见闻索引 / 今日状态 / 语料样本 / 最后一公里 → 装成 C1（章程前）+ C2（末尾）+ C3（生成期提示） |
 | 今日状态（不让模型编） | `lib/persona/state.js` | 心情/时段/最近 3 条/形态欠账/沉默计数/冷却表，宿主算 |
 | 表达库（按形态分桶的真实语料） | `lib/persona/expression.js` | 三护栏：只给形态样本、跳过签名梗重复、不复读 |
@@ -94,7 +94,7 @@
 | 轮次生命周期 | `index.js:1161` `runDuty` + `index.js:1290-1362` 收尾 | 20 分钟硬超时、SIGTERM→强杀进程树、占位报告、报告兜底回填 |
 | 回复通知轮询 | `index.js:1363` 起（每 5 分钟） | 拉 msgfeed → `reply-in` 事件，失败退避（`lib/replies.js:9` 1→5→15 分钟） |
 | 心跳自愈 | `index.js:1408` | `running=true` 但子进程已消失 ⇒ 纠正状态 |
-| 发后复核（对抗压审） | `index.js:1427` `verifyRecentSafe` | **当前是日志桩**，真实只读复核计划 V1.5（见 §8.2） |
+| 发后复核（对抗压审） | `index.js:1427` `verifyRecentSafe` | **当前为未接入写入源的死代码桩**（全仓无 `commentsToVerify` 写入点；免登录探测方案不可行，重构方案 B 详见 `AUDIT-2026-10-29-IMPROVEMENT` §2.1 与 §8.2） |
 
 ### 2.6 可观测与控制台
 
@@ -214,7 +214,7 @@ sequenceDiagram
     R->>F: round-end 事件 + 占位报告（缺报告时）
     R->>F: backfillFromReport（解析日报兜底回填 view/skip/接话）
     R->>F: 人设用量 pending → 轮末转正
-    R->>R: 90s 后 verifyRecentSafe（当前为日志桩）
+    R->>R: 90s 后 verifyRecentSafe（占位桩，待方案 B 数据层复核替换）
     F-->>T: 下一跳重新计算「下一轮」
 ```
 
@@ -308,7 +308,7 @@ flowchart LR
 | ⑬ 收尾 | `index.js:1290-1362` | 写 `round-end`（code/durationMs）；缺 `reply-scan` 补 `note`；缺报告补占位报告 |
 | ⑭ 回填 | `index.js:660` | 解析当日日报补 `view/skip/reply-scan/reply-out(proactive)`，`source:"report"` |
 | ⑮ 用量转正 | `index.js:864` 起 | 人设 pending 用量 → 冷却表闭环（否则 `usedToday` 永远 false） |
-| ⑯ 发后复核 | `index.js:1337` → `1427` | 90s 后调用；**当前仅打日志桩**（真实只读复核待 V1.5） |
+| ⑯ 发后复核 | `index.js:1337` → `1427` | 90s 后调用；**当前输入源为空（死代码）**；新方案拟转为数据层自记账与轮末工具探测（方案 B） |
 
 ### 4.3 prompt 装配管线（`buildDutyPrompt`，`index.js:952`）
 
@@ -421,6 +421,7 @@ flowchart LR
 #### 5.1.9 路径与凭证约定
 - 凭证：`bili_credential.json`（`BILI_CRED_FILE` 可覆盖），只含 `sessdata` / `bili_jct` / `buvid3` / `dedeuserid`。
 - 插件家目录：`BILI_FENSHEN_HOME` 优先，否则 `~/.dsh/bili-fenshen`（`:669`，与 JS 侧 `homeDir()` 同源）。
+- 公共路径 Helper：[`scripts/_fenshen-paths.mjs`](file:///E:/myproject/BilibiliPlayer/scripts/_fenshen-paths.mjs) 与 [`scripts/_fenshen_paths.py`](file:///E:/myproject/BilibiliPlayer/scripts/_fenshen_paths.py) 提供了单源解析口径，供维护与分析脚本复用。
 - 走 MCP 客户端配置时，`command`/`args`/`cwd` 是**绝对路径**，换机器必须改（见 §8.1）。
 
 ### 5.2 Host 插件：`index.js`（2396 行）
@@ -651,7 +652,7 @@ append-only，一行一事件。`bili_ledger_append` 的必填字段表来自 `m
 |---|---|---|
 | `ledger.jsonl`(+`.old`) | 账本（5MB 轮转） | MCP 记账工具 / 宿主回填 |
 | `duty.log`(+`.old`) | 宿主值班日志（512KB 轮转） | 宿主 |
-| `state.json` | 运行态：`lastRunAt/lastCode/scheduleRuns/windows/lastRunStartedAt/commentsToVerify…` | 宿主 |
+| `state.json` | 运行态：`lastRunAt/lastCode/scheduleRuns/windows/lastRunStartedAt` 等（此前超前声明的 `commentsToVerify` 已更正清理；发后复核功能将在 V1.5 按方案 B 重新设计） | 宿主 |
 | `config.json` | 运行时配置覆盖层（控制台保存写这里） | 控制台 |
 | `out/<日期>.md` | 日报（人读 + 兜底回填源） | `bili_report_append` |
 | `digest/<年-月>.md` | 月度归档 | 宿主 |
@@ -699,8 +700,9 @@ append-only，一行一事件。`bili_ledger_append` 的必填字段表来自 `m
 | 根 README：「29 个工具」 | 实测 **34** 个（含 5 个值班/人设专用） |
 | `dsh-plugin/README.md`：「32 个」 | 同上，34 |
 | 根 README：「控制台 7 页」 | 当前 **5 页**（实时并入概览、判重表并入活动、人设工作室拆为人设页 3 子页） |
-| `dsh-plugin/README.md`：「结束 90 秒后宿主复核（对抗压审）」 | 90s 定时器在（`index.js:1337`），但 `verifyRecentSafe`（`:1427`）**目前是日志桩**，真实只读复核待 V1.5 |
-| 人设 v4.0.0 | 只在 `persona-snapshots/` 存档；活跃卡 `prompts/persona/whale.card.json` 仍是 **v3.0.0** |
+| `dsh-plugin/README.md`：「结束 90 秒后宿主复核（对抗压审）」 | `index.js:1427` 的 `verifyRecentSafe` 与 90s 定时器为未接入写入源的死代码桩（全仓 0 处写入 `commentsToVerify`）；原白皮书提议的游客态探测已被实测否定，需转为数据层自记账核验（方案 B） |
+| 人设版本与基线状态 | 活跃卡 `prompts/persona/whale.card.json` 已正式升至 **v4.0.0**（commit `b85145e`）；52,464 条全量语料已入库。待落地事项：`lint.js` 与 `checkup.js` 中的 247 老基线统一迁移至 52k 实测基线、`growth.js` 禁词表放宽定案台词 |
+| venues 剧场分层 | `whale.card.json` 中配置了普通区/生态区/AI话题区三档，但目前代码中消费方为 0，实际字数闸门仍由全局 `maxChars=100` 决定（整改方案详见 `PLAN-2026-10-30-REMEDIATION`） |
 
 ### 8.3 设计边界（不是 bug，是选择）
 
@@ -738,6 +740,7 @@ append-only，一行一事件。`bili_ledger_append` 的必填字段表来自 `m
 | 改控制台 | `dsh-plugin/CONSOLE-DESIGN.md` → `lib/api.js`（数据源）→ `lib/overview.js`（信封）→ `client.js:3878`（外壳） |
 | 排查「该跑没跑」 | `state.json`（`scheduleRuns`/`lastCode`）→ `duty.log` → 控制台「运行环境 → 一键诊断」 |
 | 排查「重复回复」 | 账本 `reply-out` 的 `parent` → `lib/replies.js:93` → `index.js:1067`（注入）→ `mcp_server.py:943`（硬拦截） |
+| 后续演进与落地执行 | [`CODEBASE-IMPROVEMENT-PLAN.md`](CODEBASE-IMPROVEMENT-PLAN.md)（演化白皮书）→ [`analysis/2026-10-29-improvement-plan-audit.md`](analysis/2026-10-29-improvement-plan-audit.md)（核验方案）→ [`superpowers/plans/2026-10-30-conformance-remediation-plan.md`](superpowers/plans/2026-10-30-conformance-remediation-plan.md)（任务清单） |
 
 ---
 

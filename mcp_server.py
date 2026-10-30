@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
@@ -1108,7 +1109,11 @@ async def _grab_frame(video_path: str, second: int, out_path: str) -> bool:
 
 async def _extract_cover_from_video(video_path: str) -> Picture:
     """截取视频第3秒的一帧作为封面，失败则回退到第0秒"""
-    tmp_cover = os.path.join(tempfile.gettempdir(), f"bili_cover_{os.getpid()}.png")
+    # PID + 8 位 hex UUID：多协程/多进程同 PID 场景下避免临时封面互相覆盖读写冲突
+    tmp_cover = os.path.join(
+        tempfile.gettempdir(),
+        f"bili_cover_{os.getpid()}_{uuid.uuid4().hex[:8]}.png",
+    )
     try:
         for second in (3, 0):
             if await _grab_frame(video_path, second, tmp_cover):
@@ -1900,19 +1905,26 @@ async def bili_received_at_and_likes() -> str:
         包含 at 和 likes 两部分的通知数据
     """
     cred = get_cred()
-    result = {}
-    errors = []
-    try:
-        result["at"] = await session.get_at(credential=cred)
-    except Exception as e:
-        errors.append(f"@通知获取失败: {e}")
-    try:
-        result["likes"] = await session.get_likes(credential=cred)
-    except Exception as e:
-        errors.append(f"点赞通知获取失败: {e}")
+    result: dict = {}
+    errors: list = []
+    # 并发获取（原串行：一侧慢/挂死会拖倍整体延迟）；单侧失败不整体报错，支持局部可用
+    at_res, likes_res = await asyncio.gather(
+        session.get_at(credential=cred),
+        session.get_likes(credential=cred),
+        return_exceptions=True,
+    )
+    for key, res in (("at", at_res), ("likes", likes_res)):
+        if isinstance(res, BaseException):
+            errors.append(f"{key}获取失败: {res}")
+        else:
+            result[key] = res
+
+    payload = {"success": True, "partial": bool(errors), **result}
     if errors:
-        return _err("; ".join(errors), **result)
-    return _ok(result)
+        payload["errors"] = errors
+        payload["note"] = "部分通知获取失败；已有数据正常可用，缺的一半下轮再取，不要重试本调用"
+        logger.warning("bili_received_at_and_likes 部分失败：%s", "; ".join(errors))
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ========== Tool 28: 点赞视频（混迹轻互动） ==========
@@ -2030,6 +2042,7 @@ def _ledger_read_events(limit: int = 0) -> list:
         if not path.exists():
             return out
         dec = json.JSONDecoder()
+        bad = 0
         with open(path, encoding="utf-8") as f:
             for line in f:
                 s = line.strip()
@@ -2044,11 +2057,16 @@ def _ledger_read_events(limit: int = 0) -> list:
                     try:
                         obj, j = dec.raw_decode(s, i)
                     except Exception:
+                        bad += 1
                         break
                     if isinstance(obj, dict):
                         out.append(obj)
                     i = j
-    except Exception:
+        if bad:
+            # 留痕：静默跳过会让"判重集合变空"这类故障无声发生（重复看/重复回）
+            logger.warning("账本有 %d 处对象解析失败（已跳过，不影响其余对象）", bad)
+    except Exception as e:
+        logger.error("账本读取严重失败，返回空集（本轮判重可能失效）：%s", e)
         return out
     return out[-limit:] if limit and limit > 0 else out
 
@@ -2584,10 +2602,8 @@ async def bili_persona_lore(keyword: str) -> str:
 # ========== Tool: 人设沉淀候选（自演化管道；薄工具——只做结构预检 + 追加 pending，质检/入库在宿主 JS） ==========
 
 def _persona_pending_file() -> Path:
-    """growth-pending.jsonl 的路径：<家目录>/persona/。家目录解析与插件宿主同源（BILI_FENSHEN_HOME 优先）。"""
-    home = os.environ.get("BILI_FENSHEN_HOME") or os.path.join(
-        os.environ.get("HOME") or os.environ.get("USERPROFILE") or ".", ".dsh", "bili-fenshen")
-    return Path(home) / "persona" / "growth-pending.jsonl"
+    """growth-pending.jsonl 的路径：<家目录>/persona/。家目录解析统一复用 _persona_home()（单源，避免口径漂移）。"""
+    return _persona_home() / "persona" / "growth-pending.jsonl"
 
 _CORPUS_FORMS = {"reaction", "question", "experience", "meme", "detail", "rant"}
 
