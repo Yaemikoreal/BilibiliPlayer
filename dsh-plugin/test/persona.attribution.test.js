@@ -127,7 +127,9 @@ test('lastRoundFrom / buildOverview：概览页头能读到 personaTag', () => {
   const last = lastRoundFrom(events)
   assert.equal(last.personaTag, 'whale@2.0.0')
 
-  const ov = buildOverview({ cfg: { perDay: 10 }, state: {}, events })
+  // ⚠️ 事件日期是固定的 2026-10-28，buildOverview 默认按真实 now 切 14 天窗口；
+  //    不注入 now 的话，测试跑过 11-11 就会「莫名」红掉（已实际踩过一次）。
+  const ov = buildOverview({ cfg: { perDay: 10 }, state: {}, events, now: new Date('2026-10-28T09:00:00Z') })
   assert.equal(ov.round.personaTag, 'whale@2.0.0', '概览 round 块必须有 personaTag')
   assert.equal(ov.quota.perRound.personaTag, 'whale@2.0.0')
   assert.ok(Array.isArray(ov.round.personaInject.layers))

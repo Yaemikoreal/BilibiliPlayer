@@ -18,8 +18,11 @@ import { join } from 'node:path'
 
 const HOME = mkdtempSync(join(tmpdir(), 'bf-fault-'))
 process.env.BILI_FENSHEN_HOME = HOME   // store.js 的 homeDir() 是调用时读 env，所以这里设置有效
-// W3-6 硬超时是 20 分钟，测试等不起：在 import index.js **之前**用环境变量压到 1.2 秒。
-process.env.BILI_FENSHEN_ROUND_TIMEOUT_MS = '1200'
+// W3-6 硬超时是 20 分钟，测试等不起：在 import index.js **之前**用环境变量压到 4 秒。
+// ⚠️ 不能太低：npm test 并发跑时，其他用例会 spawnSync Python 探针（实测可占 CPU 十几秒），
+//    「立即退出」用例的 spawn→exit(3) 可能被拖过 1 秒；超时窗若小于真实退出耗时，
+//    会被误判成挂死强杀（code 记成 'timeout'）⇒ 偶发红（Windows Defender 冷扫描同理）。
+process.env.BILI_FENSHEN_ROUND_TIMEOUT_MS = '4000'
 
 const { readEvents } = await import('../lib/ledger.js')
 const { createLedgerReader } = await import('../lib/ledger-index.js')
