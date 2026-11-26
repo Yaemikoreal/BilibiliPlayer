@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
+from bili_choices import Choice, interactive_upload
 
 from bilibili_api import video, search, comment, Credential, dynamic
 from bilibili_api import hot, rank, user, session, favorite_list
@@ -1517,9 +1518,20 @@ async def bili_upload_video_multi(
     tags: str = "AI",
     cover_path: str = "",
     source: str = "",
+    choices: list[Choice] | None = None,
+    preview: bool = False,
+    resume_bvid: str = "",
+    retry_upload: bool = False,
 ) -> str:
     """
     上传多P视频到B站（多个分P合并为一个投稿）
+
+    互动投稿：传 choices=[{"from_page":1,"text":"开门","to_page":2},
+    {"from_page":1,"text":"离开","to_page":3}]。P1 为入口；有多个出口时展示按钮，
+    单一出口自动跳转，没有出口时结束。每组第一个选项作为默认项。
+    preview=True 在本地检查素材和分支。实际投稿分为上传素材和提交剧情树两步。
+    story_pending 时保留原参数并传 resume_bvid 续提。story_submitted 表示剧情树已提交。
+    遇到 check_archive 先核对创作中心；仅当确认未建稿时传 retry_upload=True。
 
     Args:
         video_paths: 视频文件路径列表，如["/path/p1.mp4", "/path/p2.mp4"]
@@ -1534,6 +1546,20 @@ async def bili_upload_video_multi(
     Returns:
         上传结果
     """
+    if choices is not None:
+        try:
+            result = await interactive_upload(
+                paths=video_paths, titles=page_titles, title=title, desc=desc, tid=tid,
+                tags=tags, cover=cover_path, source=source.strip(), choices=choices,
+                preview=preview, resume_bvid=resume_bvid, retry_upload=retry_upload,
+                credential_fn=get_cred, cover_fn=_extract_cover_from_video,
+                state_dir=CRED_FILE.parent / "interactive_jobs",
+            )
+            return _ok(result)
+        except Exception as exc:
+            return _err(str(exc))
+    if preview or resume_bvid or retry_upload:
+        return _err("预检和续提需要传入 choices。")
     cred = get_cred()
 
     if not video_paths:
