@@ -85,7 +85,7 @@ pip install -r requirements.txt
 |---|---|---|
 | `bili_send_dynamic` | 发布图文动态 | 支持 @ 和表情、话题、定时发布，最多 9 张图 |
 | `bili_upload_video` | 上传单P视频 | 标题/简介/分区/标签/封面/转载来源；未给封面时自动截第 3 秒，失败回退第 0 秒 |
-| `bili_upload_video_multi` | 上传多P视频 | 多个分P合并为一个投稿，逐 P 指定标题 |
+| `bili_upload_video_multi` | 上传多 P 或互动视频 | 逐 P 指定标题；传入 `choices` 可在各分 P 结尾展示原生选项 |
 | `bili_send_opus` | 发布图文长内容 | 以动态形式发长图文（不是独立专栏） |
 | `bili_video_zones` | 查询分区 ID | 投稿前查 `tid` |
 
@@ -191,6 +191,23 @@ flowchart LR
 - 「我有多少未读私信和回复？」
 
 > 涉及本地文件的参数（上传视频、封面、动态配图）请传**本机绝对路径**——MCP Server 就跑在你的机器上。
+
+### 互动投稿示例
+
+在 `bili_upload_video_multi` 中按顺序提供视频路径和各分 P 的唯一标题。设置 `preview: true` 可以先在本机用 ffprobe 检查素材和分支。以下是三个分 P 的选项参数，P1 是入口，P3 是结尾。
+
+```json
+{
+  "choices": [
+    {"from_page": 1, "text": "查看原信", "to_page": 2},
+    {"from_page": 1, "text": "相信证词", "to_page": 3},
+    {"from_page": 2, "text": "继续", "to_page": 3}
+  ],
+  "preview": true
+}
+```
+
+有 2–4 个出口时显示按钮，单一出口自动跳转。实际投稿需要账号具备互动投稿权限。关闭预检后，工具先建稿，再用创作中心返回的分 P CID 提交剧情树。`story_pending` 时可用原参数和返回的 BV 号作为 `resume_bvid` 续提。`check_archive` 表示建稿回执不确定，请先在创作中心核对。`story_submitted` 表示接口已确认收到剧情树，审核和播放状态以 B 站为准。
 
 ## 🔐 安全与免责
 
